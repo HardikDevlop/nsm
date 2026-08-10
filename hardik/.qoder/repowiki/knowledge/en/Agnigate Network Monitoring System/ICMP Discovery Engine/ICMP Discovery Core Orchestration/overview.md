@@ -1,0 +1,1 @@
+Core orchestration layer for the ICMP-based network discovery service, coordinating IP enumeration, ICMP probing, multi-protocol enrichment, device profiling, inventory persistence, and health monitoring via both CLI and Flask API entry points.

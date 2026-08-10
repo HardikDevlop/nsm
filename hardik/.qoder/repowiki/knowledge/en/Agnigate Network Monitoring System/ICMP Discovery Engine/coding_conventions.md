@@ -1,0 +1,4 @@
+- Each discovery protocol is implemented as a separate module under `discovery_modules/` with a filename prefixed by a two-digit sequence number to enforce execution order.
+- Shared state (configuration, logging, inventory) is accessed through dedicated service modules (`config.py`, `logger.py`, `inventory_service.py`) rather than direct imports between sub-modules.
+- CLI entry points use the `header()`/`info()` logging helpers from `logger.py` for consistent console output formatting.
+- Flask routes return plain dicts via `jsonify()` and delegate business logic to service classes (`DiscoveryManager`, `MonitoringServices`) instead of handling logic inline.

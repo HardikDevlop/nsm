@@ -1,0 +1,1 @@
+PostgreSQL via `psycopg[binary]` 3.x for raw SQL (database creation) and `SQLAlchemy>=2.0` ORM for table/model operations; FastAPI + Uvicorn as the runtime under test; Pydantic v2 with `pydantic-settings`; JWT auth via `python-jose[cryptography]` and password hashing via `passlib` + `bcrypt==4.0.1`.

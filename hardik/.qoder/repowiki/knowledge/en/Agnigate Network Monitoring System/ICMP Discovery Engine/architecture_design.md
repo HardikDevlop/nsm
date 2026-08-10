@@ -1,0 +1,6 @@
+The module is organized into three functional layers wired together by shared core services:
+- Entry points: `main.py` runs the full discovery pipeline synchronously via `DiscoveryManager`, while `app.py` exposes a Flask API (`/api/discovery/run`, `/api/inventory`, `/api/discovery/summary`, `/api/discovery/modules`) over the same `DiscoveryManager`.
+- Core orchestration: `discovery_manager.py`, `ping_engine.py`, `scan_state.py`, `config.py`, `logger.py`, and `utils.py` form the shared backbone consumed by all sub-modules.
+- Pluggable modules under `discovery_modules/` (icmp/ip/tcp/snmp/arp/dns/http/wmi/ssh + device profiler) are registered in a fixed numeric order (`01_`–`11_`) and executed sequentially; `monitoring_services.py` provides health checks and summaries against the persisted `data/inventory.json`.
+- Analytics layer under `analytics_modules/` (alert, event, topology engines) consumes the same inventory to produce higher-level insights.
+- All modules share configuration from `config.py`, logging via `logger.py`, and inventory persistence through `inventory_service.py` / `inventory.py`, ensuring a single source of truth for discovered devices.

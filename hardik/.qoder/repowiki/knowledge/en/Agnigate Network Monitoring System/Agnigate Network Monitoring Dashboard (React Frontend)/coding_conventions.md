@@ -1,0 +1,5 @@
+- Controllers are exposed as factory functions returning an object with `getState` and async `refreshState` methods, keeping side effects out of React components.
+- Data models export pure functions (`createInitialState`, `mapInventoryToState`) that transform raw API payloads into normalized internal shapes used by the view layer.
+- Each React component is paired with a sibling CSS file under `styles/` imported directly in the component, keeping styles colocated with their consumers.
+- Network requests are centralized in service files that throw on non-OK responses and return typed arrays, so callers never handle raw `fetch` responses.
+- Static menu and dashboard data (menu sections, discovery modules, alerts, fallback devices) are defined as plain JavaScript arrays/constants near the top of the view file rather than fetched from the backend.

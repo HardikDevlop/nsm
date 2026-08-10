@@ -1,0 +1,18 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1
+pydantic>=2.7
+pydantic-settings>=2.2
+email-validator>=2.1
+python-jose[cryptography]>=3.3
+passlib>=1.7.4
+bcrypt==4.0.1
+cryptography>=42.0
+pysnmp>=6.0,<7.0
+APScheduler>=3.10,<4.0
+
+
+# cd /home/agnigate/Desktop/NMS/hardik
+# source .venv/bin/activate
+# python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload

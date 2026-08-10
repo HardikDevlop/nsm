@@ -1,0 +1,10 @@
+{
+  "description": "Provides a comprehensive dark-themed SOC and NMS dashboard with real-time network monitoring, incident management, and threat visualization for enterprise operations.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

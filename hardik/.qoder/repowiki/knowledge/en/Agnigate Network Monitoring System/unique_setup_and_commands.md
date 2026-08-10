@@ -1,0 +1,1 @@
+Each service starts independently: `uvicorn backend.main:app` (port 8000) for the backend, `python icmp_discovery/app.py` (port 5000) for the discovery engine, and `npm run dev` in `frontend/` which proxies `/api` requests to the Flask service. There is no single orchestrator script — all three must be running concurrently for full functionality.

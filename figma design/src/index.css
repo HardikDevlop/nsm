@@ -1,0 +1,268 @@
+@import url('https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+
+@theme inline {
+  --color-background: var(--t-bg, #000000);
+  --color-foreground: var(--t-text, #e2e8f5);
+  --color-card: var(--t-card-alpha, rgba(20, 20, 20, 0.6));
+  --color-card-foreground: var(--t-text, #e2e8f5);
+  --color-primary: var(--t-accent, #FF0015);
+  --color-primary-foreground: var(--t-bg, #000000);
+  --color-secondary: #00ff88;
+  --color-secondary-foreground: #000000;
+  --color-danger: #ff3366;
+  --color-warning: #ffaa00;
+  --color-muted: rgba(255, 255, 255, 0.05);
+  --color-muted-foreground: var(--t-muted, #888888);
+  --color-accent: #7c3aed;
+  --color-border: var(--t-border-light, rgba(30, 30, 30, 0.8));
+  --color-border-bright: var(--t-border-alpha, rgba(60, 60, 60, 0.5));
+  --font-display: 'Josefin Sans', sans-serif;
+  --font-body: 'Josefin Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--t-bg, #000000);
+  color: var(--t-text, #e2e8f5);
+  font-family: 'Josefin Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===================== SCROLLBAR ===================== */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--t-border-alpha, rgba(60, 60, 60, 0.5));
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--t-muted-dim, rgba(80, 80, 80, 0.7));
+}
+
+/* ===================== GLASS PANELS ===================== */
+.glass {
+  background: var(--t-card-alpha, rgba(15, 15, 15, 0.7));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--t-border-alpha, rgba(30, 30, 30, 0.8));
+}
+
+.glass-bright {
+  background: var(--t-card-alpha, rgba(30, 30, 30, 0.3));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--t-border-alpha, rgba(50, 50, 50, 0.5));
+}
+
+.glass-light {
+  background: var(--t-card-alpha, rgba(255, 255, 255, 0.85));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--t-border-light, rgba(0, 0, 0, 0.08));
+}
+
+/* ===================== NEON / TEXT EFFECTS ===================== */
+.neon-cyan {
+  color: var(--t-accent, #888);
+  text-shadow: 0 0 8px var(--t-accent-alpha, rgba(100, 100, 100, 0.3));
+}
+
+.neon-green {
+  color: #00ff88;
+  text-shadow: 0 0 12px rgba(0, 255, 136, 0.5);
+}
+
+.neon-red {
+  color: #ff3366;
+  text-shadow: 0 0 12px rgba(255, 51, 102, 0.5);
+}
+
+.neon-amber {
+  color: #ffaa00;
+  text-shadow: 0 0 12px rgba(255, 170, 0, 0.5);
+}
+
+/* ===================== GLOW BORDERS ===================== */
+.glow-border-cyan {
+  box-shadow: 0 0 0 1px var(--t-border-alpha, rgba(60, 60, 60, 0.3)), inset 0 0 20px var(--t-card-alpha, rgba(40, 40, 40, 0.1));
+}
+
+.glow-border-green {
+  box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.3), inset 0 0 20px rgba(0, 255, 136, 0.03);
+}
+
+.glow-border-red {
+  box-shadow: 0 0 0 1px rgba(255, 51, 102, 0.3), inset 0 0 20px rgba(255, 51, 102, 0.03);
+}
+
+.glow-border-amber {
+  box-shadow: 0 0 0 1px rgba(255, 170, 0, 0.3), inset 0 0 20px rgba(255, 170, 0, 0.03);
+}
+
+/* ===================== GRID BG ===================== */
+.grid-bg {
+  background-image:
+    linear-gradient(var(--t-border-light, rgba(30, 30, 30, 0.3)) 1px, transparent 1px),
+    linear-gradient(90deg, var(--t-border-light, rgba(30, 30, 30, 0.3)) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* ===================== LIGHT THEME OVERRIDES ===================== */
+[data-theme="light"] .neon-green {
+  color: #059669;
+  text-shadow: none;
+}
+
+[data-theme="light"] .neon-red {
+  color: #dc2626;
+  text-shadow: none;
+}
+
+[data-theme="light"] .neon-amber {
+  color: #d97706;
+  text-shadow: none;
+}
+
+[data-theme="light"] .glow-border-green {
+  box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.2), inset 0 0 20px rgba(5, 150, 105, 0.03);
+}
+
+[data-theme="light"] .glow-border-red {
+  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.2), inset 0 0 20px rgba(220, 38, 38, 0.03);
+}
+
+[data-theme="light"] .glow-border-amber {
+  box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.2), inset 0 0 20px rgba(217, 119, 6, 0.03);
+}
+
+[data-theme="light"] .grid-bg {
+  background-image: none;
+}
+
+[data-theme="light"] .status-dot.online {
+  background: #059669;
+  box-shadow: 0 0 6px rgba(5, 150, 105, 0.5);
+}
+
+[data-theme="light"] .status-dot.warning {
+  background: #d97706;
+  box-shadow: 0 0 6px rgba(217, 119, 6, 0.5);
+}
+
+[data-theme="light"] .status-dot.offline {
+  background: #dc2626;
+  box-shadow: 0 0 6px rgba(220, 38, 38, 0.5);
+}
+
+[data-theme="light"] .scan-line::after {
+  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.1), transparent);
+}
+
+[data-theme="light"] .recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--t-card, #ffffff) !important;
+  border: 1px solid var(--t-border-light, rgba(0, 0, 0, 0.1)) !important;
+}
+
+[data-theme="light"] .recharts-text {
+  fill: var(--t-muted, #666) !important;
+}
+
+[data-theme="light"] .recharts-cartesian-grid line {
+  stroke: var(--t-border-light, rgba(0, 0, 0, 0.06)) !important;
+}
+
+/* ===================== SHARED ===================== */
+.font-display {
+  font-family: 'Josefin Sans', sans-serif;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.scan-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--t-accent-alpha, rgba(60, 60, 60, 0.4)), transparent);
+  animation: scan 3s linear infinite;
+}
+
+@keyframes scan {
+  0% { top: 0%; }
+  100% { top: 100%; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.online {
+  background: #00ff88;
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.8);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.status-dot.warning {
+  background: #ffaa00;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.8);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+.status-dot.offline {
+  background: #ff3366;
+  box-shadow: 0 0 8px rgba(255, 51, 102, 0.8);
+  animation: pulse-glow 1s ease-in-out infinite;
+}
+
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--t-card, rgba(15, 15, 15, 0.95)) !important;
+  border: 1px solid var(--t-border-alpha, rgba(50, 50, 50, 0.5)) !important;
+  border-radius: 6px !important;
+}
+
+.recharts-text {
+  fill: var(--t-muted, #8899bb) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 11px !important;
+}
+
+.recharts-cartesian-grid line {
+  stroke: var(--t-border-light, rgba(30, 30, 30, 0.3)) !important;
+}

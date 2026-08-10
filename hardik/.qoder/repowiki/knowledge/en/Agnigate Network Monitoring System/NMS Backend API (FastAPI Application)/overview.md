@@ -1,0 +1,1 @@
+FastAPI-based NMS backend that wires together authentication, database, RBAC, CRUD repositories, schemas, and business services behind a single application entry point with lifespan-driven initialization.

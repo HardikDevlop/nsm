@@ -1,0 +1,1 @@
+Run the development server via `python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload` (or `uvicorn.run` in `__main__`). Initialize the database schema and seed RBAC/admin data with `init_db.py` and `seed.py`. A PowerShell smoke test script `smoke_test.ps` validates the full API surface end-to-end.

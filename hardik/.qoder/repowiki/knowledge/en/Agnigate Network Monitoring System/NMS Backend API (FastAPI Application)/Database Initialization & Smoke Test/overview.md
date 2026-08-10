@@ -1,0 +1,1 @@
+One-shot scripts to create the NMS PostgreSQL database, generate all SQLAlchemy tables, seed RBAC roles/permissions and a default admin user, plus a PowerShell smoke test that validates the full API surface.

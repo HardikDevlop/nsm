@@ -1,0 +1,4 @@
+- Bootstrap scripts import heavy application modules lazily inside functions (e.g., `from backend.database.session import ...` inside `create_tables_and_seed`) to avoid circular imports during module load.
+- Seed data is defined as declarative Python collections (`CRUD_MODULES`, `CRUD_ACTIONS`, `EXTRA_PERMISSIONS`, role code sets) rather than hard-coded per-row inserts, and roles are ensured idempotently via lookup-then-create helpers.
+- Smoke-test steps are organized as numbered sequential blocks separated by `--- N. <step> ---` headers, each asserting expected behavior and printing a concise summary line.
+- Authentication is handled by extracting `access_token` from login responses and attaching it as a `Bearer` Authorization header on every subsequent request.

@@ -1,0 +1,26 @@
+schema_version: 1
+module_path: icmp_discovery_engine/core_orchestration
+title: ICMP Discovery Core Orchestration
+scope:
+    - icmp_discovery/app.py
+    - icmp_discovery/main.py
+    - icmp_discovery/config.py
+    - icmp_discovery/discovery_manager.py
+    - icmp_discovery/inventory_service.py
+    - icmp_discovery/ping_engine.py
+    - icmp_discovery/scheduler_loop.py
+    - icmp_discovery/device_profiling_service.py
+    - icmp_discovery/os_detector.py
+    - icmp_discovery/parser.py
+    - icmp_discovery/report.py
+    - icmp_discovery/scan_state.py
+    - icmp_discovery/summary.py
+    - icmp_discovery/utils.py
+    - icmp_discovery/logger.py
+    - icmp_discovery/auto_detector.py
+    - icmp_discovery/inventory.py
+    - icmp_discovery/monitoring_services.py
+    - icmp_discovery/scheduler.py
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,1 @@
+Run `python backend/init_db.py` once to provision the database and seed RBAC; then start the FastAPI server (`uvicorn`) and execute `powershell -ExecutionPolicy Bypass -File backend/smoke_test.ps1` to validate the end-to-end flow against `http://127.0.0.1:8000/api/v1`.

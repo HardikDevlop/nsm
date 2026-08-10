@@ -1,0 +1,3 @@
+- Each service defines its own entry point (`main.py` for FastAPI, `app.py` for Flask, `main.jsx` for React) and runs its own server process.
+- Cross-service data contracts are expressed as plain JSON files (e.g. `data/inventory.json`) rather than shared schemas.
+- Development proxying is configured per-service (Vite `server.proxy` pointing to Flask's port 5000) instead of using a reverse proxy.

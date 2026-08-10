@@ -1,0 +1,258 @@
+{
+  "pbtResults": {
+    "1. Write SNMPv3 timeout exploration test": {
+      "status": "passed",
+      "failingExample": "SNMPv3 credentials with auth_protocol='MD5', auth_password='test123', privacy_protocol=None constructs UsmUserData with privProtocol set to default DES protocol OID instead of omitting it. This causes SNMP negotiation to fail for authentication-only (authNoPriv) security level devices, resulting in timeout: \"No SNMP response received before timeout\"",
+      "lastRunTimestamp": 1786016189341
+    }
+  },
+  "executionHistory": {
+    "1. Write SNMPv3 timeout exploration test": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920367
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015930820
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016228051
+      }
+    ],
+    "2. Write device deletion exploration test": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920414
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016232252
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016772732
+      }
+    ],
+    "3. Document SNMPv3 form UX issue": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920460
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016777482
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016888790
+      }
+    ],
+    "4. Write SNMPv2c discovery preservation test": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920530
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016892779
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786017146822
+      }
+    ],
+    "5. Write ICMP discovery preservation test": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920607
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016893154
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786017147142
+      }
+    ],
+    "6. Write mixed-protocol discovery preservation test": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920661
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786016893591
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786017147539
+      }
+    ],
+    "7.1 Fix UsmUserData parameter passing": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920712
+      },
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786017316090
+      }
+    ],
+    "7.2 Verify SNMPv3 timeout exploration test now passes": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920755
+      }
+    ],
+    "7.3 Verify SNMPv2c preservation still works": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920805
+      }
+    ],
+    "8.1 Prevent database modifications when SNMP discovery fails": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920851
+      }
+    ],
+    "8.2 Verify device deletion exploration test now passes": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920901
+      }
+    ],
+    "8.3 Verify ICMP discovery preservation still works": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015920976
+      }
+    ],
+    "8.4 Verify mixed-protocol preservation still works": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921022
+      }
+    ],
+    "9.1 Make IP address field optional for SNMPv3": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921074
+      }
+    ],
+    "9.2 Make privacy_password optional when only auth_password provided": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921175
+      }
+    ],
+    "9.3 Verify frontend SNMPv3 form UX now works": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921221
+      }
+    ],
+    "10. Run full test suite": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921270
+      }
+    ],
+    "SNMPv3 timeout exploration test from step 1 PASSES": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921309
+      }
+    ],
+    "Device deletion exploration test from step 2 PASSES": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921353
+      }
+    ],
+    "SNMPv2c preservation test from step 4 PASSES": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921403
+      }
+    ],
+    "ICMP preservation test from step 5 PASSES": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921444
+      }
+    ],
+    "Mixed-protocol preservation test from step 6 PASSES": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921487
+      }
+    ],
+    "All unit tests for SNMPClient, discovery_snmp, and form components PASS": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921537
+      }
+    ],
+    "Property-based tests for all discovery methods PASS with 100+ test cases each": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921581
+      }
+    ],
+    "Integration test: ICMP discovery → SNMPv3 discovery → Topology graph rendering PASSES": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921631
+      }
+    ],
+    "Integration test: SNMPv2c discovery → ICMP discovery on different subnet PASSES": [
+      {
+        "executionId": "1f84cbff-cc4c-4947-ae9a-0d02b4fb1956",
+        "chatSessionId": "sess_369f0e6e-c9e7-4e85-a345-b8f305425861",
+        "timestamp": 1786015921684
+      }
+    ]
+  }
+}

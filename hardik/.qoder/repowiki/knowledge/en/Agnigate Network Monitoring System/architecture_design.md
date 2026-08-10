@@ -1,0 +1,5 @@
+The system is split into three independently runnable services wired together at runtime rather than through shared code:
+- `icmp_discovery/` (Flask) exposes `/api/discovery/*` endpoints on port 5000 and persists device inventory as `data/inventory.json`.
+- `backend/` (FastAPI) runs on port 8000, owns authentication/RBAC, database persistence via SQLAlchemy, and business services; it does not call the Flask service directly but consumes its own models/schemas.
+- `frontend/` (React + Vite) proxies every `/api` request to `http://127.0.0.1:5000` (the Flask discovery engine), so the dashboard talks only to the discovery service during development.
+The three services share no Python packages or imports — they communicate exclusively over HTTP and the flat JSON inventory file, keeping each service deployable in isolation.

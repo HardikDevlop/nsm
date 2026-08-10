@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: backend_api/app_bootstrap
+title: Database Initialization & Smoke Test
+scope:
+    - backend/init_db.py
+    - backend/seed.py
+    - backend/smoke_test.ps1
+    - backend/requirements.txt
+source_files: []
+depends_on: []
+related_to: []

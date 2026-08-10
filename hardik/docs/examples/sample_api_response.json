@@ -1,0 +1,459 @@
+{
+  "api_version": "2.0",
+  "ip": "192.168.1.1",
+  "reachable": true,
+  "snmp_enabled": true,
+  "snmp_version": "v2c",
+  "vendor": "cisco",
+  "device_type": "router",
+  "hostname": "core-router-01.example.com",
+  "sys_object_id": "1.3.6.1.4.1.9.1.2588",
+  "collection_ms": 287.4,
+
+  "unsupported": ["wireless"],
+
+  "collectors": {
+
+    "system": {
+      "collector": "system",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.000000+00:00",
+      "data": {
+        "hostname":      "core-router-01.example.com",
+        "description":   "Cisco IOS Software, Version 15.9(3)M3, RELEASE SOFTWARE (fc2)",
+        "vendor":        "cisco",
+        "device_type":   "router",
+        "model":         "ISR4321/K9",
+        "serial_number": "FTX2045ABCD",
+        "firmware":      "15.9(3)M3",
+        "os_version":    "15.9(3)M3",
+        "hardware_rev":  null,
+        "uptime": {
+          "ticks":   987654321,
+          "seconds": 9876543.21,
+          "display": "114d 06h 29m 03s"
+        },
+        "contact":      "noc@example.com",
+        "location":     "DC1 - Main Distribution Row A",
+        "sys_object_id": "1.3.6.1.4.1.9.1.2588"
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "cpu": {
+      "collector": "cpu",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.100000+00:00",
+      "data": {
+        "overall_percent": 32.0,
+        "average_percent": 32.0,
+        "per_core": [],
+        "core_count": 0,
+        "highest_core": null,
+        "lowest_core": null,
+        "cpu_user": null,
+        "cpu_system": null,
+        "cpu_idle": null,
+        "load_avg": null,
+        "display": "32.0%",
+        "source": "vendor:overall"
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "memory": {
+      "collector": "memory",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.200000+00:00",
+      "data": {
+        "total_bytes":         447741952,
+        "used_bytes":          312475648,
+        "free_bytes":          135266304,
+        "cached_bytes":        null,
+        "buffer_bytes":        null,
+        "swap_total_bytes":    null,
+        "swap_free_bytes":     null,
+        "utilization_percent": 69.81,
+        "display":             "297.9 MiB / 426.9 MiB (69.8%)",
+        "source":              "vendor:cisco"
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "storage": {
+      "collector": "storage",
+      "supported": false,
+      "timestamp": "2026-08-07T10:30:00.300000+00:00",
+      "reason": "hrStorageTable (1.3.6.1.2.1.25.2.3.1) returned no data — HOST-RESOURCES-MIB may not be supported on this device",
+      "missing": ["hrStorageType", "hrStorageSize"]
+    },
+
+    "interfaces": {
+      "collector": "interfaces",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.400000+00:00",
+      "data": {
+        "interface_count": 2,
+        "up_count": 1,
+        "down_count": 1,
+        "interfaces": [
+          {
+            "ifIndex": 1,
+            "name": "Gi0/0",
+            "description": "GigabitEthernet0/0",
+            "alias": "Uplink to ISP",
+            "mac": "00:22:99:AA:BB:CC",
+            "type": "ethernetCsmacd",
+            "mtu": 1500,
+            "speed_bps": 1000000000,
+            "speed_label": "1 Gbps",
+            "admin_status": "up",
+            "oper_status": "up",
+            "last_change": "1432847610",
+            "in_octets": 587645312000,
+            "out_octets": 421387654000,
+            "in_octets_32": 5876453120,
+            "out_octets_32": 4213876540,
+            "in_ucast_pkts": 38762910,
+            "out_ucast_pkts": 29874510,
+            "in_multicast_pkts": null,
+            "out_multicast_pkts": null,
+            "in_broadcast_pkts": null,
+            "out_broadcast_pkts": null,
+            "in_discards": 0,
+            "out_discards": 2,
+            "in_errors": 0,
+            "out_errors": 0,
+            "in_unknown_pkts": null,
+            "utilization_percent": null,
+            "duplex": null
+          },
+          {
+            "ifIndex": 2,
+            "name": "IF-2",
+            "description": "GigabitEthernet0/1",
+            "alias": null,
+            "mac": null,
+            "type": "unknown",
+            "mtu": null,
+            "speed_bps": 1000000000,
+            "speed_label": "1 Gbps",
+            "admin_status": "up",
+            "oper_status": "down",
+            "last_change": null,
+            "in_octets": null,
+            "out_octets": null,
+            "in_octets_32": null,
+            "out_octets_32": null,
+            "in_ucast_pkts": null,
+            "out_ucast_pkts": null,
+            "in_multicast_pkts": null,
+            "out_multicast_pkts": null,
+            "in_broadcast_pkts": null,
+            "out_broadcast_pkts": null,
+            "in_discards": null,
+            "out_discards": null,
+            "in_errors": null,
+            "out_errors": null,
+            "in_unknown_pkts": null,
+            "utilization_percent": null,
+            "duplex": null
+          }
+        ]
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "environment": {
+      "collector": "environment",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.500000+00:00",
+      "data": {
+        "temperatures": [
+          {
+            "name": "CPU Temperature", "index": "1", "type": "temperature",
+            "value": 42.0, "unit": "°C",
+            "status": "normal", "alarm": false, "source": "cisco-envmon"
+          }
+        ],
+        "fans": [
+          {
+            "name": "Fan 1", "index": "1", "type": "fan",
+            "value": null, "unit": null,
+            "status": "normal", "alarm": false, "source": "cisco-envmon"
+          }
+        ],
+        "power_supplies": [
+          {
+            "name": "Power Supply 1", "index": "1", "type": "psu",
+            "value": null, "unit": null,
+            "status": "normal", "alarm": false, "source": "cisco-envmon"
+          }
+        ],
+        "voltages": [],
+        "currents": [],
+        "other_sensors": [],
+        "sensor_count": 3,
+        "alarm_count": 0,
+        "health": "ok"
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "vlan": {
+      "collector": "vlan",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.600000+00:00",
+      "data": {
+        "vlan_count": 2,
+        "vlans": [
+          {
+            "vlan_id": 1, "name": "default", "status": "active",
+            "egress_ports": [], "untagged_ports": [], "tagged_ports": [],
+            "port_count": 0
+          },
+          {
+            "vlan_id": 10, "name": "Management", "status": "active",
+            "egress_ports": [], "untagged_ports": [], "tagged_ports": [],
+            "port_count": 0
+          }
+        ]
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "lldp": {
+      "collector": "lldp",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.700000+00:00",
+      "data": {
+        "neighbor_count": 1,
+        "neighbors": [
+          {
+            "local_port_num":          "1",
+            "local_port_desc":         "GigabitEthernet0/0",
+            "remote_chassis_id":       "00:11:22:33:44:55",
+            "remote_port_id":          "Gi0/1",
+            "remote_port_desc":        "GigabitEthernet0/1",
+            "remote_sys_name":         "access-sw-01.example.com",
+            "remote_sys_desc":         "Cisco IOS Software, Catalyst 2960",
+            "mgmt_address":            "192.168.1.2",
+            "capabilities_supported":  ["Bridge", "Router"],
+            "capabilities_enabled":    ["Bridge"],
+            "platform":                "Cisco IOS Software, Catalyst 2960",
+            "rem_index":               "1"
+          }
+        ],
+        "local_ports": {"1": "GigabitEthernet0/0"}
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "cdp": {
+      "collector": "cdp",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.800000+00:00",
+      "data": {
+        "neighbor_count": 1,
+        "neighbors": [
+          {
+            "local_port_index": "1",
+            "device_id":   "access-sw-01.example.com",
+            "platform":    "cisco WS-C2960X-24PD-L",
+            "remote_port": "GigabitEthernet0/1",
+            "mgmt_address": null,
+            "capabilities": ["Switch"],
+            "ios_version":  null,
+            "duplex":       "full",
+            "rem_index":    "1"
+          }
+        ]
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "routing": {
+      "collector": "routing",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:00.900000+00:00",
+      "data": {
+        "route_count": 2,
+        "protocol_summary": {"bgp": 1, "rip": 1},
+        "routes": [
+          {
+            "destination": "0.0.0.0", "mask": "0.0.0.0",
+            "prefix_length": 0, "next_hop": "203.0.113.1",
+            "interface": null, "protocol": "bgp",
+            "route_type": "remote", "metric": 1
+          },
+          {
+            "destination": "10.0.0.0", "mask": "255.0.0.0",
+            "prefix_length": 8, "next_hop": "10.0.0.1",
+            "interface": null, "protocol": "rip",
+            "route_type": "remote", "metric": null
+          }
+        ]
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "arp": {
+      "collector": "arp",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:01.000000+00:00",
+      "data": {
+        "entry_count": 2,
+        "entries": [
+          {"ip_address": "192.168.1.1",   "mac": "00:11:22:33:44:55", "interface": 1, "entry_type": "dynamic"},
+          {"ip_address": "192.168.1.100", "mac": "AA:BB:CC:DD:EE:FF", "interface": 1, "entry_type": "dynamic"}
+        ]
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "mac_table": {
+      "collector": "mac_table",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:01.100000+00:00",
+      "data": {
+        "entry_count": 2,
+        "vlan_aware": false,
+        "entries": [
+          {"mac": "00:11:22:33:44:55", "port": 1, "if_index": null, "vlan_id": null, "status": "learned"},
+          {"mac": "AA:BB:CC:DD:EE:FF", "port": 2, "if_index": null, "vlan_id": null, "status": "learned"}
+        ]
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "firewall": {
+      "collector": "firewall",
+      "supported": false,
+      "timestamp": "2026-08-07T10:30:01.200000+00:00",
+      "reason": "Firewall metrics are vendor-specific; detected vendor='cisco' device_type='router' is not a supported firewall",
+      "missing": []
+    },
+
+    "wireless": {
+      "collector": "wireless",
+      "supported": false,
+      "timestamp": "2026-08-07T10:30:01.300000+00:00",
+      "reason": "No wireless OIDs responded for vendor='cisco' device_type='router' — WLAN may not be supported",
+      "missing": ["ssid", "clients", "ap_count"]
+    },
+
+    "inventory": {
+      "collector": "inventory",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:01.400000+00:00",
+      "data": {
+        "total_count": 4,
+        "fru_count": 0,
+        "chassis": {
+          "index": 1, "name": "Cisco ISR4321", "description": null,
+          "class": "chassis", "model": "ISR4321/K9",
+          "serial": "FTX2045ABCD", "hardware_rev": null,
+          "firmware_rev": "15.9(3)M3", "software_rev": null,
+          "manufacturer": "Cisco Systems", "is_fru": false,
+          "parent_index": null, "parent_rel_pos": null
+        },
+        "modules": [
+          {
+            "index": 2, "name": "ISR4321 Network Module", "description": null,
+            "class": "module", "model": null, "serial": null,
+            "hardware_rev": null, "firmware_rev": null, "software_rev": null,
+            "manufacturer": null, "is_fru": false, "parent_index": null, "parent_rel_pos": null
+          }
+        ],
+        "power_supplies": [
+          {
+            "index": 3, "name": "PWR-50W-AC", "class": "powerSupply",
+            "model": null, "serial": null, "is_fru": false,
+            "description": null, "hardware_rev": null, "firmware_rev": null,
+            "software_rev": null, "manufacturer": null, "parent_index": null, "parent_rel_pos": null
+          }
+        ],
+        "fans": [
+          {
+            "index": 4, "name": "System Fan 1", "class": "fan",
+            "model": null, "serial": null, "is_fru": false,
+            "description": null, "hardware_rev": null, "firmware_rev": null,
+            "software_rev": null, "manufacturer": null, "parent_index": null, "parent_rel_pos": null
+          }
+        ],
+        "sensors": [],
+        "ports": [],
+        "cpus": [],
+        "other": []
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "topology": {
+      "collector": "topology",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:01.500000+00:00",
+      "data": {
+        "node_count": 2,
+        "link_count": 1,
+        "source": "lldp",
+        "sources_used": ["lldp", "cdp"],
+        "nodes": [
+          {
+            "id": "1.3.6.1.4.1.9.1.2588",
+            "hostname": "core-router-01.example.com",
+            "ip": null, "mac": null,
+            "vendor": "cisco", "device_type": "router",
+            "interfaces": []
+          },
+          {
+            "id": "00:11:22:33:44:55",
+            "hostname": "access-sw-01.example.com",
+            "ip": "192.168.1.2", "mac": "00:11:22:33:44:55",
+            "vendor": null, "device_type": null,
+            "interfaces": ["Gi0/1"]
+          }
+        ],
+        "links": [
+          {
+            "source_node":   "1.3.6.1.4.1.9.1.2588",
+            "target_node":   "00:11:22:33:44:55",
+            "source_port":   "GigabitEthernet0/0",
+            "target_port":   "Gi0/1",
+            "protocol":      "lldp",
+            "bidirectional": true
+          }
+        ]
+      },
+      "missing": [],
+      "warnings": []
+    },
+
+    "health": {
+      "collector": "health",
+      "supported": true,
+      "timestamp": "2026-08-07T10:30:01.600000+00:00",
+      "data": {
+        "status":       "UP",
+        "reachable":    true,
+        "snmp_enabled": true,
+        "alarm_count":  0,
+        "details":      "Device reachable and responding to SNMP"
+      },
+      "missing": [],
+      "warnings": []
+    }
+  }
+}

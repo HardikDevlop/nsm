@@ -1,0 +1,1 @@
+FastAPI + Uvicorn for the HTTP server, SQLAlchemy with psycopg2 for PostgreSQL, Pydantic v2 (`pydantic_settings`) for configuration, and JWT-based Bearer token authentication.

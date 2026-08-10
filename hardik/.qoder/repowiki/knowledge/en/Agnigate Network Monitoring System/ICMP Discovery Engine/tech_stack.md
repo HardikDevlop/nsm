@@ -1,0 +1,1 @@
+Python with Flask for the REST API, standard library networking (socket, subprocess for ping), JSON file persistence for inventory, and pytest for tests.

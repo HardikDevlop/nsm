@@ -1,0 +1,5 @@
+- Configuration is accessed through the cached `get_settings()` singleton from `backend.config.settings` rather than direct environment reads.
+- Database sessions are obtained exclusively via the `get_db` dependency from `backend.database.session`.
+- Authentication and authorization are enforced through FastAPI `Depends` — `get_current_user` for identity and `require_permission(code)` for RBAC checks on endpoints.
+- SQLAlchemy models are registered by importing `backend.models` at app startup so `Base.metadata.create_all` picks them up automatically.
+- Request/response payloads are validated with Pydantic schemas defined under `backend/schemas/`.

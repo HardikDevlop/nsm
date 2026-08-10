@@ -1,0 +1,1 @@
+React 19 with JSX, Vite 8 as the dev server and bundler, `@vitejs/plugin-react` for JSX transform, Oxlint for linting, and no routing or state library — local `useState`/`useEffect`/`useMemo` drive all interactivity. Development API proxy targets a Python backend at `127.0.0.1:5000`.

@@ -1,0 +1,1 @@
+Run `npm run dev` to start the Vite dev server (proxies `/api/*` to `http://127.0.0.1:5000`). Build with `npm run build`, preview the production bundle with `npm run preview`, and lint with `npm run lint` (Oxlint).

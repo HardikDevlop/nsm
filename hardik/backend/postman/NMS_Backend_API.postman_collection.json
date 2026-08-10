@@ -1,0 +1,3519 @@
+{
+  "info": {
+    "_postman_id": "nms-backend-api",
+    "name": "NMS Backend API (FastAPI - port 8000, unified)",
+    "description": "FastAPI-based NMS backend with JWT auth, RBAC and full CRUD for every module \u2014 now also includes all discovery / monitoring / analytics module endpoints (formerly on Flask port 5000, now unified on 8000). Start with: python -m uvicorn backend.main:app --port 8000. Default admin: admin@gmail.com / admin123. Protected endpoints require the collection-level Bearer token, which is auto-populated after running the Login request. Discovery endpoints under /api/v1/discovery/* and /api/v1/monitoring/* and /api/v1/analytics/* are public (no auth).\n\nCollection polish: use {{jobId}}, {{deviceId}}, {{deviceIp}}, {{alertId}}, and {{permissionId}} placeholders for the dynamic routes. Legacy compatibility endpoints live under {{legacyBaseUrl}}.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "legacyBaseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "jobId",
+      "value": "job-123",
+      "type": "string"
+    },
+    {
+      "key": "deviceId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "deviceIp",
+      "value": "192.168.100.1",
+      "type": "string"
+    },
+    {
+      "key": "alertId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "permissionId",
+      "value": "1",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "00 - Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Auth",
+      "item": [
+        {
+          "name": "Login (auto-set token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.access_token) {",
+                  "  pm.collectionVariables.set('token', json.access_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@gmail.com\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Current User (Me)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Dashboard",
+      "item": [
+        {
+          "name": "Dashboard Summary",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/dashboard/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "dashboard",
+                "summary"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Organizations (CRUD)",
+      "item": [
+        {
+          "name": "Create Organization",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Demo Organization\",\n  \"description\": \"Primary NMS tenant\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/organizations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "organizations"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Organizations",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/organizations?skip=0&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "organizations"
+              ],
+              "query": [
+                {
+                  "key": "skip",
+                  "value": "0"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Organization",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/organizations/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "organizations",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Organization",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated description\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/organizations/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "organizations",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Organization",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/organizations/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "organizations",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Sites (CRUD)",
+      "item": [
+        {
+          "name": "Create Site",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organization_id\": 1,\n  \"name\": \"Head Office\",\n  \"city\": \"Delhi\",\n  \"state\": \"Delhi\",\n  \"latitude\": 28.6139,\n  \"longitude\": 77.209\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sites",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sites"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Sites",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/sites?skip=0&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sites"
+              ],
+              "query": [
+                {
+                  "key": "skip",
+                  "value": "0"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Site",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/sites/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sites",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Site",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"city\": \"New Delhi\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sites/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sites",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Site",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/sites/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sites",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Vendors (CRUD)",
+      "item": [
+        {
+          "name": "Create Vendor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vendor_name\": \"Cisco\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/vendors",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vendors"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Vendors",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/vendors",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vendors"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Vendor",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/vendors/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vendors",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Vendor",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vendor_name\": \"Cisco Systems\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/vendors/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vendors",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Vendor",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/vendors/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vendors",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Device Types (CRUD)",
+      "item": [
+        {
+          "name": "Create Device Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Switch\",\n  \"description\": \"Layer-2 / Layer-3 switch\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/device-types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-types"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Device Types",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/device-types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-types"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Device Type",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/device-types/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-types",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Device Type",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/device-types/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-types",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Device Type",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/device-types/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-types",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Devices (CRUD)",
+      "item": [
+        {
+          "name": "Create Device",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": 1,\n  \"vendor_id\": 1,\n  \"device_type_id\": 1,\n  \"hostname\": \"core-sw-01\",\n  \"ip_address\": \"192.168.100.1\",\n  \"model\": \"Catalyst 9300\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/devices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Device With Discovery",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/devices/add-with-discovery",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "add-with-discovery"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ip_address\": \"192.168.100.10\", \"site_id\": null}"
+            }
+          }
+        },
+        {
+          "name": "Enable/Disable Device Monitoring",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/devices/{{deviceId}}/monitoring/true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "{{deviceId}}",
+                "monitoring",
+                "true"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          }
+        },
+        {
+          "name": "List Devices",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/devices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Device",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/devices/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Device",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostname\": \"core-sw-01-updated\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/devices/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Toggle Device Monitoring",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/devices/1/monitoring/true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "1",
+                "monitoring",
+                "true"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Device Status History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/devices/1/status-history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "1",
+                "status-history"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Device",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/devices/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Device Credentials (CRUD)",
+      "item": [
+        {
+          "name": "Create Credential",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"protocol\": \"ssh\",\n  \"username\": \"admin\",\n  \"password\": \"secret123\",\n  \"port\": 22\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/device-credentials",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-credentials"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Credentials",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/device-credentials",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-credentials"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Credential",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/device-credentials/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-credentials",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Credential",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"port\": 2222\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/device-credentials/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-credentials",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Credential",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/device-credentials/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-credentials",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 - Interfaces (CRUD)",
+      "item": [
+        {
+          "name": "Create Interface",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"interface_name\": \"GigabitEthernet0/1\",\n  \"status\": \"up\",\n  \"speed\": \"1Gbps\",\n  \"traffic_in\": 0,\n  \"traffic_out\": 0,\n  \"packet_errors\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/interfaces",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "interfaces"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Interfaces",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/interfaces",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "interfaces"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Interface",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/interfaces/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "interfaces",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Interface",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"down\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/interfaces/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "interfaces",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Interface",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/interfaces/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "interfaces",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Monitoring Jobs (CRUD)",
+      "item": [
+        {
+          "name": "Create Monitoring Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"monitor_type\": \"icmp\",\n  \"interval\": 60,\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring-jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring-jobs"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Monitoring Jobs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/monitoring-jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring-jobs"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Monitoring Job",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/monitoring-jobs/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring-jobs",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Monitoring Job",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"interval\": 30\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring-jobs/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring-jobs",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Monitoring Job",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/monitoring-jobs/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring-jobs",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Device Metrics (CRUD)",
+      "item": [
+        {
+          "name": "Create Device Metric",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"metric_name\": \"cpu_percent\",\n  \"metric_value\": 42.5,\n  \"unit\": \"%\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/device-metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-metrics"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Device Metrics",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/device-metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-metrics"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Device Metric",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/device-metrics/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-metrics",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Device Metric",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"metric_value\": 50.0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/device-metrics/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-metrics",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Device Metric",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/device-metrics/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "device-metrics",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 - Thresholds (CRUD)",
+      "item": [
+        {
+          "name": "Create Threshold",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"metric_name\": \"cpu_percent\",\n  \"warning_value\": 80,\n  \"critical_value\": 95\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/thresholds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "thresholds"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Thresholds",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/thresholds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "thresholds"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Threshold",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/thresholds/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "thresholds",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Threshold",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"critical_value\": 90\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/thresholds/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "thresholds",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Threshold",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/thresholds/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "thresholds",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 - Alerts (CRUD + Acknowledge/Resolve)",
+      "item": [
+        {
+          "name": "Create Alert",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"severity\": \"critical\",\n  \"title\": \"Device Down\",\n  \"description\": \"ICMP unreachable\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/alerts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Alerts",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/alerts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Clear All Alerts",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/alerts/clear-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts",
+                "clear-all"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Alert",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/alerts/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Alert",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"severity\": \"warning\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/alerts/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Acknowledge Alert",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/alerts/1/acknowledge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts",
+                "1",
+                "acknowledge"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Resolve Alert",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/alerts/1/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts",
+                "1",
+                "resolve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Alert",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/alerts/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "alerts",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 - Events (CRUD)",
+      "item": [
+        {
+          "name": "Create Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"event_type\": \"status_change\",\n  \"severity\": \"info\",\n  \"message\": \"Device came online\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "events"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Events",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "events"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Event",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/events/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "events",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Event",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"severity\": \"warning\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/events/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "events",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Event",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/events/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "events",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 - Notifications (CRUD)",
+      "item": [
+        {
+          "name": "Create Notification",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alert_id\": 1,\n  \"channel\": \"email\",\n  \"sent_to\": \"admin@example.com\",\n  \"status\": \"pending\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/notifications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Notifications",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/notifications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Notification",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/notifications/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Notification",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"delivered\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/notifications/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Notification",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/notifications/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 - Reports (CRUD)",
+      "item": [
+        {
+          "name": "Create Report",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"report_name\": \"Monthly Uptime\",\n  \"report_type\": \"uptime\",\n  \"file_path\": \"/reports/monthly.pdf\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reports",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Reports",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Report",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Report",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"report_name\": \"Updated Monthly\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reports/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Report",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/reports/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 - Audit Logs (Read-only)",
+      "item": [
+        {
+          "name": "List Audit Logs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/audit-logs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "audit-logs"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Audit Log",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/audit-logs/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "audit-logs",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "18 - Roles (CRUD + Permissions)",
+      "item": [
+        {
+          "name": "Create Role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role_name\": \"CustomRole\",\n  \"description\": \"Custom role\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Roles",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Role",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/roles/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Role",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/roles/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Role Permissions",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/roles/1/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles",
+                "1",
+                "permissions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Replace Role Permissions",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permission_ids\": [1, 2, 3]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/roles/1/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles",
+                "1",
+                "permissions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Permission to Role",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/roles/1/permissions/5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles",
+                "1",
+                "permissions",
+                "5"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove Permission from Role",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/roles/1/permissions/5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles",
+                "1",
+                "permissions",
+                "5"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Role",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/roles/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "roles",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "19 - Permissions (CRUD)",
+      "item": [
+        {
+          "name": "Create Permission",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"custom:execute\",\n  \"name\": \"Custom Execute\",\n  \"module\": \"custom\",\n  \"action\": \"execute\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "permissions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Permissions",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "permissions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Permission",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/permissions/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "permissions",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Permission",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/permissions/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "permissions",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Permission",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/permissions/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "permissions",
+                "1"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "20 - Users (CRUD + Role Assignment)",
+      "item": [
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Operator User\",\n  \"email\": \"operator@example.com\",\n  \"password\": \"operator123\",\n  \"role_id\": 2\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get User",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/users/2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "2"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Name\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "2"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Assign Role to User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role_id\": 3\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/2/role",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "2",
+                "role"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/users/2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "21 - Discovery & Monitoring Services",
+      "item": [
+        {
+          "name": "Run Network Discovery",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"network_range\": \"192.168.100.0/24\",\n  \"ports\": [22, 80, 443],\n  \"timeout_ms\": 1000,\n  \"scan_icmp\": true,\n  \"scan_snmp\": false,\n  \"max_hosts\": 16\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/run",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "run"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Run Monitoring Checks",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip_addresses\": [\"192.168.100.1\", \"192.168.100.2\"],\n  \"timeout_ms\": 1000\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring/run",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring",
+                "run"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "22 - Discovery Modules (Individual Protocols)",
+      "item": [
+        {
+          "name": "List Discovery Modules",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/modules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "modules"
+              ]
+            }
+          }
+        },
+        {
+          "name": "IP Discovery (expand range)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"192.168.100.0/24\",\n  \"limit\": 254\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/ip",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "ip"
+              ]
+            }
+          }
+        },
+        {
+          "name": "ICMP Discovery (ping sweep)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ips\": [\"192.168.100.1\", \"192.168.100.2\"],\n  \"timeout_ms\": 1000\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/icmp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "icmp"
+              ]
+            }
+          }
+        },
+        {
+          "name": "TCP Discovery (port scan)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ips\": [\"192.168.100.1\"],\n  \"ports\": [22, 80, 443],\n  \"timeout_seconds\": 0.75\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/tcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "tcp"
+              ]
+            }
+          }
+        },
+        {
+          "name": "ARP Discovery",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ips\": [\"192.168.100.1\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/arp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "arp"
+              ]
+            }
+          }
+        },
+        {
+          "name": "DNS Discovery (reverse lookup)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ips\": [\"192.168.100.1\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/dns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "dns"
+              ]
+            }
+          }
+        },
+        {
+          "name": "HTTP Discovery (banner grab)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"192.168.100.1\",\n  \"open_ports\": {\"80\": \"http\", \"443\": \"https\"}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/http",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "http"
+              ]
+            }
+          }
+        },
+        {
+          "name": "SNMP Discovery",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ips\": [\"192.168.100.1\"],\n  \"communities\": [\"public\"],\n  \"timeout_seconds\": 0.75\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/snmp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "snmp"
+              ]
+            }
+          }
+        },
+        {
+          "name": "SSH Discovery",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"192.168.100.1\",\n  \"open_ports\": {\"22\": \"ssh\"}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/ssh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "ssh"
+              ]
+            }
+          }
+        },
+        {
+          "name": "WMI Discovery (Windows)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"192.168.100.1\",\n  \"open_ports\": {}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/wmi",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "wmi"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Device Profiler",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"signals\": {\n    \"open_ports\": [22, 80],\n    \"os_hint\": \"linux\",\n    \"snmp_sysdescr\": \"Cisco IOS\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "profile"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Discovery Summary (inventory.json)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "summary"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Discovery Inventory (inventory.json)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/inventory",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "inventory"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Discovery Plan (preview, no probes)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"network_range\": \"192.168.100.0/24\",\n  \"max_hosts\": 254\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/plan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "plan"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Detect Local Subnet",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/local-subnet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "local-subnet"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "23 - Chunked Scan & Device Management",
+      "item": [
+        {
+          "name": "Start Chunked Scan",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"network_range\": \"192.168.100.0/24\",\n  \"site_id\": null,\n  \"ports\": [22, 80, 443],\n  \"scan_icmp\": true,\n  \"scan_ports\": true,\n  \"scan_snmp\": false,\n  \"timeout_ms\": 700,\n  \"max_hosts\": 254,\n  \"chunk_size\": 25\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/chunked-scan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "chunked-scan"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Chunked Scan Job Status",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/chunked-scan/{{jobId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "chunked-scan",
+                "{{jobId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Chunked Scan SSE Progress Stream",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/chunked-scan/{{jobId}}/progress",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "chunked-scan",
+                "{{jobId}}",
+                "progress"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Discovered Devices to DB",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"devices\": [\n    { \"ip_address\": \"192.168.100.1\", \"hostname\": \"router-01\", \"mac_address\": \"00:11:22:33:44:55\" },\n    { \"ip_address\": \"192.168.100.2\", \"hostname\": \"switch-01\" }\n  ],\n  \"site_id\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/add-devices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "add-devices"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Check Which IPs Are Stored",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ips\": [\"192.168.100.1\", \"192.168.100.2\", \"10.0.0.1\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/check-stored",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "check-stored"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Device History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/device-history/{{deviceIp}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "device-history",
+                "{{deviceIp}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "24 - Real-time Monitoring",
+      "item": [
+        {
+          "name": "Start Monitoring Single Device",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"192.168.100.1\",\n  \"hostname\": \"router-01\",\n  \"vendor\": \"Cisco\",\n  \"mac_address\": \"00:11:22:33:44:55\",\n  \"site_id\": null,\n  \"device_id\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/monitoring/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "monitoring",
+                "start"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Stop Monitoring Single Device",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"192.168.100.1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/monitoring/stop",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "monitoring",
+                "stop"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Start Monitoring All Devices",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"devices\": [\n    { \"ip\": \"192.168.100.1\", \"hostname\": \"router-01\" },\n    { \"ip\": \"192.168.100.2\", \"hostname\": \"switch-01\" }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/monitoring/start-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "monitoring",
+                "start-all"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Stop Monitoring All Devices",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/discovery/monitoring/stop-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "monitoring",
+                "stop-all"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Monitoring Status",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/monitoring/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "monitoring",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Monitoring SSE Stream (real-time updates)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/discovery/monitoring/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "discovery",
+                "monitoring",
+                "stream"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "25 - Analytics",
+      "item": [
+        {
+          "name": "Evaluate Alerts from Samples",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"samples\": [\n    { \"ip\": \"192.168.100.1\", \"reachable\": false, \"packet_loss\": 100 }\n  ],\n  \"events\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/analytics/alerts/evaluate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "analytics",
+                "alerts",
+                "evaluate"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Alert Thresholds",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/analytics/alerts/thresholds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "analytics",
+                "alerts",
+                "thresholds"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Generate Events from Samples",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"samples\": [\n    { \"ip\": \"192.168.100.1\", \"reachable\": true, \"rtt_ms\": 5.2 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/analytics/events/from-samples",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "analytics",
+                "events",
+                "from-samples"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Normalize External Events",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    { \"source\": \"syslog\", \"message\": \"Link down on eth0\", \"severity\": \"critical\" }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/analytics/events/normalize",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "analytics",
+                "events",
+                "normalize"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Build Topology (from inventory.json)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"devices\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/analytics/topology",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "analytics",
+                "topology"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Build Topology from PostgreSQL",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/analytics/topology/db",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "analytics",
+                "topology",
+                "db"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "26 - MAC Vendor Lookup",
+      "item": [
+        {
+          "name": "Lookup Single MAC",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mac\": \"00:11:22:33:44:55\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/mac-vendors/lookup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mac-vendors",
+                "lookup"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Lookup Multiple MACs",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"macs\": [\"00:11:22:33:44:55\", \"AA:BB:CC:DD:EE:FF\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/mac-vendors/lookup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mac-vendors",
+                "lookup"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List All Vendors (OUI table)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/mac-vendors",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mac-vendors"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Vendor OUI Entry",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prefix\": \"AA:BB:CC\",\n  \"vendor\": \"Test Vendor\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/mac-vendors",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mac-vendors"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "27 - Monitoring Modules (ICMP/SNMP/Syslog/Trap)",
+      "item": [
+        {
+          "name": "ICMP Monitoring (ping check)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ips\": [\"192.168.100.1\", \"10.0.0.1\"],\n  \"timeout_ms\": 1000\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring/icmp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring",
+                "icmp"
+              ]
+            }
+          }
+        },
+        {
+          "name": "SNMP Monitoring (poll OIDs)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"192.168.100.1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring/snmp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring",
+                "snmp"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Syslog Ingest",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"<14>Jul 29 12:00:00 router-01 %LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to up\",\n  \"source_ip\": \"192.168.100.1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring/syslog/ingest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring",
+                "syslog",
+                "ingest"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Syslog Parse",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"<14>Jul 29 12:00:00 router-01 %LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to up\",\n  \"source_ip\": \"192.168.100.1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring/syslog/parse",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring",
+                "syslog",
+                "parse"
+              ]
+            }
+          }
+        },
+        {
+          "name": "SNMP Trap Ingest",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": \"302d02010004067075626c6963a42006\",\n  \"source_ip\": \"192.168.100.1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/monitoring/trap/ingest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitoring",
+                "trap",
+                "ingest"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "28 - Legacy Compatibility",
+      "item": [
+        {
+          "name": "Legacy Inventory",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{legacyBaseUrl}}/api/inventory",
+              "host": [
+                "{{legacyBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "inventory"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Legacy Discovery Modules",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{legacyBaseUrl}}/api/discovery/modules",
+              "host": [
+                "{{legacyBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "discovery",
+                "modules"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Legacy Discovery Summary",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{legacyBaseUrl}}/api/discovery/summary",
+              "host": [
+                "{{legacyBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "discovery",
+                "summary"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

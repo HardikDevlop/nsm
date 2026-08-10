@@ -1,0 +1,1 @@
+Python 3 with FastAPI (backend) and Flask (discovery engine), React 19 + Vite for the frontend, SQLite via SQLAlchemy for the backend, and plain JSON for cross-service inventory persistence.

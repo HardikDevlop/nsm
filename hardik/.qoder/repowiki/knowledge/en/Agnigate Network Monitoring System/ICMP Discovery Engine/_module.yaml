@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: icmp_discovery_engine
+title: ICMP Discovery Engine
+scope:
+    - icmp_discovery/
+source_files: []
+depends_on: []
+related_to:
+    - path: frontend_app

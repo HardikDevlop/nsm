@@ -1,0 +1,1 @@
+React + Vite single-page dashboard for Agnigate's enterprise network monitoring, providing device discovery, inventory, topology visualization, alerting, and analytics with a mock backend proxy.

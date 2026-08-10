@@ -1,0 +1,1 @@
+Python-based network discovery service that orchestrates multi-protocol device enumeration, profiling, inventory persistence, and monitoring through both a CLI pipeline and a Flask REST API.

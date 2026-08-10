@@ -1,0 +1,1 @@
+Run the full discovery pipeline via `python main.py`; start the Flask API server via `python app.py` (listens on 127.0.0.1:5000). Discovery modules execute in a fixed numbered order defined in `app.py`'s `MODULES` list.

@@ -1,0 +1,1 @@
+Three-service NMS platform combining a Flask ICMP discovery engine, a FastAPI backend API, and a React dashboard that proxies API calls to the discovery service during development.

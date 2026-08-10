@@ -1,0 +1,6 @@
+- Each module begins with a standardized docstring block containing File Name, Purpose, Description, Dependencies, Author, and Version fields.
+- All public functions and classes use PEP 484 type hints via `from __future__ import annotations` so forward references work without quotes.
+- Cross-cutting configuration is read exclusively from module-level constants in `config.py` rather than passed as parameters or loaded at runtime.
+- Thread safety is enforced with `threading.RLock` around shared mutable state (e.g., `Inventory._devices`) and a module-level `threading.Lock` for logger writes.
+- Optional probe features are gated by boolean flags in `config.py` (`ENABLE_SNMP_PROBES`, `ENABLE_WMI_PROBES`, `ENABLE_SSH_INVENTORY`) and return a `{reachable: False, skipped: ...}` sentinel dict when disabled.
+- Fallback value selection follows a `_first_value(*values)` helper that picks the first non-empty/non-None/non-default entry across multiple probe sources.
