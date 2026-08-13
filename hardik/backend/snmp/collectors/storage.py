@@ -161,8 +161,24 @@ class StorageCollector(BaseCollector):
 
             # Skip non-disk entries (RAM / virtual memory)
             if type_oid and type_oid not in _STORAGE_TYPES:
-                # But include "other" types that have a filesystem description
-                if type_oid not in ("1.3.6.1.2.1.25.2.1.1",) or not descr:
+                # Exclude all non-storage types:
+                # - RAM (1.3.6.1.2.1.25.2.1.2)
+                # - Virtual memory (1.3.6.1.2.1.25.2.1.3)
+                # - Other (1.3.6.1.2.1.25.2.1.1) entries that contain memory-related keywords
+                memory_descr_hints = (
+                    "memory", "mem", "swap", "virtual", "buffer", "cached", "available"
+                )
+                descr_lower = descr.lower()
+                is_memory_entry = any(h in descr_lower for h in memory_descr_hints)
+                
+                # For "other" type (1.3.6.1.2.1.25.2.1.1), only include if it looks like a disk
+                # Otherwise skip all non-storage types
+                if type_oid == "1.3.6.1.2.1.25.2.1.1":
+                    # "other" type: skip if description suggests it's memory
+                    if is_memory_entry or not descr:
+                        continue
+                else:
+                    # Not a recognized storage type: skip entirely
                     continue
 
             if size is None or int(size) == 0:

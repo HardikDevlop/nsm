@@ -48,7 +48,8 @@ from sqlalchemy.orm import Session
 
 from backend.database.session import get_db
 from backend.dependencies import get_current_user, require_permission
-from backend.models import Device, DeviceCredential, Event, Interface
+from backend.models import Device, DeviceCredential, Event, Interface, Vendor, DeviceType
+from backend.models.snmp import MonitoringStatus
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ def _live_collect(device: Device, cred: DeviceCredential | None) -> dict[str, An
         privacy_password=priv_pass,
         security_level=cred.security_level,
     )
-    service = SNMPService(credentials=credentials, timeout=3.0)
+    service = SNMPService(credentials=credentials, timeout=10.0, retries=3)
     return service.collect(device.ip_address)
 
 
@@ -276,8 +277,11 @@ def test_snmp_connection(
 ) -> dict[str, Any]:
     """Test SNMP connectivity using the device's stored credentials."""
     import time
+    import logging
+    logger = logging.getLogger(__name__)
     device = _get_device_or_404(device_id, db)
     cred   = _get_credentials(device_id, db)
+    logger.info(f"Test SNMP for device {device_id}: {device.ip_address}, cred: {cred.username if cred else None}")
     if not cred:
         return {
             "reachable": False,
@@ -288,7 +292,9 @@ def test_snmp_connection(
         }
     t0 = time.perf_counter()
     try:
+        logger.info(f"Calling _live_collect for device {device_id}")
         result = _live_collect(device, cred)
+        logger.info(f"_live_collect returned: reachable={result.get('reachable')}, snmp_enabled={result.get('snmp_enabled')}")
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
         return {
             "reachable":    result.get("reachable", False),
@@ -301,6 +307,7 @@ def test_snmp_connection(
             "ip":           device.ip_address,
         }
     except Exception as exc:
+        logger.exception(f"Test SNMP failed for device {device_id}")
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
         return {
             "reachable":    False,
@@ -622,8 +629,20 @@ def get_snmp_system(
     device = _get_device_or_404(device_id, db)
     cred   = _get_credentials(device_id, db)
     result = _live_collect(device, cred)
-    sys_col = _collector_data(result, "system")
-    return {"device_id": device_id, **sys_col}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_enabled":  result.get("snmp_enabled"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "sys_object_id": result.get("sys_object_id"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        **_collector_data(result, "system"),
+    }
 
 
 @router.get("/snmp/devices/{device_id}/cpu")
@@ -637,7 +656,6 @@ def get_snmp_cpu(
     device = _get_device_or_404(device_id, db)
     cred   = _get_credentials(device_id, db)
 
-    # Historical data from DB
     since = datetime.utcnow() - timedelta(hours=hours)
     history_rows = (
         db.query(CPUStatistic)
@@ -651,24 +669,41 @@ def get_snmp_cpu(
         for r in history_rows
     ]
 
-    # Live poll for current value
-    live_col = {}
-    try:
-        result  = _live_collect(device, cred)
-        live_col = _collector_data(result, "cpu")
-    except Exception as exc:
-        live_col = {"supported": False, "reason": str(exc)}
+    result   = _live_collect(device, cred)
+    col      = _collector_data(result, "cpu")
+    col_data = col.get("data") or {}
 
-    data = live_col.get("data") or {}
     return {
-        "device_id":    device_id,
-        "current_usage": data.get("overall_percent"),
-        "average":       data.get("average_percent"),
-        "per_core":      data.get("per_core", []),
-        "load_avg":      data.get("load_avg"),
-        "history":       history,
-        "supported":     live_col.get("supported", False),
-        "last_poll":     datetime.utcnow().isoformat(),
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "cpu",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "overall_percent":  col_data.get("overall_percent"),
+            "average_percent":  col_data.get("average_percent"),
+            "per_core":         col_data.get("per_core", []),
+            "core_count":       col_data.get("core_count", 0),
+            "highest_core":     col_data.get("highest_core"),
+            "lowest_core":      col_data.get("lowest_core"),
+            "cpu_user":         col_data.get("cpu_user"),
+            "cpu_system":       col_data.get("cpu_system"),
+            "cpu_idle":         col_data.get("cpu_idle"),
+            "load_avg":         col_data.get("load_avg"),
+            "display":          col_data.get("display"),
+            "source":           col_data.get("source"),
+        },
+        "history": history,
     }
 
 
@@ -680,24 +715,97 @@ def get_snmp_cpu(
 def get_snmp_memory(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db))
-    col = _collector_data(result, "memory")
-    return {"device_id": device_id, **col}
+    col      = _collector_data(result, "memory")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "memory",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "total_bytes":         col_data.get("total_bytes"),
+            "used_bytes":          col_data.get("used_bytes"),
+            "free_bytes":          col_data.get("free_bytes"),
+            "cached_bytes":        col_data.get("cached_bytes"),
+            "buffer_bytes":        col_data.get("buffer_bytes"),
+            "swap_total_bytes":    col_data.get("swap_total_bytes"),
+            "swap_free_bytes":     col_data.get("swap_free_bytes"),
+            "utilization_percent": col_data.get("utilization_percent"),
+            "display":             col_data.get("display"),
+            "source":              col_data.get("source"),
+        },
+    }
 
 
 @router.get("/snmp/devices/{device_id}/storage")
 def get_snmp_storage(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db))
-    col = _collector_data(result, "storage")
-    return {"device_id": device_id, **col}
+    col      = _collector_data(result, "storage")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "storage",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "volume_count": col_data.get("volume_count", 0),
+            "volumes":      col_data.get("volumes", []),
+        },
+    }
 
 
 @router.get("/snmp/devices/{device_id}/interfaces")
 def get_snmp_interfaces(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db))
-    col = _collector_data(result, "interfaces")
-    return {"device_id": device_id, **col}
+    col      = _collector_data(result, "interfaces")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "interfaces",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "interface_count": col_data.get("interface_count", 0),
+            "up_count":        col_data.get("up_count", 0),
+            "down_count":      col_data.get("down_count", 0),
+            "interfaces":      col_data.get("interfaces", []),
+        },
+    }
 
 
 @router.get("/snmp/interfaces/{interface_id}/history")
@@ -714,40 +822,384 @@ def get_snmp_interface_history(interface_id: int, hours: int = Query(default=24,
 def get_snmp_environment(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db))
-    col = _collector_data(result, "environment")
-    return {"device_id": device_id, **col}
+    col      = _collector_data(result, "environment")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "environment",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "temperatures":   col_data.get("temperatures", []),
+            "fans":           col_data.get("fans", []),
+            "power_supplies": col_data.get("power_supplies", []),
+            "voltages":       col_data.get("voltages", []),
+            "currents":       col_data.get("currents", []),
+            "other_sensors":  col_data.get("other_sensors", []),
+            "sensor_count":   col_data.get("sensor_count", 0),
+            "alarm_count":    col_data.get("alarm_count", 0),
+            "health":         col_data.get("health", "ok"),
+        },
+    }
 
 
 @router.get("/snmp/devices/{device_id}/lldp")
 def get_snmp_lldp(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db))
-    col = _collector_data(result, "lldp")
-    return {"device_id": device_id, **col}
+    col      = _collector_data(result, "lldp")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "lldp",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "neighbor_count": col_data.get("neighbor_count", 0),
+            "neighbors":      col_data.get("neighbors", []),
+            "local_ports":    col_data.get("local_ports", {}),
+        },
+    }
 
 
 @router.get("/snmp/devices/{device_id}/routing")
 def get_snmp_routing(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db))
-    col = _collector_data(result, "routing")
-    return {"device_id": device_id, **col}
+    col      = _collector_data(result, "routing")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "routing",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "route_count":       col_data.get("route_count", 0),
+            "protocol_summary":  col_data.get("protocol_summary", {}),
+            "routes":            col_data.get("routes", []),
+        },
+    }
 
 
 @router.get("/snmp/devices/{device_id}/vlans")
 def get_snmp_vlans(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db))
-    col = _collector_data(result, "vlan")
-    return {"device_id": device_id, **col}
+    col      = _collector_data(result, "vlan")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "vlan",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "vlan_count": col_data.get("vlan_count", 0),
+            "vlans":      col_data.get("vlans", []),
+        },
+    }
+
+
+@router.get("/snmp/devices/{device_id}/cdp")
+def get_snmp_cdp(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col      = _collector_data(result, "cdp")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "cdp",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "neighbor_count": col_data.get("neighbor_count", 0),
+            "neighbors":      col_data.get("neighbors", []),
+        },
+    }
+
+
+@router.get("/snmp/devices/{device_id}/arp")
+def get_snmp_arp(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col      = _collector_data(result, "arp")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "arp",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "entry_count": col_data.get("entry_count", 0),
+            "entries":     col_data.get("entries", []),
+        },
+    }
+
+
+@router.get("/snmp/devices/{device_id}/mac-table")
+def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col      = _collector_data(result, "mac_table")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "mac_table",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "entry_count": col_data.get("entry_count", 0),
+            "vlan_aware":  col_data.get("vlan_aware", False),
+            "entries":     col_data.get("entries", []),
+        },
+    }
+
+
+@router.get("/snmp/devices/{device_id}/inventory")
+def get_snmp_inventory(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col      = _collector_data(result, "inventory")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "inventory",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "total_count":   col_data.get("total_count", 0),
+            "fru_count":     col_data.get("fru_count", 0),
+            "chassis":       col_data.get("chassis"),
+            "modules":       col_data.get("modules", []),
+            "power_supplies":col_data.get("power_supplies", []),
+            "fans":          col_data.get("fans", []),
+            "sensors":       col_data.get("sensors", []),
+            "ports":         col_data.get("ports", []),
+            "cpus":          col_data.get("cpus", []),
+            "other":         col_data.get("other", []),
+        },
+    }
+
+
+@router.get("/snmp/devices/{device_id}/health")
+def get_snmp_health(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col      = _collector_data(result, "health")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "health",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "status":       col_data.get("status"),
+            "reachable":    col_data.get("reachable"),
+            "snmp_enabled": col_data.get("snmp_enabled"),
+            "alarm_count":  col_data.get("alarm_count", 0),
+            "details":      col_data.get("details"),
+        },
+    }
+
+
+@router.get("/snmp/devices/{device_id}/firewall")
+def get_snmp_firewall(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col = _collector_data(result, "firewall")
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "firewall",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data":          col.get("data") or {},
+    }
+
+
+@router.get("/snmp/devices/{device_id}/wireless")
+def get_snmp_wireless(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col = _collector_data(result, "wireless")
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "wireless",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data":          col.get("data") or {},
+    }
+
+
+@router.get("/snmp/devices/{device_id}/device-topology")
+def get_snmp_device_topology(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    device = _get_device_or_404(device_id, db)
+    result = _live_collect(device, _get_credentials(device_id, db))
+    col      = _collector_data(result, "topology")
+    col_data = col.get("data") or {}
+    return {
+        "api_version":   result.get("api_version", "2.0"),
+        "ip":            result.get("ip"),
+        "reachable":     result.get("reachable"),
+        "snmp_version":  result.get("snmp_version"),
+        "vendor":        result.get("vendor"),
+        "device_type":   result.get("device_type"),
+        "hostname":      result.get("hostname"),
+        "collection_ms": result.get("collection_ms"),
+        "device_id":     device_id,
+        "collector":     "topology",
+        "supported":     col.get("supported", False),
+        "timestamp":     col.get("timestamp"),
+        "missing":       col.get("missing", []),
+        "warnings":      col.get("warnings", []),
+        "reason":        col.get("reason"),
+        "data": {
+            "node_count":    col_data.get("node_count", 0),
+            "link_count":    col_data.get("link_count", 0),
+            "source":        col_data.get("source"),
+            "sources_used":  col_data.get("sources_used", []),
+            "nodes":         col_data.get("nodes", []),
+            "links":         col_data.get("links", []),
+        },
+    }
 
 
 @router.get("/snmp/devices/{device_id}/oids")
-def get_snmp_oids(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_oids(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> list[dict[str, Any]]:
+    """Returns OID cache entries as flat list — matches SNMPOIDCacheEntry[] expectation."""
     from backend.models.snmp import OIDCache  # noqa
     rows = db.query(OIDCache).filter(OIDCache.device_id == device_id).all()
-    entries = [{"id": r.id, "device_id": device_id, "oid": r.oid, "supported": r.supported, "label": r.label, "vendor_specific": False} for r in rows]
-    return {"device_id": device_id, "entries": entries, "count": len(entries)}
+    return [{
+        "id":             r.id,
+        "device_id":      device_id,
+        "oid":            r.oid,
+        "oid_name":       r.label,
+        "value":          None,
+        "type":           None,
+        "mib":            None,
+        "supported":      r.supported,
+        "last_seen":      datetime.utcnow().isoformat(),
+        "vendor_specific": False,
+    } for r in rows]
 
 
 @router.get("/snmp/devices/{device_id}/oid-tree")
@@ -780,3 +1232,615 @@ def get_snmp_topology(device_id: int | None = Query(default=None), db: Session =
     d_list = devices_q.limit(200).all()
     nodes = [{"id": d.id, "hostname": d.hostname, "ip_address": d.ip_address, "status": d.status, "type": d.device_type.name if d.device_type else None, "vendor": d.vendor.vendor_name if d.vendor else None} for d in d_list]
     return {"devices": nodes, "links": []}
+
+
+# ---------------------------------------------------------------------------
+# Monitoring Configuration CRUD
+# ---------------------------------------------------------------------------
+
+class MonitoringConfigRequest(BaseModel):
+    module_name: str
+    interval_seconds: int = 60
+
+
+class MonitoringConfigUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+
+
+@router.get("/snmp/devices/{device_id}/monitoring")
+def get_device_monitoring_configs(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> list[dict[str, Any]]:
+    """Get all monitoring configurations for a device."""
+    from backend.services.snmp_polling import get_polling_scheduler
+    import asyncio
+
+    scheduler = asyncio.run(get_polling_scheduler())
+    return asyncio.run(scheduler.get_device_jobs(device_id))
+
+
+@router.post("/snmp/devices/{device_id}/monitoring/{module}/start")
+def start_module_monitoring(
+    device_id: int,
+    module: str,
+    payload: MonitoringConfigRequest,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:update")),
+) -> dict[str, Any]:
+    """Start monitoring a specific module on a device."""
+    from backend.services.snmp_polling import get_polling_scheduler, ALLOWED_INTERVALS
+    import asyncio
+
+    if payload.interval_seconds not in ALLOWED_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"Invalid interval. Allowed: {ALLOWED_INTERVALS}")
+
+    # Validate module is supported
+    from backend.models.identity import DeviceCapabilities
+    cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    if cap:
+        cap_map = cap.to_map()
+        if not cap_map.get(module, False):
+            raise HTTPException(status_code=400, detail=f"Module {module} not supported by this device")
+
+    scheduler = asyncio.run(get_polling_scheduler())
+    config = asyncio.run(scheduler.add_job(device_id, module, payload.interval_seconds))
+    return {
+        "device_id": config.device_id,
+        "module_name": config.module_name,
+        "enabled": config.enabled,
+        "interval_seconds": config.interval_seconds,
+        "status": config.status,
+        "message": f"Monitoring started for {module}",
+    }
+
+
+@router.post("/snmp/devices/{device_id}/monitoring/{module}/stop")
+def stop_module_monitoring(
+    device_id: int,
+    module: str,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:update")),
+) -> dict[str, Any]:
+    """Stop monitoring a specific module on a device."""
+    from backend.services.snmp_polling import get_polling_scheduler
+    import asyncio
+
+    scheduler = asyncio.run(get_polling_scheduler())
+    stopped = asyncio.run(scheduler.stop_job(device_id, module))
+    return {
+        "device_id": device_id,
+        "module_name": module,
+        "stopped": stopped,
+        "message": f"Monitoring stopped for {module}" if stopped else f"No monitoring job found for {module}",
+    }
+
+
+@router.put("/snmp/devices/{device_id}/monitoring/{module}")
+def update_module_monitoring(
+    device_id: int,
+    module: str,
+    payload: MonitoringConfigUpdateRequest,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:update")),
+) -> dict[str, Any]:
+    """Update monitoring configuration (interval, enabled) for a module."""
+    from backend.services.snmp_polling import get_polling_scheduler, ALLOWED_INTERVALS
+    import asyncio
+
+    if payload.interval_seconds is not None and payload.interval_seconds not in ALLOWED_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"Invalid interval. Allowed: {ALLOWED_INTERVALS}")
+
+    scheduler = asyncio.run(get_polling_scheduler())
+
+    if payload.interval_seconds is not None:
+        updated = asyncio.run(scheduler.update_job_interval(device_id, module, payload.interval_seconds))
+        if not updated:
+            raise HTTPException(status_code=404, detail="Monitoring config not found")
+
+    status = asyncio.run(scheduler.get_job_status(device_id, module))
+    if not status:
+        raise HTTPException(status_code=404, detail="Monitoring config not found")
+
+    # Handle enable/disable
+    if payload.enabled is not None:
+        if payload.enabled:
+            # Start if not running
+            if status["status"] != "running":
+                asyncio.run(scheduler.add_job(device_id, module, status["interval_seconds"]))
+        else:
+            # Stop if running
+            if status["status"] == "running":
+                asyncio.run(scheduler.stop_job(device_id, module))
+        status = asyncio.run(scheduler.get_job_status(device_id, module))
+
+    return status
+
+
+@router.get("/snmp/devices/{device_id}/monitoring/{module}/status")
+def get_module_monitoring_status(
+    device_id: int,
+    module: str,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> dict[str, Any]:
+    """Get monitoring status for a specific module."""
+    from backend.services.snmp_polling import get_polling_scheduler
+    import asyncio
+
+    scheduler = asyncio.run(get_polling_scheduler())
+    status = asyncio.run(scheduler.get_job_status(device_id, module))
+    if not status:
+        raise HTTPException(status_code=404, detail="Monitoring config not found")
+    return status
+
+
+# ---------------------------------------------------------------------------
+# Latest Metrics Endpoints (DB-backed, no live SNMP)
+# ---------------------------------------------------------------------------
+
+@router.get("/snmp/devices/{device_id}/metrics/latest")
+def get_latest_metrics(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> dict[str, Any]:
+    """Get all latest metrics for a device (from latest-value tables)."""
+    from backend.models.snmp import LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment
+
+    cpu = db.query(LatestCPU).filter(LatestCPU.device_id == device_id).first()
+    mem = db.query(LatestMemory).filter(LatestMemory.device_id == device_id).first()
+    storage = db.query(LatestStorage).filter(LatestStorage.device_id == device_id).all()
+    interfaces = db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
+    env = db.query(LatestEnvironment).filter(LatestEnvironment.device_id == device_id).all()
+
+    return {
+        "device_id": device_id,
+        "cpu": {
+            "utilization_percent": cpu.utilization_percent if cpu else None,
+            "per_core": cpu.per_core if cpu else {},
+            "load_avg": cpu.load_avg if cpu else {},
+            "polled_at": cpu.polled_at.isoformat() if cpu and cpu.polled_at else None,
+        } if cpu else None,
+        "memory": {
+            "total_bytes": mem.total_bytes if mem else None,
+            "used_bytes": mem.used_bytes if mem else None,
+            "free_bytes": mem.free_bytes if mem else None,
+            "cached_bytes": mem.cached_bytes if mem else None,
+            "buffer_bytes": mem.buffer_bytes if mem else None,
+            "swap_total": mem.swap_total if mem else None,
+            "swap_free": mem.swap_free if mem else None,
+            "utilization_percent": mem.utilization_percent if mem else None,
+            "polled_at": mem.polled_at.isoformat() if mem and mem.polled_at else None,
+        } if mem else None,
+        "storage": [
+            {
+                "volume_id": s.volume_id,
+                "mount_name": s.mount_name,
+                "total_bytes": s.total_bytes,
+                "used_bytes": s.used_bytes,
+                "free_bytes": s.free_bytes,
+                "utilization_percent": s.utilization_percent,
+                "type_label": s.type_label,
+                "polled_at": s.polled_at.isoformat() if s.polled_at else None,
+            }
+            for s in storage
+        ],
+        "interfaces": [
+            {
+                "interface_id": i.interface_id,
+                "if_index": i.if_index,
+                "name": i.name,
+                "oper_status": i.oper_status,
+                "admin_status": i.admin_status,
+                "speed_bps": i.speed_bps,
+                "rx_mbps": i.rx_mbps,
+                "tx_mbps": i.tx_mbps,
+                "rx_octets": i.rx_octets,
+                "tx_octets": i.tx_octets,
+                "rx_packets": i.rx_packets,
+                "tx_packets": i.tx_packets,
+                "errors": i.errors,
+                "discards": i.discards,
+                "utilization_percent": i.utilization_percent,
+                "polled_at": i.polled_at.isoformat() if i.polled_at else None,
+            }
+            for i in interfaces
+        ],
+        "environment": [
+            {
+                "sensor_id": e.sensor_id,
+                "sensor_name": e.sensor_name,
+                "sensor_type": e.sensor_type,
+                "value": e.value,
+                "unit": e.unit,
+                "status": e.status,
+                "polled_at": e.polled_at.isoformat() if e.polled_at else None,
+            }
+            for e in env
+        ],
+    }
+
+
+@router.get("/snmp/devices/{device_id}/cpu/latest")
+def get_latest_cpu(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> dict[str, Any]:
+    from backend.models.snmp import LatestCPU
+    cpu = db.query(LatestCPU).filter(LatestCPU.device_id == device_id).first()
+    if not cpu:
+        return {"device_id": device_id, "supported": False, "message": "No CPU data yet"}
+    return {
+        "device_id": device_id,
+        "supported": True,
+        "current_usage": cpu.utilization_percent,
+        "per_core": cpu.per_core,
+        "load_avg": cpu.load_avg,
+        "last_poll": cpu.polled_at.isoformat() if cpu.polled_at else None,
+    }
+
+
+@router.get("/snmp/devices/{device_id}/memory/latest")
+def get_latest_memory(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> dict[str, Any]:
+    from backend.models.snmp import LatestMemory
+    mem = db.query(LatestMemory).filter(LatestMemory.device_id == device_id).first()
+    if not mem:
+        return {"device_id": device_id, "supported": False, "message": "No memory data yet"}
+    return {
+        "device_id": device_id,
+        "supported": True,
+        "total_bytes": mem.total_bytes,
+        "used_bytes": mem.used_bytes,
+        "free_bytes": mem.free_bytes,
+        "cached_bytes": mem.cached_bytes,
+        "buffer_bytes": mem.buffer_bytes,
+        "swap_total": mem.swap_total,
+        "swap_free": mem.swap_free,
+        "utilization_percent": mem.utilization_percent,
+        "last_poll": mem.polled_at.isoformat() if mem.polled_at else None,
+    }
+
+
+@router.get("/snmp/devices/{device_id}/interfaces/latest")
+def get_latest_interfaces(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> list[dict[str, Any]]:
+    from backend.models.snmp import LatestInterface
+    interfaces = db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
+    return [
+        {
+            "interface_id": i.interface_id,
+            "if_index": i.if_index,
+            "name": i.name,
+            "oper_status": i.oper_status,
+            "admin_status": i.admin_status,
+            "speed_bps": i.speed_bps,
+            "rx_mbps": i.rx_mbps,
+            "tx_mbps": i.tx_mbps,
+            "rx_octets": i.rx_octets,
+            "tx_octets": i.tx_octets,
+            "rx_packets": i.rx_packets,
+            "tx_packets": i.tx_packets,
+            "errors": i.errors,
+            "discards": i.discards,
+            "utilization_percent": i.utilization_percent,
+            "last_poll": i.polled_at.isoformat() if i.polled_at else None,
+        }
+        for i in interfaces
+    ]
+
+
+@router.get("/snmp/devices/{device_id}/storage/latest")
+def get_latest_storage(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> list[dict[str, Any]]:
+    from backend.models.snmp import LatestStorage
+    storage = db.query(LatestStorage).filter(LatestStorage.device_id == device_id).all()
+    return [
+        {
+            "volume_id": s.volume_id,
+            "mount_name": s.mount_name,
+            "total_bytes": s.total_bytes,
+            "used_bytes": s.used_bytes,
+            "free_bytes": s.free_bytes,
+            "utilization_percent": s.utilization_percent,
+            "type_label": s.type_label,
+            "last_poll": s.polled_at.isoformat() if s.polled_at else None,
+        }
+        for s in storage
+    ]
+
+
+@router.get("/snmp/devices/{device_id}/environment/latest")
+def get_latest_environment(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> list[dict[str, Any]]:
+    from backend.models.snmp import LatestEnvironment
+    env = db.query(LatestEnvironment).filter(LatestEnvironment.device_id == device_id).all()
+    return [
+        {
+            "sensor_id": e.sensor_id,
+            "sensor_name": e.sensor_name,
+            "sensor_type": e.sensor_type,
+            "value": e.value,
+            "unit": e.unit,
+            "status": e.status,
+            "last_poll": e.polled_at.isoformat() if e.polled_at else None,
+        }
+        for e in env
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Optimized Device List & Details Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/snmp/devices")
+def list_snmp_devices_optimized(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    snmp_status: str | None = Query(default=None),
+    monitoring_status: str | None = Query(default=None),
+    device_type: str | None = Query(default=None),
+    vendor: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    hostname: str | None = Query(default=None),
+    sort_by: str = Query(default="id"),
+    sort_order: str = Query(default="asc"),
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> dict[str, Any]:
+    """Optimized paginated device list with all info needed for the device list page."""
+    from backend.models.identity import DeviceIdentity, DeviceCapabilities
+    from backend.models.snmp import MonitoringConfig
+    from sqlalchemy import or_, func
+
+    query = db.query(Device).filter(Device.deleted_at.is_(None))
+
+    # Join with credentials to only show SNMP-configured devices
+    query = query.join(DeviceCredential, DeviceCredential.device_id == Device.id)
+
+    # Search filter
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(or_(
+            Device.ip_address.ilike(search_term),
+            Device.hostname.ilike(search_term),
+            Device.mac_address.ilike(search_term),
+        ))
+
+    # Filters
+    if status:
+        query = query.filter(Device.status == status)
+    if device_type:
+        query = query.filter(Device.device_type.has(DeviceType.name == device_type))
+    if vendor:
+        query = query.filter(Device.vendor.has(Vendor.vendor_name == vendor))
+    if model:
+        query = query.filter(Device.model.ilike(f"%{model}%"))
+    if hostname:
+        query = query.filter(Device.hostname.ilike(f"%{hostname}%"))
+
+    # SNMP status filter (from identity)
+    if snmp_status:
+        query = query.join(DeviceIdentity, DeviceIdentity.device_id == Device.id, isouter=True)
+        if snmp_status == "verified":
+            query = query.filter(DeviceIdentity.vendor.isnot(None))
+        elif snmp_status == "error":
+            query = query.filter(DeviceIdentity.vendor.is_(None))
+
+    # Monitoring status filter
+    if monitoring_status:
+        query = query.join(MonitoringConfig, MonitoringConfig.device_id == Device.id, isouter=True)
+        if monitoring_status == "running":
+            query = query.filter(MonitoringConfig.status == "running")
+        elif monitoring_status == "stopped":
+            query = query.filter(or_(MonitoringConfig.status == "stopped", MonitoringConfig.id.is_(None)))
+
+    # Sorting
+    sort_column = getattr(Device, sort_by, Device.id)
+    if sort_order == "desc":
+        query = query.order_by(sort_column.desc())
+    else:
+        query = query.order_by(sort_column.asc())
+
+    total = query.count()
+    devices = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    # Build response with all needed data
+    items = []
+    for d in devices:
+        # Get identity
+        di = db.query(DeviceIdentity).filter(DeviceIdentity.device_id == d.id).first()
+        # Get capabilities
+        dc = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d.id).first()
+        # Get monitoring configs
+        configs = db.query(MonitoringConfig).filter(MonitoringConfig.device_id == d.id).all()
+        modules_monitored = sum(1 for c in configs if c.enabled and c.status == "running")
+
+        vendor_name = d.vendor.vendor_name if d.vendor else (di.vendor if di else None)
+        snmp_status_val = "verified" if di and di.vendor else "unknown"
+
+        items.append({
+            "id": d.id,
+            "name": d.hostname,
+            "ip_address": d.ip_address,
+            "hostname": d.hostname,
+            "device_type": d.device_type.name if d.device_type else None,
+            "model": d.model,
+            "serial_number": d.serial_number,
+            "firmware": d.firmware_version,
+            "mac_address": d.mac_address,
+            "status": d.status,
+            "snmp_version": d.credentials[0].snmp_version if d.credentials else None,
+            "snmp_status": snmp_status_val,
+            "monitoring_enabled": any(c.enabled for c in configs),
+            "last_seen": d.last_seen.isoformat() if d.last_seen else None,
+            "last_poll_at": max((c.last_poll_at for c in configs if c.last_poll_at), default=None),
+            "modules_monitored": modules_monitored,
+        })
+
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@router.get("/snmp/devices/{device_id}")
+def get_device_details(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> dict[str, Any]:
+    """Get complete device details from DB (no live SNMP)."""
+    from backend.models.identity import DeviceIdentity, DeviceCapabilities
+    from backend.models.snmp import MonitoringConfig, SNMPCredential, LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment, PollingHistory
+    from backend.models import Interface, Vendor, DeviceType
+
+    device = db.query(Device).filter(Device.id == device_id, Device.deleted_at.is_(None)).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    di = db.query(DeviceIdentity).filter(DeviceIdentity.device_id == device_id).first()
+    dc = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    configs = db.query(MonitoringConfig).filter(MonitoringConfig.device_id == device_id).all()
+    cred = db.query(SNMPCredential).filter(SNMPCredential.device_id == device_id).first()
+
+    # Latest metrics
+    cpu = db.query(LatestCPU).filter(LatestCPU.device_id == device_id).first()
+    mem = db.query(LatestMemory).filter(LatestMemory.device_id == device_id).first()
+    storage = db.query(LatestStorage).filter(LatestStorage.device_id == device_id).all()
+    interfaces = db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
+    env = db.query(LatestEnvironment).filter(LatestEnvironment.device_id == device_id).all()
+
+    # Polling history (last 10)
+    poll_history = db.query(PollingHistory).filter(
+        PollingHistory.device_id == device_id
+    ).order_by(PollingHistory.id.desc()).limit(10).all()
+
+    return {
+        "device": {
+            "id": device.id,
+            "name": device.hostname,
+            "ip_address": device.ip_address,
+            "hostname": device.hostname,
+            "description": device.model,
+            "device_type": device.device_type.name if device.device_type else None,
+            "vendor": device.vendor.vendor_name if device.vendor else (di.vendor if di else None),
+            "model": device.model,
+            "serial_number": device.serial_number,
+            "firmware": device.firmware_version,
+            "mac_address": device.mac_address,
+            "status": device.status,
+            "monitoring_status": device.monitoring_status,
+            "last_seen": device.last_seen.isoformat() if device.last_seen else None,
+            "created_at": device.created_at.isoformat() if device.created_at else None,
+            "uptime_seconds": device.uptime_seconds,
+        },
+        "snmp": {
+            "version": cred.snmp_version if cred else None,
+            "port": 161,
+            "status": "verified" if di and di.vendor else "unknown",
+            "last_test_at": None,
+        },
+        "capabilities": dc.to_map() if dc else {},
+        "monitoring": [
+            {
+                "module_name": c.module_name,
+                "enabled": c.enabled,
+                "interval_seconds": c.interval_seconds,
+                "status": c.status,
+                "last_started_at": c.last_started_at.isoformat() if c.last_started_at else None,
+                "last_stopped_at": c.last_stopped_at.isoformat() if c.last_stopped_at else None,
+                "last_poll_at": c.last_poll_at.isoformat() if c.last_poll_at else None,
+                "next_poll_at": c.next_poll_at.isoformat() if c.next_poll_at else None,
+                "error_message": c.error_message,
+            }
+            for c in configs
+        ],
+        "latest_metrics": {
+            "cpu": {
+                "utilization_percent": cpu.utilization_percent if cpu else None,
+                "per_core": cpu.per_core if cpu else {},
+                "load_avg": cpu.load_avg if cpu else {},
+                "polled_at": cpu.polled_at.isoformat() if cpu and cpu.polled_at else None,
+            } if cpu else None,
+            "memory": {
+                "total_bytes": mem.total_bytes if mem else None,
+                "used_bytes": mem.used_bytes if mem else None,
+                "free_bytes": mem.free_bytes if mem else None,
+                "utilization_percent": mem.utilization_percent if mem else None,
+                "polled_at": mem.polled_at.isoformat() if mem and mem.polled_at else None,
+            } if mem else None,
+            "storage": [
+                {
+                    "volume_id": s.volume_id,
+                    "mount_name": s.mount_name,
+                    "total_bytes": s.total_bytes,
+                    "used_bytes": s.used_bytes,
+                    "free_bytes": s.free_bytes,
+                    "utilization_percent": s.utilization_percent,
+                    "type_label": s.type_label,
+                    "polled_at": s.polled_at.isoformat() if s.polled_at else None,
+                }
+                for s in storage
+            ],
+            "interfaces": [
+                {
+                    "interface_id": i.interface_id,
+                    "if_index": i.if_index,
+                    "name": i.name,
+                    "oper_status": i.oper_status,
+                    "admin_status": i.admin_status,
+                    "speed_bps": i.speed_bps,
+                    "rx_mbps": i.rx_mbps,
+                    "tx_mbps": i.tx_mbps,
+                    "utilization_percent": i.utilization_percent,
+                    "polled_at": i.polled_at.isoformat() if i.polled_at else None,
+                }
+                for i in interfaces
+            ],
+            "environment": [
+                {
+                    "sensor_id": e.sensor_id,
+                    "sensor_name": e.sensor_name,
+                    "sensor_type": e.sensor_type,
+                    "value": e.value,
+                    "unit": e.unit,
+                    "status": e.status,
+                    "polled_at": e.polled_at.isoformat() if e.polled_at else None,
+                }
+                for e in env
+            ],
+        },
+        "polling_history": [
+            {
+                "id": p.id,
+                "collector": p.collector,
+                "status": p.status,
+                "duration_ms": p.duration_ms,
+                "error": p.error,
+                "timestamp": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in poll_history
+        ],
+    }

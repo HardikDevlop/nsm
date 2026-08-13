@@ -128,6 +128,18 @@ class CPUCollector(BaseCollector):
                 ]
 
         # ---------------------------------------------------------------
+        # 5. UCD load-average fallback
+        #    Some devices (embedded Linux, NVRs, routers running net-snmp)
+        #    expose laLoad (1.3.6.1.4.1.2021.10.1.x) but NOT the
+        #    cpuIdle/cpuUser scalars (1.3.6.1.4.1.2021.11.x).
+        #    Use 1-min load avg scaled to a rough % (clamped 0–100).
+        # ---------------------------------------------------------------
+        if overall is None:
+            overall, load_avg = self._try_ucd_loadavg(raw_flat, warnings)
+            if overall is not None:
+                source = "ucd-loadavg"
+
+        # ---------------------------------------------------------------
         # Nothing found
         # ---------------------------------------------------------------
         if overall is None:
@@ -136,9 +148,10 @@ class CPUCollector(BaseCollector):
                 reason=(
                     "No CPU OID responded: tried vendor profile OIDs, "
                     "UCD-SNMP (1.3.6.1.4.1.2021.11.x), "
-                    "and hrProcessorLoad (1.3.6.1.2.1.25.3.3.1.2)"
+                    "hrProcessorLoad (1.3.6.1.2.1.25.3.3.1.2), "
+                    "and UCD load-average (1.3.6.1.4.1.2021.10.1.5.x)"
                 ),
-                missing=["cpu.overall", "hrProcessorLoad", "ucdCpuIdle"],
+                missing=["cpu.overall", "hrProcessorLoad", "ucdCpuIdle", "ucdLoadAvg1"],
             )
 
         # ---------------------------------------------------------------
@@ -264,6 +277,72 @@ class CPUCollector(BaseCollector):
         return overall, (float(user) if user is not None else None), \
                (float(system) if system is not None else None), \
                float(idle), load_avg
+
+    # ------------------------------------------------------------------
+    # Private — UCD load-average only (no cpu-idle available)
+    # ------------------------------------------------------------------
+
+    def _try_ucd_loadavg(
+        self,
+        raw: dict[str, Any],
+        warnings: list[str],
+    ) -> tuple[float | None, dict[str, Any] | None]:
+        """
+        Return (overall_pct, load_avg) from UCD laLoad table only.
+        Used for devices that publish load averages but not cpu-idle scalars.
+        overall_pct is derived from the 1-min load average:
+          clamp(load_1min * 100 / max(1, core_count), 0, 100)
+        load_avg values are the raw float strings from the table.
+        """
+        # laLoadFloat (column 3 of laTable) — floating point load averages
+        # 1.3.6.1.4.1.2021.10.1.3.{1,2,3}
+        _LA_FLOAT_PREFIX = "1.3.6.1.4.1.2021.10.1.3."
+        # laLoad (column 5) — integer percent scaled ×100 (e.g. 5 = 0.05)
+        _LA_INT_PREFIX   = "1.3.6.1.4.1.2021.10.1.5."
+
+        floats: dict[int, float] = {}
+        ints:   dict[int, float] = {}
+
+        for k, v in raw.items():
+            sk = str(k)
+            if sk.startswith(_LA_FLOAT_PREFIX):
+                idx = sk[len(_LA_FLOAT_PREFIX):]
+                val = self.num(v)
+                if val is not None and idx.isdigit():
+                    floats[int(idx)] = float(val)
+            elif sk.startswith(_LA_INT_PREFIX):
+                idx = sk[len(_LA_INT_PREFIX):]
+                val = self.num(v)
+                if val is not None and idx.isdigit():
+                    ints[int(idx)] = float(val)
+
+        if not floats and not ints:
+            return None, None
+
+        # Prefer float values (more precise)
+        src = floats if floats else {}
+        # Integer column stores load*100 as integer percentage points
+        # e.g. value "5" means 0.05 load → convert to real float
+        if not src:
+            src = {k: v / 100.0 for k, v in ints.items()}
+
+        l1  = src.get(1)
+        l5  = src.get(2)
+        l15 = src.get(3)
+
+        if l1 is None:
+            return None, None
+
+        # Estimate % — load avg of 1.0 on a single-core ≈ 100% busy
+        # We don't know core count; cap at 100
+        overall = min(round(l1 * 100.0, 2), 100.0)
+
+        load_avg = {
+            "1min":  round(l1,  3) if l1  is not None else None,
+            "5min":  round(l5,  3) if l5  is not None else None,
+            "15min": round(l15, 3) if l15 is not None else None,
+        }
+        return overall, load_avg
 
     # ------------------------------------------------------------------
     # Private — hrProcessorLoad strategy

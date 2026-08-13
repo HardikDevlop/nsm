@@ -318,6 +318,8 @@ from backend.models.snmp import (  # noqa: E402,F401
     InterfaceStatistic, LLDPNeighbor, MemoryStatistic, OIDCache, POEStatistic,
     PollingHistory, PowerStatistic, RoutingEntry, SNMPCredential, SNMPTrap,
     StorageStatistic, SystemHealth, VLANInformation, VendorProfile,
+    MonitoringConfig, MonitoringField, MonitoringStatus, PollStatus,
+    LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment,
 )
 # Register new identity / capability / OUI / product catalog tables.
 from backend.models.identity import (  # noqa: E402,F401

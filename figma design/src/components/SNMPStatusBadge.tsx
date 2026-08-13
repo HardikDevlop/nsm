@@ -1,5 +1,5 @@
 interface SNMPStatusBadgeProps {
-  status: 'supported' | 'unsupported' | 'up' | 'down' | 'unknown' | 'active' | 'inactive' | 'ok' | 'warning' | 'critical' | 'error' | 'healthy'
+  status: 'supported' | 'unsupported' | 'up' | 'down' | 'unknown' | 'active' | 'inactive' | 'ok' | 'warning' | 'critical' | 'error' | 'healthy' | 'verified' | 'running' | 'stopped' | 'waiting_first_poll' | 'not_supported'
   label?: string
   size?: 'xs' | 'sm' | 'md'
 }
@@ -17,6 +17,11 @@ const statusConfig = {
   critical: { color: '#ff3366', bg: 'rgba(255,51,102,0.15)', border: 'rgba(255,51,102,0.4)', text: 'Critical' },
   error: { color: '#ff3366', bg: 'rgba(255,51,102,0.15)', border: 'rgba(255,51,102,0.4)', text: 'Error' },
   healthy: { color: '#00ff88', bg: 'rgba(0,255,136,0.15)', border: 'rgba(0,255,136,0.4)', text: 'Healthy' },
+  verified: { color: '#00ff88', bg: 'rgba(0,255,136,0.15)', border: 'rgba(0,255,136,0.4)', text: 'Verified' },
+  running: { color: '#00ff88', bg: 'rgba(0,255,136,0.15)', border: 'rgba(0,255,136,0.4)', text: 'Running' },
+  stopped: { color: '#ff3366', bg: 'rgba(255,51,102,0.15)', border: 'rgba(255,51,102,0.4)', text: 'Stopped' },
+  waiting_first_poll: { color: '#ffaa00', bg: 'rgba(255,170,0,0.15)', border: 'rgba(255,170,0,0.4)', text: 'Waiting' },
+  not_supported: { color: '#8899bb', bg: 'rgba(136,153,187,0.12)', border: 'rgba(136,153,187,0.3)', text: 'Not Supported' },
 }
 
 const sizeClasses = {
@@ -26,7 +31,7 @@ const sizeClasses = {
 }
 
 export default function SNMPStatusBadge({ status, label, size = 'sm' }: SNMPStatusBadgeProps) {
-  const config = statusConfig[status]
+  const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.unknown
   const displayText = label || config.text
 
   return (

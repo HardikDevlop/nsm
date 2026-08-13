@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -329,7 +329,7 @@ def discovery_http(payload: IpsRequest):
 def discovery_snmp(payload: IpsRequest):
     from backend.snmp.collector import SNMPDiscovery
     from backend.database.session import SessionLocal
-    from backend.models import Device, DeviceCredential, Event, Interface
+    from backend.models import Device, DeviceCredential, Event, Interface, DeviceCapabilities, DeviceIdentity
     from backend.utils.crypto import encrypt_secret
     from datetime import datetime
 
@@ -443,6 +443,70 @@ def discovery_snmp(payload: IpsRequest):
             credential.privacy_protocol = payload.privacy_protocol
             credential.privacy_password = encrypt_secret(payload.privacy_password) if payload.privacy_password else None
             credential.security_level = payload.security_level
+
+            # Save device capabilities from collectors
+            collectors = result.get("collectors", {})
+            if collectors:
+                # UPSERT capabilities
+                capabilities = db.query(DeviceCapabilities).filter(
+                    DeviceCapabilities.device_id == device.id
+                ).first()
+                
+                if capabilities is None:
+                    capabilities = DeviceCapabilities(device_id=device.id)
+                    db.add(capabilities)
+                
+                # Map collector names to capability fields
+                capabilities.cap_system = collectors.get("system", {}).get("supported", False)
+                capabilities.cap_cpu = collectors.get("cpu", {}).get("supported", False)
+                capabilities.cap_memory = collectors.get("memory", {}).get("supported", False)
+                capabilities.cap_storage = collectors.get("storage", {}).get("supported", False)
+                capabilities.cap_interfaces = collectors.get("interfaces", {}).get("supported", False)
+                capabilities.cap_environment = collectors.get("environment", {}).get("supported", False)
+                capabilities.cap_inventory = collectors.get("inventory", {}).get("supported", False)
+                capabilities.cap_vlan = collectors.get("vlan", {}).get("supported", False)
+                capabilities.cap_lldp = collectors.get("lldp", {}).get("supported", False)
+                capabilities.cap_cdp = collectors.get("cdp", {}).get("supported", False)
+                capabilities.cap_routing = collectors.get("routing", {}).get("supported", False)
+                capabilities.cap_arp = collectors.get("arp", {}).get("supported", False)
+                capabilities.cap_mac_table = collectors.get("mac_table", {}).get("supported", False)
+                capabilities.cap_firewall = collectors.get("firewall", {}).get("supported", False)
+                capabilities.cap_wireless = collectors.get("wireless", {}).get("supported", False)
+                capabilities.cap_topology = collectors.get("topology", {}).get("supported", False)
+                
+                # Store full capability detail
+                capabilities.capability_detail = collectors
+                capabilities.updated_at = datetime.utcnow()
+                
+                logger.info(f"Saved capabilities for device {device.id} ({ip}): {capabilities.to_map()}")
+
+            # Save device identity
+            identity = db.query(DeviceIdentity).filter(
+                DeviceIdentity.device_id == device.id
+            ).first()
+            
+            if identity is None:
+                identity = DeviceIdentity(device_id=device.id)
+                db.add(identity)
+            
+            # Update identity fields from SNMP result
+            identity.vendor = result.get("vendor")
+            identity.vendor_source = "snmp_discovery"
+            identity.vendor_confidence = 0.9 if result.get("vendor") else 0.0
+            identity.hostname = hostname
+            identity.hostname_source = "snmp_sysname"
+            identity.model = result.get("model")
+            identity.model_source = "snmp_discovery"
+            identity.model_confidence = 0.8 if result.get("model") else 0.0
+            identity.device_type = result.get("device_type")
+            identity.device_type_source = "snmp_discovery"
+            identity.device_type_confidence = 0.8 if result.get("device_type") else 0.0
+            identity.sys_object_id = result.get("sys_object_id")
+            identity.sys_name = result.get("hostname")
+            identity.updated_at = datetime.utcnow()
+            
+            logger.info(f"Saved identity for device {device.id} ({ip}): vendor={identity.vendor}, model={identity.model}")
+
             db.add(Event(device_id=device.id, event_type="SNMP_DISCOVERY", description=f"SNMP discovery successful for {ip}"))
         db.commit()
     except Exception as exc:
@@ -1038,8 +1102,12 @@ def monitoring_status():
 
 
 @router.get("/discovery/monitoring/stream")
-async def monitoring_sse_stream():
+async def monitoring_sse_stream(request: Request):
     """SSE stream for real-time monitoring updates.
+
+    Automatically stops when:
+    - Client closes the connection (browser tab close, navigation, page reload)
+    - No devices are being monitored (avoids orphan streams)
 
     Events:
     - update: { summary: {...}, devices: [...] }
@@ -1050,10 +1118,19 @@ async def monitoring_sse_stream():
 
     async def event_stream():
         while True:
-            # Block until new data or timeout (5s)
+            # Stop immediately if the client disconnected
+            if await request.is_disconnected():
+                break
+
+            # Block until new data available or 5s timeout
             await asyncio.get_event_loop().run_in_executor(
                 None, engine.wait_for_update, 5.0
             )
+
+            # Re-check disconnect after the blocking wait
+            if await request.is_disconnected():
+                break
+
             data = {
                 "summary": engine.get_summary(),
                 "devices": engine.get_all(),

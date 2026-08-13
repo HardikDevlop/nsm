@@ -359,3 +359,379 @@ def _get_service_states(request: Request | None = None) -> dict[str, Any]:
         },
         "any_running": snmp_running or monitor_running,
     }
+
+
+# ---------------------------------------------------------------------------
+# Daily Network Monitoring Report — single endpoint, all 24h data
+# ---------------------------------------------------------------------------
+
+@router.get("/reports/daily")
+def get_daily_report(
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("reports:read")),
+) -> dict[str, Any]:
+    """
+    Return all data needed for the Daily Network Monitoring Report.
+    Covers the previous 24 hours. All sections included. Pure DB read.
+    """
+    from backend.models import (  # noqa: PLC0415
+        Alert, Device, DeviceMetric, DeviceStatusHistory,
+        Event, Interface, Vendor, DeviceType,
+    )
+    from sqlalchemy import func  # noqa: PLC0415
+
+    now   = datetime.utcnow()
+    since = now - timedelta(hours=24)
+    report_date = now.strftime("%Y-%m-%d")
+    period_label = f"{since.strftime('%Y-%m-%d %H:%M')} UTC  →  {now.strftime('%Y-%m-%d %H:%M')} UTC"
+
+    # ── 1. DEVICE AVAILABILITY ────────────────────────────────────────────
+    all_devices = (
+        db.query(Device)
+        .filter(Device.deleted_at.is_(None))
+        .all()
+    )
+    total_devices = len(all_devices)
+    online_devices  = sum(1 for d in all_devices if d.status == "online")
+    offline_devices = sum(1 for d in all_devices if d.status == "offline")
+    warning_devices = total_devices - online_devices - offline_devices
+    avail_pct = round(online_devices / total_devices * 100, 2) if total_devices else 0.0
+
+    # Devices that went down in the last 24h
+    downtime_events = (
+        db.query(DeviceStatusHistory)
+        .filter(
+            DeviceStatusHistory.timestamp >= since,
+            DeviceStatusHistory.new_status == "offline",
+        )
+        .all()
+    )
+    devices_with_downtime = list({e.device_id for e in downtime_events})
+    downtime_detail = []
+    for dev in all_devices:
+        if dev.id in devices_with_downtime or dev.status == "offline":
+            downtime_detail.append({
+                "id":             dev.id,
+                "hostname":       dev.hostname,
+                "ip_address":     dev.ip_address,
+                "status":         dev.status,
+                "downtime_secs":  dev.downtime_seconds,
+                "last_seen":      dev.last_seen.isoformat() if dev.last_seen else None,
+            })
+
+    availability_section = {
+        "total_devices":        total_devices,
+        "online":               online_devices,
+        "offline":              offline_devices,
+        "warning":              warning_devices,
+        "availability_pct":     avail_pct,
+        "devices_with_downtime": downtime_detail,
+        "downtime_events_24h":  len(downtime_events),
+    }
+
+    # ── 2. PERFORMANCE MONITORING ─────────────────────────────────────────
+    metrics_24h = (
+        db.query(DeviceMetric)
+        .filter(DeviceMetric.created_at >= since)
+        .all()
+    )
+
+    def _avg(values: list[float]) -> float | None:
+        cleaned = [v for v in values if v is not None]
+        return round(sum(cleaned) / len(cleaned), 2) if cleaned else None
+
+    def _max(values: list[float]) -> float | None:
+        cleaned = [v for v in values if v is not None]
+        return round(max(cleaned), 2) if cleaned else None
+
+    cpu_values     = [m.cpu_usage    for m in metrics_24h if m.cpu_usage    is not None]
+    mem_values     = [m.memory_usage for m in metrics_24h if m.memory_usage is not None]
+    disk_values    = [m.disk_usage   for m in metrics_24h if m.disk_usage   is not None]
+    latency_values = [m.latency      for m in metrics_24h if m.latency      is not None]
+    loss_values    = [m.packet_loss  for m in metrics_24h if m.packet_loss  is not None]
+    bw_values      = [m.bandwidth_usage for m in metrics_24h if m.bandwidth_usage is not None]
+
+    # Per-device averages for top-N tables
+    device_cpu: dict[int, list[float]] = {}
+    device_mem: dict[int, list[float]] = {}
+    device_latency: dict[int, list[float]] = {}
+    for m in metrics_24h:
+        if m.cpu_usage    is not None: device_cpu.setdefault(m.device_id, []).append(m.cpu_usage)
+        if m.memory_usage is not None: device_mem.setdefault(m.device_id, []).append(m.memory_usage)
+        if m.latency      is not None: device_latency.setdefault(m.device_id, []).append(m.latency)
+
+    dev_map = {d.id: d for d in all_devices}
+
+    def _top_devices(d_map: dict[int, list[float]], n: int = 5) -> list[dict]:
+        avgs = {did: round(sum(vals)/len(vals), 2) for did, vals in d_map.items() if vals}
+        top  = sorted(avgs.items(), key=lambda x: x[1], reverse=True)[:n]
+        return [
+            {
+                "device_id": did,
+                "hostname":  dev_map[did].hostname if did in dev_map else f"Device-{did}",
+                "ip":        dev_map[did].ip_address if did in dev_map else "—",
+                "avg_value": avg,
+                "max_value": round(max(d_map[did]), 2),
+            }
+            for did, avg in top
+        ]
+
+    performance_section = {
+        "sample_count":       len(metrics_24h),
+        "cpu":     { "avg": _avg(cpu_values),     "max": _max(cpu_values),     "samples": len(cpu_values) },
+        "memory":  { "avg": _avg(mem_values),     "max": _max(mem_values),     "samples": len(mem_values) },
+        "disk":    { "avg": _avg(disk_values),    "max": _max(disk_values),    "samples": len(disk_values) },
+        "latency": { "avg": _avg(latency_values), "max": _max(latency_values), "samples": len(latency_values) },
+        "packet_loss": { "avg": _avg(loss_values), "max": _max(loss_values),   "samples": len(loss_values) },
+        "bandwidth":   { "avg": _avg(bw_values),   "max": _max(bw_values),    "samples": len(bw_values) },
+        "top_cpu_devices":     _top_devices(device_cpu),
+        "top_mem_devices":     _top_devices(device_mem),
+        "top_latency_devices": _top_devices(device_latency),
+    }
+
+    # ── 3. INTERFACE DETAILS ──────────────────────────────────────────────
+    all_interfaces = db.query(Interface).all()
+    if_total   = len(all_interfaces)
+    if_up      = sum(1 for i in all_interfaces if i.status == "up")
+    if_down    = sum(1 for i in all_interfaces if i.status == "down")
+
+    # High traffic interfaces (top 10 by traffic_in + traffic_out)
+    high_traffic = sorted(
+        [i for i in all_interfaces if (i.traffic_in or 0) + (i.traffic_out or 0) > 0],
+        key=lambda x: (x.traffic_in or 0) + (x.traffic_out or 0),
+        reverse=True,
+    )[:10]
+
+    # Interfaces with errors
+    error_ifaces = [i for i in all_interfaces if i.packet_errors > 0]
+
+    interfaces_section = {
+        "total":      if_total,
+        "up":         if_up,
+        "down":       if_down,
+        "high_traffic": [
+            {
+                "id":           i.id,
+                "name":         i.interface_name,
+                "device_id":    i.device_id,
+                "hostname":     dev_map.get(i.device_id, None) and dev_map[i.device_id].hostname or "—",
+                "status":       i.status,
+                "traffic_in":   i.traffic_in,
+                "traffic_out":  i.traffic_out,
+                "speed":        i.speed,
+                "last_updated": i.last_updated.isoformat() if i.last_updated else None,
+            }
+            for i in high_traffic
+        ],
+        "interfaces_with_errors": [
+            {
+                "id":            i.id,
+                "name":          i.interface_name,
+                "device_id":     i.device_id,
+                "hostname":      dev_map.get(i.device_id) and dev_map[i.device_id].hostname or "—",
+                "packet_errors": i.packet_errors,
+                "status":        i.status,
+            }
+            for i in error_ifaces
+        ],
+        "down_interfaces": [
+            {
+                "id":       i.id,
+                "name":     i.interface_name,
+                "device":   dev_map.get(i.device_id) and dev_map[i.device_id].hostname or "—",
+                "speed":    i.speed,
+            }
+            for i in all_interfaces if i.status == "down"
+        ],
+    }
+
+    # ── 4. ALERTS & EVENTS ────────────────────────────────────────────────
+    alerts_24h = (
+        db.query(Alert)
+        .filter(Alert.created_at >= since, Alert.deleted_at.is_(None))
+        .all()
+    )
+    sev_counts: dict[str, int] = {}
+    for a in alerts_24h:
+        sev_counts[a.severity] = sev_counts.get(a.severity, 0) + 1
+
+    resolved_24h   = sum(1 for a in alerts_24h if a.status == "resolved")
+    open_alerts     = sum(1 for a in alerts_24h if a.status in ("open", "acknowledged"))
+
+    # Top devices by alert count
+    dev_alert_count: dict[int, int] = {}
+    for a in alerts_24h:
+        if a.device_id:
+            dev_alert_count[a.device_id] = dev_alert_count.get(a.device_id, 0) + 1
+    top_alert_devices = sorted(dev_alert_count.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    events_24h = (
+        db.query(Event)
+        .filter(Event.timestamp >= since, Event.deleted_at.is_(None))
+        .all()
+    )
+    event_type_counts: dict[str, int] = {}
+    for e in events_24h:
+        event_type_counts[e.event_type] = event_type_counts.get(e.event_type, 0) + 1
+
+    alerts_section = {
+        "total_alerts_24h":  len(alerts_24h),
+        "by_severity":       sev_counts,
+        "resolved":          resolved_24h,
+        "open":              open_alerts,
+        "critical":          sev_counts.get("critical", 0),
+        "high":              sev_counts.get("high", 0),
+        "warning":           sev_counts.get("warning", 0),
+        "info":              sev_counts.get("info", 0),
+        "top_alert_devices": [
+            {
+                "device_id": did,
+                "hostname":  dev_map[did].hostname if did in dev_map else f"Device-{did}",
+                "ip":        dev_map[did].ip_address if did in dev_map else "—",
+                "count":     cnt,
+            }
+            for did, cnt in top_alert_devices
+        ],
+        "recent_alerts": [
+            {
+                "id":          a.id,
+                "severity":    a.severity,
+                "title":       a.title,
+                "description": a.description,
+                "status":      a.status,
+                "device_id":   a.device_id,
+                "hostname":    dev_map[a.device_id].hostname if a.device_id and a.device_id in dev_map else "—",
+                "created_at":  a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in sorted(alerts_24h, key=lambda x: x.created_at or datetime.min, reverse=True)[:20]
+        ],
+        "total_events_24h":  len(events_24h),
+        "event_types":       event_type_counts,
+    }
+
+    # ── 5. INCIDENTS & STATUS HISTORY ─────────────────────────────────────
+    status_changes_24h = (
+        db.query(DeviceStatusHistory)
+        .filter(DeviceStatusHistory.timestamp >= since)
+        .order_by(DeviceStatusHistory.timestamp.desc())
+        .all()
+    )
+    incidents_section = {
+        "total_status_changes": len(status_changes_24h),
+        "went_offline":  sum(1 for s in status_changes_24h if s.new_status == "offline"),
+        "came_online":   sum(1 for s in status_changes_24h if s.new_status == "online"),
+        "changes": [
+            {
+                "device_id":  s.device_id,
+                "hostname":   dev_map[s.device_id].hostname if s.device_id in dev_map else "—",
+                "ip":         dev_map[s.device_id].ip_address if s.device_id in dev_map else "—",
+                "old_status": s.old_status,
+                "new_status": s.new_status,
+                "reason":     s.change_reason,
+                "timestamp":  s.timestamp.isoformat() if s.timestamp else None,
+            }
+            for s in status_changes_24h[:30]
+        ],
+    }
+
+    # ── 6. TOP / BOTTOM PERFORMERS ────────────────────────────────────────
+    top_performers = {
+        "top_cpu":     _top_devices(device_cpu),
+        "top_memory":  _top_devices(device_mem),
+        "top_latency": _top_devices(device_latency),
+        "max_downtime": sorted(
+            [
+                {
+                    "device_id":    d.id,
+                    "hostname":     d.hostname,
+                    "ip":           d.ip_address,
+                    "status":       d.status,
+                    "downtime_sec": d.downtime_seconds,
+                }
+                for d in all_devices if d.downtime_seconds > 0
+            ],
+            key=lambda x: x["downtime_sec"],
+            reverse=True,
+        )[:5],
+        "max_alerts": [
+            {
+                "device_id": did,
+                "hostname":  dev_map[did].hostname if did in dev_map else f"Device-{did}",
+                "ip":        dev_map[did].ip_address if did in dev_map else "—",
+                "alerts":    cnt,
+            }
+            for did, cnt in top_alert_devices
+        ],
+    }
+
+    # ── 7. DAILY SUMMARY ──────────────────────────────────────────────────
+    issues = []
+    if offline_devices > 0:
+        issues.append(f"{offline_devices} device(s) currently offline")
+    if sev_counts.get("critical", 0) > 0:
+        issues.append(f"{sev_counts['critical']} critical alert(s) generated")
+    if if_down > 0:
+        issues.append(f"{if_down} interface(s) currently down")
+    if len(error_ifaces) > 0:
+        issues.append(f"{len(error_ifaces)} interface(s) with packet errors")
+    if open_alerts > 0:
+        issues.append(f"{open_alerts} alert(s) remain unresolved")
+
+    health_score = round(
+        (avail_pct * 0.4)
+        + (max(0, 100 - sev_counts.get("critical", 0) * 20) * 0.3)
+        + (round(if_up / if_total * 100, 1) if if_total else 100) * 0.3,
+        1,
+    )
+    overall_health = "GOOD" if health_score >= 80 else "WARNING" if health_score >= 60 else "CRITICAL"
+
+    daily_summary = {
+        "overall_health":   overall_health,
+        "health_score":     health_score,
+        "availability_pct": avail_pct,
+        "issues":           issues if issues else ["No major issues observed"],
+        "devices_needing_attention": [
+            {"device_id": d.id, "hostname": d.hostname, "ip": d.ip_address, "status": d.status, "reason": "Currently offline"}
+            for d in all_devices if d.status == "offline"
+        ] + [
+            {"device_id": d["device_id"], "hostname": d["hostname"], "ip": d["ip"], "status": "online", "reason": f"Generated {dev_alert_count.get(d['device_id'], 0)} alert(s)"}
+            for d in top_performers["max_alerts"][:3]
+        ],
+    }
+
+    # ── 8. RECOMMENDATIONS ────────────────────────────────────────────────
+    recs = []
+    if offline_devices > 0:
+        names = [d["hostname"] for d in downtime_detail[:3]]
+        recs.append({"priority": "CRITICAL", "message": f"Investigate offline device(s): {', '.join(names)}. Check power, connectivity, and SNMP credentials."})
+    if sev_counts.get("critical", 0) > 0:
+        recs.append({"priority": "CRITICAL", "message": f"{sev_counts['critical']} critical alert(s) unresolved. Immediate action required."})
+    if open_alerts > 0:
+        recs.append({"priority": "HIGH", "message": f"{open_alerts} open alert(s) need review and resolution."})
+    if len(error_ifaces) > 0:
+        names = [i.interface_name for i in error_ifaces[:3]]
+        recs.append({"priority": "HIGH", "message": f"Interfaces with errors: {', '.join(names)}. Review cable/SFP health and switch logs."})
+    if if_down > 0:
+        recs.append({"priority": "HIGH", "message": f"{if_down} interface(s) are administratively or operationally down. Verify if intentional."})
+    avg_cpu = _avg(cpu_values)
+    if avg_cpu and avg_cpu > 70:
+        recs.append({"priority": "WARNING", "message": f"Average CPU utilization is {avg_cpu}% — consider load balancing or hardware upgrade."})
+    avg_mem = _avg(mem_values)
+    if avg_mem and avg_mem > 80:
+        recs.append({"priority": "WARNING", "message": f"Average memory utilization is {avg_mem}% — monitor for memory exhaustion."})
+    if not recs:
+        recs.append({"priority": "INFO", "message": "Network is operating within normal parameters. Continue routine monitoring."})
+
+    return {
+        "report_date":          report_date,
+        "period":               period_label,
+        "generated_at":         now.isoformat(),
+        "availability":         availability_section,
+        "performance":          performance_section,
+        "interfaces":           interfaces_section,
+        "alerts":               alerts_section,
+        "incidents":            incidents_section,
+        "top_performers":       top_performers,
+        "daily_summary":        daily_summary,
+        "recommendations":      recs,
+    }

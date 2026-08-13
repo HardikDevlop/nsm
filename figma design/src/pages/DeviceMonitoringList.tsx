@@ -61,9 +61,14 @@ export default function DeviceMonitoringList() {
   }, [loadDevices, loadStatus])
 
   // SSE stream for real-time monitoring updates
+  // Only connect when monitoring is actually active. If server closes the
+  // connection (no devices / killed), do NOT reconnect automatically.
   useEffect(() => {
     let cancelled = false
-    void (async () => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    async function connect() {
+      if (cancelled) return
       try {
         const cleanup = await streamMonitoring((event) => {
           if (cancelled) return
@@ -73,17 +78,29 @@ export default function DeviceMonitoringList() {
         })
         cleanupRef.current = cleanup
       } catch {
-        // silent
+        // Stream ended (server restart, no devices, kill-all) — do not retry
+        // automatically. The user must explicitly start monitoring.
+        if (!cancelled && retryTimer === null) {
+          // Do a single status refresh so the UI reflects the stopped state
+          retryTimer = setTimeout(async () => {
+            retryTimer = null
+            if (!cancelled) await loadStatus()
+          }, 1000)
+        }
       }
-    })()
+    }
+
+    void connect()
+
     return () => {
       cancelled = true
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
       if (cleanupRef.current) {
         cleanupRef.current()
         cleanupRef.current = null
       }
     }
-  }, [])
+  }, [loadStatus])
 
   // Build a map of IP → live monitoring data
   const liveMap = useMemo(() => {

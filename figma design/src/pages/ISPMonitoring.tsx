@@ -777,45 +777,128 @@ export default function ISPMonitoring() {
       </GlassCard>
  {!isDiscovering && discoveryResults.length > 0 && (
         <GlassCard className="p-4 md:p-5">
-          <div className="flex items-center justify-between mb-4">
+          {/* header */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
             <div>
               <div className="font-display font-bold text-base tracking-wider neon-cyan">DISCOVERED DEVICES</div>
-              <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{discoveryResults.length} device(s) found — click Add to store in DB, or Store All</div>
+              <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>
+                {discoveryResults.length} device{discoveryResults.length !== 1 ? 's' : ''} found via ICMP/TCP scan
+                {storedIps.size > 0 && <span style={{ color: '#00ff88' }}> · {storedIps.size} stored</span>}
+              </div>
             </div>
-            <div className="font-mono text-xs" style={{ color: '#00ff88' }}>{storedIps.size} already stored</div>
+            {discoveryResults.length > 0 && (
+              <PermissionGuard permission="devices:create">
+                <button onClick={handleStoreResults}
+                  className="rounded-lg px-4 py-2 font-display text-xs tracking-wider font-semibold transition hover:opacity-80 shrink-0"
+                  style={{ background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.3)', color: '#00ff88' }}>
+                  STORE ALL ({discoveryResults.length - storedIps.size} new)
+                </button>
+              </PermissionGuard>
+            )}
           </div>
-          <div className="space-y-2">
+
+          {/* device cards */}
+          <div className="space-y-3">
             {sortedDiscoveryResults.map((device, idx) => {
               const item = device as Record<string, unknown>
-              const ip = String(item.ip_address ?? item.ip ?? '')
-              const hostname = String(item.hostname ?? item.dns_hostname ?? 'unknown')
-              const mac = String(item.mac_address ?? item.mac ?? '—')
-              const vendor = String(item.vendor ?? '—')
+              const ip       = String(item.ip_address ?? item.ip ?? '')
+              const hostname = String(item.hostname ?? item.dns_hostname ?? item.snmp_name ?? ip)
+              const mac      = String(item.mac_address ?? item.mac ?? '—')
+              const vendor   = String(item.vendor ?? item.snmp_vendor ?? '—')
+              const model    = String(item.model ?? item.category ?? '—')
+              const os       = String(item.os ?? '—')
+              const snmpDescr = String(item.snmp_description ?? item.sysDescr ?? item.description ?? '—')
+              const status   = String(item.status ?? 'online')
               const isStored = storedIps.has(ip)
               const isAdding = addingIps.has(ip)
+
+              /* open ports */
+              const portsRaw = item.open_ports
+              const ports: string[] = portsRaw
+                ? typeof portsRaw === 'object'
+                  ? Object.entries(portsRaw as Record<string, unknown>).map(([p, s]) => `${p}:${s}`)
+                  : String(portsRaw).split(',').map(s => s.trim())
+                : []
+
+              /* protocol badges */
+              const badges: string[] = []
+              if (item.snmp)        badges.push('SNMP')
+              if (item.ssh)         badges.push('SSH')
+              if (item.http)        badges.push('HTTP')
+              if (item.dns)         badges.push('DNS')
+              if (item.arp)         badges.push('ARP')
+              if (item.wmi)         badges.push('WMI')
+              if (item.snmp_name)   badges.push('SNMP-ID')
+
               return (
-                <div key={`${ip}-${idx}`} className="flex items-center justify-between gap-3 rounded-lg p-3" style={{ background: isStored ? 'rgba(0,255,136,0.04)' : 'rgba(0,212,255,0.04)', border: `1px solid ${isStored ? 'rgba(0,255,136,0.15)' : 'rgba(0,212,255,0.1)'}` }}>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ background: '#00ff88' }} />
-                      <span className="font-mono text-xs truncate" style={{ color: '#c8d8ee' }}>{ip}</span>
-                      <span className="font-display text-xs tracking-wider truncate" style={{ color: '#8899bb' }}>{hostname}</span>
+                <div key={`${ip}-${idx}`} className="rounded-xl overflow-hidden transition-all"
+                  style={{ border: isStored ? '1px solid rgba(0,255,136,0.25)' : '1px solid rgba(0,212,255,0.15)', background: isStored ? 'rgba(0,255,136,0.02)' : 'rgba(0,212,255,0.02)' }}>
+
+                  {/* top bar */}
+                  <div className="flex items-center justify-between px-4 py-2.5 flex-wrap gap-2"
+                    style={{ borderBottom: '1px solid rgba(0,212,255,0.08)', background: 'rgba(0,0,0,0.2)' }}>
+                    <div className="flex items-center gap-2 flex-wrap min-w-0">
+                      <span className="w-2 h-2 rounded-full shrink-0"
+                        style={{ background: status === 'online' ? '#00ff88' : '#ff3366', boxShadow: `0 0 6px ${status === 'online' ? '#00ff88' : '#ff3366'}` }}/>
+                      <span className="font-mono text-sm font-bold" style={{ color: '#00d4ff' }}>{ip}</span>
+                      {hostname !== ip && <span className="font-mono text-xs truncate" style={{ color: '#c8d8ee' }}>{hostname}</span>}
+                      {badges.map(b => (
+                        <span key={b} className="font-mono text-[9px] px-1.5 py-0.5 rounded"
+                          style={{ background: 'rgba(0,212,255,0.1)', color: '#00d4ff', border: '1px solid rgba(0,212,255,0.2)' }}>{b}</span>
+                      ))}
+                      {isStored && (
+                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+                          style={{ background: 'rgba(0,255,136,0.12)', color: '#00ff88', border: '1px solid rgba(0,255,136,0.25)' }}>✓ STORED</span>
+                      )}
                     </div>
-                    <div className="font-mono text-xs mt-1 truncate" style={{ color: '#667799' }}>MAC: {mac} · Vendor: {vendor}</div>
+                    {!isStored && (
+                      <PermissionGuard permission="devices:create">
+                        <button onClick={() => handleStoreSingle(device)} disabled={isAdding}
+                          className="font-mono text-xs px-3 py-1 rounded shrink-0 transition hover:opacity-80 disabled:opacity-50"
+                          style={{ background: 'rgba(0,212,255,0.12)', border: '1px solid rgba(0,212,255,0.3)', color: '#00d4ff' }}>
+                          {isAdding ? 'Adding…' : '+ ADD'}
+                        </button>
+                      </PermissionGuard>
+                    )}
                   </div>
-                  {isStored ? (
-                    <span className="font-mono text-xs px-3 py-1 rounded flex-shrink-0" style={{ color: '#00ff88', background: 'rgba(0,255,136,0.08)', border: '1px solid rgba(0,255,136,0.2)' }}>✓ Stored</span>
-                  ) : (
-                    <PermissionGuard permission="devices:create">
-                    <button
-                      onClick={() => handleStoreSingle(device)}
-                      disabled={isAdding}
-                      className="font-mono text-xs px-3 py-1 rounded flex-shrink-0 transition hover:opacity-80"
-                      style={{ background: 'rgba(0,212,255,0.12)', border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff' }}
-                    >
-                      {isAdding ? 'Adding…' : '+ Add'}
-                    </button>
-                    </PermissionGuard>
+
+                  {/* fields grid */}
+                  <div className="px-4 pt-3 pb-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-2">
+                    {[
+                      { l: 'MAC',    v: mac },
+                      { l: 'Vendor', v: vendor },
+                      { l: 'Model',  v: model },
+                      { l: 'OS',     v: os },
+                      { l: 'Status', v: status, c: status === 'online' ? '#00ff88' : '#ff3366' },
+                    ].filter(f => f.v !== '—').map(f => (
+                      <div key={f.l}>
+                        <div className="font-mono text-[10px]" style={{ color: '#556677' }}>{f.l}</div>
+                        <div className="font-mono text-xs truncate" style={{ color: (f as { c?: string }).c ?? '#c8d8ee' }}>{f.v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* open ports */}
+                  {ports.length > 0 && (
+                    <div className="px-4 py-2">
+                      <div className="font-mono text-[10px] mb-1" style={{ color: '#556677' }}>Open Ports</div>
+                      <div className="flex flex-wrap gap-1">
+                        {ports.map(p => (
+                          <span key={p} className="font-mono text-[10px] px-2 py-0.5 rounded"
+                            style={{ background: 'rgba(124,58,237,0.12)', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.25)' }}>{p}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SNMP description */}
+                  {snmpDescr !== '—' && (
+                    <div className="px-4 pb-3">
+                      <div className="font-mono text-[10px]" style={{ color: '#556677' }}>SNMP Description</div>
+                      <div className="font-mono text-[11px] leading-relaxed" style={{ color: '#8899bb' }}>
+                        {snmpDescr.length > 150 ? snmpDescr.slice(0, 150) + '…' : snmpDescr}
+                      </div>
+                    </div>
                   )}
                 </div>
               )

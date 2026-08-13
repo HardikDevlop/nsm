@@ -120,6 +120,9 @@ class RawDevice:
     # Original walk (kept for collectors that need direct OID access)
     raw: dict[str, Any] = field(default_factory=dict)
 
+    # Vendor scalars derived from the walk (populated by normalizer)
+    vendor_scalars: dict[str, Any] = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # OID prefix → RawDevice attribute  (for table slicing)
@@ -197,6 +200,19 @@ class NormalizationLayer:
             setattr(device, attr, {
                 k: v for k, v in raw.items() if k.startswith(prefix_dot)
             })
+
+        # -- 6. Vendor scalars (all vendor OIDs that responded in the walk) --
+        vendor = device.vendor or "generic"
+        vendor_scalars: dict[str, Any] = {}
+        for domain, metrics in VENDOR_OID_CATALOG.get(vendor, {}).items():
+            for metric, oid in metrics.items():
+                v = raw.get(oid) or raw.get(oid + ".0") or raw.get(oid.rstrip(".0"))
+                if v is not None:
+                    s = str(v).strip()
+                    if s and s not in ("", "noSuchObject", "noSuchInstance",
+                                       "No Such Object", "No Such Instance", "endOfMibView"):
+                        vendor_scalars[f"{domain}.{metric}"] = v
+        device.vendor_scalars = vendor_scalars
 
         return device
 

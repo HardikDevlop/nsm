@@ -4,6 +4,7 @@ import GlassCard from '../components/GlassCard'
 import SNMPModuleCard from '../components/SNMPModuleCard'
 import SNMPHealthIndicator from '../components/SNMPHealthIndicator'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
+import { useMonitoringData } from '../modules/useSNMPModules'
 import {
   getSNMPDeviceOverview,
   getSNMPSystemInfo,
@@ -41,7 +42,6 @@ function formatUptime(seconds: number | undefined): string {
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
 }
-
 export default function SNMPDashboard() {
   const { deviceId } = useParams<{ deviceId: string }>()
   const navigate = useNavigate()
@@ -53,7 +53,13 @@ export default function SNMPDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Load device list
+  // NEW: Get monitoring data for all devices
+  const [allDevicesData, setAllDevicesData] = useState<any[]>([])
+
+  // Use our working monitoring API for selected device
+  const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(selectedDeviceId)
+
+  // Load device list and their monitoring data
   useEffect(() => {
     let ignore = false
     const loadDevices = async () => {
@@ -61,6 +67,32 @@ export default function SNMPDashboard() {
         const devs = await listSNMPDevices()
         if (!ignore) {
           setDevices(devs)
+          
+          // Load monitoring data for all devices
+          const monitoringPromises = devs.slice(0, 10).map(async (dev) => {
+            try {
+              const response = await fetch('/api/v1/monitoring/data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  device_id: dev.id,
+                  modules: ['cpu', 'memory', 'storage', 'interfaces', 'system'],
+                  include_history: false
+                })
+              })
+              if (response.ok) {
+                return await response.json()
+              }
+              return null
+            } catch (err) {
+              console.log(`Failed to load monitoring data for device ${dev.id}:`, err)
+              return null
+            }
+          })
+          
+          const monitoringResults = await Promise.all(monitoringPromises)
+          setAllDevicesData(monitoringResults.filter(Boolean))
+          
           // Auto-select first device or from URL
           if (deviceId) {
             setSelectedDeviceId(Number(deviceId))
@@ -77,7 +109,6 @@ export default function SNMPDashboard() {
     void loadDevices()
     return () => { ignore = true }
   }, [deviceId])
-
   // Load device overview and system info
   useEffect(() => {
     if (!selectedDeviceId) return
@@ -142,7 +173,6 @@ export default function SNMPDashboard() {
           </select>
         )}
       </div>
-
       {error && (
         <div className="font-mono text-xs p-4 rounded" style={{ color: '#ff3366', background: 'rgba(255,51,102,0.1)', border: '1px solid rgba(255,51,102,0.3)' }}>
           {error}
@@ -232,100 +262,46 @@ export default function SNMPDashboard() {
             )}
           </GlassCard>
 
-          {/* ── Quick navigation to every SNMP sub-page ── */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            {[
-              { label:'CPU',        path:`/snmp/cpu/${selectedDeviceId}`,         color:'#00ff88' },
-              { label:'Memory',     path:`/snmp/memory/${selectedDeviceId}`,      color:'#7c3aed' },
-              { label:'Interfaces', path:`/snmp/interfaces/${selectedDeviceId}`,  color:'#00bfff' },
-              { label:'Storage',    path:`/snmp/storage/${selectedDeviceId}`,     color:'#ffaa00' },
-              { label:'Environment',path:`/snmp/environment/${selectedDeviceId}`, color:'#ff6644' },
-              { label:'Topology',   path:`/snmp/topology/${selectedDeviceId}`,    color:'#a78bfa' },
-              { label:'OID Explorer',path:`/snmp/oids/${selectedDeviceId}`,       color:'#34d399' },
-              { label:'Polling',    path:`/snmp/polling/${selectedDeviceId}`,     color:'#f472b6' },
-              { label:'Statistics', path:`/snmp/statistics/${selectedDeviceId}`,  color:'#fb923c' },
-              { label:'↑ SNMP Home',path:'/snmp-monitoring',                      color:'#8899bb' },
-            ].map(nav => (
-              <button key={nav.label} onClick={()=>navigate(nav.path)}
-                className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
-                style={{ border:`1px solid ${nav.color}33`, background:`${nav.color}0d`, color:nav.color }}>
-                <div className="font-semibold">{nav.label}</div>
-              </button>
-            ))}
-          </div>
+          {/* Real Monitoring Data for Selected Device */}
+          {monitoringData && (
+            <div className="space-y-4">
+              <h3 className="font-display font-bold text-lg tracking-wider neon-cyan">
+                LIVE MONITORING DATA
+              </h3>
+              
+              <div className="font-mono text-sm" style={{ color: '#00d4ff' }}>
+                Interface Tables, VLAN Config, LLDP Neighbors, Routing, ARP & MAC Tables
+              </div>
+              
+              {/* Show available modules */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {Object.keys(monitoringData.modules || {}).map(module => (
+                  <div key={module} className="p-2 rounded text-center" style={{ background: 'rgba(0,255,136,0.1)', border: '1px solid rgba(0,255,136,0.2)' }}>
+                    <div className="font-mono text-xs font-bold" style={{ color: '#00ff88' }}>
+                      {module.toUpperCase()}
+                    </div>
+                    <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+                      {monitoringData.modules[module]?.supported ? 'Available' : 'Not Supported'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-          {/* Module Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {overview.modules.map(module => {
-              const icon = moduleIcons[module.name.toLowerCase()] || moduleIcons.system
-              const routePath = `/snmp/${module.name.toLowerCase()}/${selectedDeviceId}`
+          {monitoringLoading && (
+            <div className="flex items-center justify-center p-8">
+              <div className="font-mono text-sm" style={{ color: '#00d4ff' }}>
+                Loading monitoring data...
+              </div>
+            </div>
+          )}
 
-              return (
-                <SNMPModuleCard
-                  key={module.name}
-                  title={module.name.toUpperCase()}
-                  icon={icon}
-                  status={module.status}
-                  health={module.health}
-                  lastPoll={module.last_poll}
-                  objectCount={module.object_count}
-                  navigateTo={module.status === 'supported' ? routePath : undefined}
-                  summary={
-                    module.status === 'supported' && module.summary ? (
-                      <div className="space-y-1">
-                        {Object.entries(module.summary).slice(0, 3).map(([key, value]) => (
-                          <div key={key} className="flex justify-between items-center gap-2">
-                            <span className="font-mono text-[10px] truncate" style={{ color: '#667799' }}>
-                              {key.replace(/_/g, ' ')}:
-                            </span>
-                            <span className="font-mono text-[10px] font-semibold" style={{ color: '#c8d8ee' }}>
-                              {String(value)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : undefined
-                  }
-                />
-              )
-            })}
-          </div>
-
-          {/* Quick Actions */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <button
-              onClick={() => navigate(`/snmp/oids/${selectedDeviceId}`)}
-              className="glass-bright p-3 rounded font-mono text-xs transition-all hover:bg-cyan-400/5 text-left"
-              style={{ border: '1px solid rgba(0,212,255,0.15)' }}
-            >
-              <div className="font-semibold mb-1 neon-cyan">OID Explorer</div>
-              <div style={{ color: '#8899bb' }}>Browse all OIDs</div>
-            </button>
-            <button
-              onClick={() => navigate(`/snmp/polling/${selectedDeviceId}`)}
-              className="glass-bright p-3 rounded font-mono text-xs transition-all hover:bg-cyan-400/5 text-left"
-              style={{ border: '1px solid rgba(0,212,255,0.15)' }}
-            >
-              <div className="font-semibold mb-1 neon-cyan">Poll History</div>
-              <div style={{ color: '#8899bb' }}>View polling logs</div>
-            </button>
-            <button
-              onClick={() => navigate(`/snmp/statistics/${selectedDeviceId}`)}
-              className="glass-bright p-3 rounded font-mono text-xs transition-all hover:bg-cyan-400/5 text-left"
-              style={{ border: '1px solid rgba(0,212,255,0.15)' }}
-            >
-              <div className="font-semibold mb-1 neon-cyan">Statistics</div>
-              <div style={{ color: '#8899bb' }}>Performance data</div>
-            </button>
-            <button
-              onClick={() => navigate(`/snmp/topology`)}
-              className="glass-bright p-3 rounded font-mono text-xs transition-all hover:bg-cyan-400/5 text-left"
-              style={{ border: '1px solid rgba(0,212,255,0.15)' }}
-            >
-              <div className="font-semibold mb-1 neon-cyan">Topology</div>
-              <div style={{ color: '#8899bb' }}>Network map</div>
-            </button>
-          </div>
+          {monitoringError && (
+            <div className="font-mono text-xs p-4 rounded" style={{ color: '#ff3366', background: 'rgba(255,51,102,0.1)', border: '1px solid rgba(255,51,102,0.3)' }}>
+              Failed to load monitoring data: {monitoringError.message}
+            </div>
+          )}
         </>
       )}
     </div>

@@ -6,7 +6,8 @@ typed and indexed for PostgreSQL queries.
 """
 
 from datetime import datetime
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from enum import Enum as PyEnum
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.database.session import Base
 
@@ -20,6 +21,25 @@ class SNMPBase:
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True, comment="UTC creation time")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now, comment="UTC last update time")
+
+
+class MonitoringStatus(PyEnum):
+    STOPPED = "stopped"
+    RUNNING = "running"
+    WAITING_FIRST_POLL = "waiting_first_poll"
+    NOT_SUPPORTED = "not_supported"
+    ERROR = "error"
+
+
+class PollStatus(PyEnum):
+    SUCCESS = "success"
+    TIMEOUT = "timeout"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    DEVICE_UNREACHABLE = "device_unreachable"
+    OID_NOT_SUPPORTED = "oid_not_supported"
+    NOT_SUPPORTED = "not_supported"
+    ERROR = "error"
+    NO_DATA = "no_data"
 
 
 class DeviceInventory(SNMPBase, Base):
@@ -192,3 +212,108 @@ class Alarm(SNMPBase, Base):
     severity: Mapped[str] = mapped_column(String(30), index=True)
     message: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(30), default="open", index=True)
+
+
+class MonitoringConfig(SNMPBase, Base):
+    """Per-device, per-module monitoring configuration with custom intervals."""
+    __tablename__ = "monitoring_configs"
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    module_name: Mapped[str] = mapped_column(String(80), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    status: Mapped[str] = mapped_column(String(30), default=MonitoringStatus.STOPPED.value, index=True)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_stopped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (UniqueConstraint("device_id", "module_name", name="uq_monitoring_config_device_module"),)
+
+
+class MonitoringField(SNMPBase, Base):
+    """Field-level monitoring configuration within a module."""
+    __tablename__ = "monitoring_fields"
+    monitoring_config_id: Mapped[int] = mapped_column(ForeignKey("monitoring_configs.id", ondelete="CASCADE"), index=True)
+    field_name: Mapped[str] = mapped_column(String(160))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="Override module interval for this field")
+    last_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    __table_args__ = (UniqueConstraint("monitoring_config_id", "field_name", name="uq_monitoring_field_config_field"),)
+
+
+class LatestCPU(SNMPBase, Base):
+    """Latest CPU metric for fast dashboard reads."""
+    __tablename__ = "latest_cpu"
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), unique=True, index=True)
+    utilization_percent: Mapped[float | None] = mapped_column(Float)
+    per_core: Mapped[dict] = mapped_column(JSON, default=dict)
+    load_avg: Mapped[dict] = mapped_column(JSON, default=dict)
+    polled_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class LatestMemory(SNMPBase, Base):
+    """Latest Memory metric for fast dashboard reads."""
+    __tablename__ = "latest_memory"
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), unique=True, index=True)
+    total_bytes: Mapped[float | None] = mapped_column(Float)
+    used_bytes: Mapped[float | None] = mapped_column(Float)
+    free_bytes: Mapped[float | None] = mapped_column(Float)
+    cached_bytes: Mapped[float | None] = mapped_column(Float)
+    buffer_bytes: Mapped[float | None] = mapped_column(Float)
+    swap_total: Mapped[float | None] = mapped_column(Float)
+    swap_free: Mapped[float | None] = mapped_column(Float)
+    utilization_percent: Mapped[float | None] = mapped_column(Float)
+    polled_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class LatestStorage(SNMPBase, Base):
+    """Latest Storage metric for fast dashboard reads."""
+    __tablename__ = "latest_storage"
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    volume_id: Mapped[str] = mapped_column(String(160))
+    mount_name: Mapped[str | None] = mapped_column(String(255))
+    total_bytes: Mapped[float | None] = mapped_column(Float)
+    used_bytes: Mapped[float | None] = mapped_column(Float)
+    free_bytes: Mapped[float | None] = mapped_column(Float)
+    utilization_percent: Mapped[float | None] = mapped_column(Float)
+    type_label: Mapped[str | None] = mapped_column(String(80))
+    polled_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (UniqueConstraint("device_id", "volume_id", name="uq_latest_storage_device_volume"),)
+
+
+class LatestInterface(SNMPBase, Base):
+    """Latest Interface metric for fast dashboard reads."""
+    __tablename__ = "latest_interface"
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    interface_id: Mapped[int] = mapped_column(ForeignKey("interfaces.id", ondelete="CASCADE"), index=True)
+    if_index: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str | None] = mapped_column(String(160))
+    oper_status: Mapped[str] = mapped_column(String(30))
+    admin_status: Mapped[str] = mapped_column(String(30))
+    speed_bps: Mapped[float | None] = mapped_column(Float)
+    rx_mbps: Mapped[float | None] = mapped_column(Float)
+    tx_mbps: Mapped[float | None] = mapped_column(Float)
+    rx_octets: Mapped[float | None] = mapped_column(Float)
+    tx_octets: Mapped[float | None] = mapped_column(Float)
+    rx_packets: Mapped[float | None] = mapped_column(Float)
+    tx_packets: Mapped[float | None] = mapped_column(Float)
+    errors: Mapped[float | None] = mapped_column(Float)
+    discards: Mapped[float | None] = mapped_column(Float)
+    utilization_percent: Mapped[float | None] = mapped_column(Float)
+    polled_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (UniqueConstraint("device_id", "interface_id", name="uq_latest_interface_device_interface"),)
+
+
+class LatestEnvironment(SNMPBase, Base):
+    """Latest Environment sensor metric for fast dashboard reads."""
+    __tablename__ = "latest_environment"
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    sensor_id: Mapped[str] = mapped_column(String(160))
+    sensor_name: Mapped[str | None] = mapped_column(String(160))
+    sensor_type: Mapped[str] = mapped_column(String(50))
+    value: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(30))
+    status: Mapped[str] = mapped_column(String(30))
+    polled_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (UniqueConstraint("device_id", "sensor_id", name="uq_latest_environment_device_sensor"),)

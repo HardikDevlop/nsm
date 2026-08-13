@@ -294,7 +294,28 @@ export default function ServerMonitoring() {
         </button>
       </div>
 
-      {error && <div className="font-mono text-xs" style={{ color: '#ff3366' }}>{error}</div>}
+      {error && (
+        <GlassCard className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,51,102,0.15)', color: '#ff3366' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.464 0L4.35 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+              </svg>
+            </div>
+            <div className="flex-1">
+              <div className="font-display font-semibold text-sm" style={{ color: '#ff3366' }}>Unable to Load Server Data</div>
+              <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{error}</div>
+              {error.includes('Not authenticated') && (
+                <div className="font-mono text-xs mt-2">
+                  <span style={{ color: '#8899bb' }}>Please </span>
+                  <Link to="/login" className="underline" style={{ color: '#00d4ff' }}>log in</Link>
+                  <span style={{ color: '#8899bb' }}> to access server monitoring data.</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </GlassCard>
+      )}
       {loading && !devices.length && <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading server data…</div>}
 
       {/* KPI bar */}

@@ -183,11 +183,23 @@ class SNMPService:
         # -- Step 4: table walks (standard + vendor) --
         walks = dict(_STANDARD_TABLE_WALKS)
         walks.update(_vendor_table_roots(vendor))
+        walk_oid_count = 0
         for name, root in walks.items():
             try:
-                raw.update(self.client.walk(host, root))
+                w = self.client.walk(host, root)
+                walk_oid_count += len(w)
+                raw.update(w)
+                logger.debug(
+                    "WALK %-30s root=%-35s oids=%d total_raw=%d",
+                    name, root, len(w), len(raw),
+                )
             except Exception as exc:
                 logger.debug("Walk %s %s failed: %s", name, root, exc)
+
+        logger.info(
+            "%s walk complete: %d OID roots walked, %d total OIDs in raw",
+            host, len(walks), len(raw),
+        )
 
         # -- Step 5: normalize --
         device = self._normalizer.normalize(raw, vendor=vendor, device_type=device_type)
@@ -203,24 +215,64 @@ class SNMPService:
         collectors_out: dict[str, Any] = {}
         unsupported:    list[str]      = []
 
+        logger.info("%s running %d collectors", host, len(_COLLECTORS))
+
         for collector in _COLLECTORS:
+            c_t0 = time.perf_counter()
             try:
                 resp = collector.collect(device, registry, registry.profile)
+                c_ms = round((time.perf_counter() - c_t0) * 1000, 1)
+
                 collectors_out[collector.name] = resp.to_dict()
-                if not resp.supported:
+
+                if resp.supported:
+                    # Summarise data keys so it's visible without full dump
+                    data_keys = list(resp.data.keys()) if resp.data else []
+                    # Count items for list-valued fields
+                    counts = {
+                        k: len(v) for k, v in resp.data.items()
+                        if isinstance(v, list) and v
+                    } if resp.data else {}
+                    logger.info(
+                        "  %-16s OK      ms=%-6.1f keys=%s counts=%s warn=%s",
+                        collector.name, c_ms, data_keys, counts,
+                        resp.warnings or "-",
+                    )
+                else:
                     unsupported.append(collector.name)
+                    logger.info(
+                        "  %-16s SKIP    ms=%-6.1f reason=%s missing=%s",
+                        collector.name, c_ms,
+                        (resp.reason or "")[:120],
+                        resp.missing or [],
+                    )
+
             except Exception as exc:
-                logger.error("Collector %s error on %s: %s",
-                             collector.name, host, exc, exc_info=True)
+                c_ms = round((time.perf_counter() - c_t0) * 1000, 1)
+                logger.error(
+                    "  %-16s ERROR   ms=%-6.1f %s: %s",
+                    collector.name, c_ms,
+                    type(exc).__name__, exc,
+                    exc_info=True,
+                )
                 collectors_out[collector.name] = {
                     "collector": collector.name,
                     "supported": False,
-                    "reason":    f"Internal error: {exc}",
+                    "reason":    f"{type(exc).__name__}: {exc}",
                     "missing":   [],
+                    "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
                 }
                 unsupported.append(collector.name)
 
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
+
+        supported_count = len(_COLLECTORS) - len(unsupported)
+        logger.info(
+            "%s collection done: %d/%d collectors supported, %.1f ms total",
+            host, supported_count, len(_COLLECTORS), elapsed,
+        )
+        if unsupported:
+            logger.info("  unsupported: %s", unsupported)
 
         return {
             "api_version":   API_VERSION,

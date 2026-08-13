@@ -13,6 +13,7 @@ Each collector is tested for:
 
 import pytest
 import sys, os
+from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 

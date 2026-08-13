@@ -8,11 +8,12 @@ from backend.api.legacy_routes import router as legacy_router
 from backend.api.routes import router
 from backend.api.snmp_device_routes import router as snmp_device_router
 from backend.api.overview_routes import router as overview_router
+from backend.api.monitoring_data_routes import router as monitoring_data_router
 from backend.config.settings import get_settings
 from backend.database.session import Base, SessionLocal, engine, migrate_credential_columns
 from backend.seed import seed_rbac, seed_ouis_and_products
+from backend.services.snmp_polling import get_polling_scheduler, shutdown_polling_scheduler
 from logging_config import configure_logging
-from backend.snmp.polling import SNMPPollingEngine
 
 import backend.models  # noqa: F401  (register all tables on Base.metadata)
 
@@ -24,21 +25,12 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         seed_rbac(db)
         seed_ouis_and_products(db)
-    polling = None
-    try:
-        from backend.models import Device
-        devices = [row.ip_address for row in SessionLocal().query(Device).filter(Device.monitoring_status.is_(True)).all()]
-        polling = SNMPPollingEngine(lambda _device, _collector: None)
-        if devices:
-            polling.start(devices)
-    except ImportError:
-        # APScheduler is an explicit deployment dependency; keep startup
-        # compatible for environments that only run discovery tests.
-        polling = None
-    app.state.snmp_polling = polling
+
+    # Start centralized SNMP polling scheduler
+    scheduler = await get_polling_scheduler()
+    app.state.snmp_polling = scheduler
     yield
-    if polling:
-        polling.shutdown()
+    await shutdown_polling_scheduler()
 
 
 settings = get_settings()
@@ -61,6 +53,9 @@ app.include_router(discovery_router, prefix="/api/v1")
 
 # SNMP per-device monitoring endpoints (fills the gap the frontend already expects)
 app.include_router(snmp_device_router)
+
+# Monitoring Data API (reads from database, no live polling)
+app.include_router(monitoring_data_router)
 
 # Overview + Kill-all service control
 app.include_router(overview_router)

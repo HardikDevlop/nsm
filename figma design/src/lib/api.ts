@@ -46,7 +46,7 @@ export function logout() {
   window.localStorage.removeItem('nms_access_token')
 }
 
-async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await ensureAuth()
   const response = await fetch(buildUrl(path), {
     ...init,
@@ -233,7 +233,11 @@ export async function listDevices(): Promise<DeviceRecord[]> {
 
 /** Devices with an explicitly configured SNMP credential only. */
 export async function listSNMPDevices(): Promise<DeviceRecord[]> {
-  return requestJson<DeviceRecord[]>('/snmp/devices')
+  const payload = await requestJson<DeviceRecord[] | { items?: DeviceRecord[]; devices?: DeviceRecord[] }>('/snmp/devices')
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload.items)) return payload.items
+  if (Array.isArray(payload.devices)) return payload.devices
+  return []
 }
 
 export interface SNMPDiscoveryPayload {
@@ -590,6 +594,12 @@ export async function createSite(data: { name: string; organization_id: number; 
     method: 'POST',
     body: JSON.stringify(data),
   })
+}
+export async function updateSite(id: number, data: { name?: string; organization_id?: number; city?: string; state?: string }): Promise<SiteRecord> {
+  return requestJson(`/sites/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+export async function deleteSite(id: number): Promise<{ detail: string }> {
+  return requestJson(`/sites/${id}`, { method: 'DELETE' })
 }
 
 // ── Device CRUD ──
@@ -1136,4 +1146,1067 @@ export async function killAllServices(): Promise<KillAllResponse> {
 
 export async function getServiceStates(): Promise<OverviewResponse['services']> {
   return requestJson<OverviewResponse['services']>('/monitoring/services')
+}
+
+// ── Organizations (full CRUD) ─────────────────────────────────────────────
+export async function updateOrganization(id: number, data: { name?: string; description?: string }): Promise<OrganizationRecord> {
+  return requestJson(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+export async function deleteOrganization(id: number): Promise<{ detail: string }> {
+  return requestJson(`/organizations/${id}`, { method: 'DELETE' })
+}
+
+// ── Vendors ───────────────────────────────────────────────────────────────
+export interface VendorRecord {
+  id: number
+  vendor_name: string
+}
+export async function listVendors(): Promise<VendorRecord[]> {
+  return requestJson<VendorRecord[]>('/vendors')
+}
+export async function createVendor(data: { vendor_name: string }): Promise<VendorRecord> {
+  return requestJson('/vendors', { method: 'POST', body: JSON.stringify(data) })
+}
+export async function updateVendor(id: number, data: { vendor_name?: string }): Promise<VendorRecord> {
+  return requestJson(`/vendors/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+export async function deleteVendor(id: number): Promise<{ detail: string }> {
+  return requestJson(`/vendors/${id}`, { method: 'DELETE' })
+}
+
+// ── Reports ───────────────────────────────────────────────────────────────
+export interface ReportRecord {
+  id: number
+  report_name: string
+  report_type: string
+  generated_by?: number | null
+  file_path?: string | null
+  generated_at: string
+}
+export async function listReports(): Promise<ReportRecord[]> {
+  return requestJson<ReportRecord[]>('/reports')
+}
+export async function createReport(data: { report_name: string; report_type: string; file_path?: string }): Promise<ReportRecord> {
+  return requestJson('/reports', { method: 'POST', body: JSON.stringify(data) })
+}
+export async function updateReport(id: number, data: { report_name?: string; report_type?: string; file_path?: string }): Promise<ReportRecord> {
+  return requestJson(`/reports/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+export async function deleteReport(id: number): Promise<{ detail: string }> {
+  return requestJson(`/reports/${id}`, { method: 'DELETE' })
+}
+
+// ── Daily Network Monitoring Report ──────────────────────────────────────
+export interface DailyReportSeverity { [key: string]: number }
+export interface DailyReportDevice { device_id: number; hostname: string; ip: string; avg_value?: number; max_value?: number; count?: number; status?: string; downtime_sec?: number; alerts?: number; reason?: string }
+export interface DailyReportInterface { id: number; name: string; device_id: number; hostname: string; status: string; traffic_in?: number; traffic_out?: number; speed?: string; packet_errors?: number; last_updated?: string }
+export interface DailyReportAlert { id: number; severity: string; title: string; description?: string | null; status: string; device_id?: number | null; hostname: string; created_at?: string | null }
+export interface DailyReportChange { device_id: number; hostname: string; ip: string; old_status: string | null; new_status: string; reason?: string | null; timestamp?: string | null }
+export interface DailyReportRecommendation { priority: string; message: string }
+
+export interface DailyReport {
+  report_date: string
+  period: string
+  generated_at: string
+  availability: {
+    total_devices: number; online: number; offline: number; warning: number
+    availability_pct: number; downtime_events_24h: number
+    devices_with_downtime: DailyReportDevice[]
+  }
+  performance: {
+    sample_count: number
+    cpu:      { avg: number | null; max: number | null; samples: number }
+    memory:   { avg: number | null; max: number | null; samples: number }
+    disk:     { avg: number | null; max: number | null; samples: number }
+    latency:  { avg: number | null; max: number | null; samples: number }
+    packet_loss: { avg: number | null; max: number | null; samples: number }
+    bandwidth:   { avg: number | null; max: number | null; samples: number }
+    top_cpu_devices: DailyReportDevice[]
+    top_mem_devices: DailyReportDevice[]
+    top_latency_devices: DailyReportDevice[]
+  }
+  interfaces: {
+    total: number; up: number; down: number
+    high_traffic: DailyReportInterface[]
+    interfaces_with_errors: DailyReportInterface[]
+    down_interfaces: DailyReportInterface[]
+  }
+  alerts: {
+    total_alerts_24h: number; by_severity: DailyReportSeverity
+    resolved: number; open: number
+    critical: number; high: number; warning: number; info: number
+    top_alert_devices: DailyReportDevice[]
+    recent_alerts: DailyReportAlert[]
+    total_events_24h: number; event_types: DailyReportSeverity
+  }
+  incidents: {
+    total_status_changes: number; went_offline: number; came_online: number
+    changes: DailyReportChange[]
+  }
+  top_performers: {
+    top_cpu: DailyReportDevice[]; top_memory: DailyReportDevice[]
+    top_latency: DailyReportDevice[]; max_downtime: DailyReportDevice[]
+    max_alerts: DailyReportDevice[]
+  }
+  daily_summary: {
+    overall_health: string; health_score: number; availability_pct: number
+    issues: string[]; devices_needing_attention: DailyReportDevice[]
+  }
+  recommendations: DailyReportRecommendation[]
+}
+
+export async function getDailyReport(): Promise<DailyReport> {
+  return requestJson<DailyReport>('/reports/daily')
+}
+
+// ============================================================================
+// NEW SNMP MONITORING API (DB-First Architecture)
+// ============================================================================
+
+export interface SNMPDeviceListItem {
+  id: number
+  name: string
+  ip_address: string
+  hostname: string
+  device_type: string | null
+  model: string | null
+  serial_number: string | null
+  firmware: string | null
+  mac_address: string | null
+  status: string
+  snmp_version: string | null
+  snmp_status: string
+  monitoring_enabled: boolean
+  last_seen: string | null
+  last_poll_at: string | null
+  modules_monitored: number
+}
+
+export interface SNMPDevicesResponse {
+  items: SNMPDeviceListItem[]
+  page: number
+  page_size: number
+  total: number
+  total_pages: number
+}
+
+export interface MonitoringConfig {
+  module_name: string
+  enabled: boolean
+  interval_seconds: number
+  status: string
+  last_started_at: string | null
+  last_stopped_at: string | null
+  last_poll_at: string | null
+  next_poll_at: string | null
+  error_message: string | null
+}
+
+export interface SNMPDeviceDetails {
+  device: {
+    id: number
+    name: string
+    ip_address: string
+    hostname: string
+    description: string | null
+    device_type: string | null
+    vendor: string | null
+    model: string | null
+    serial_number: string | null
+    firmware: string | null
+    mac_address: string | null
+    status: string
+    monitoring_status: boolean
+    last_seen: string | null
+    created_at: string | null
+    uptime_seconds: number
+  }
+  snmp: {
+    version: string | null
+    port: number
+    status: string
+    last_test_at: string | null
+  }
+  capabilities: Record<string, boolean>
+  monitoring: MonitoringConfig[]
+  latest_metrics: {
+    cpu: {
+      utilization_percent: number | null
+      per_core: Record<string, number>
+      load_avg: Record<string, number>
+      polled_at: string | null
+    } | null
+    memory: {
+      total_bytes: number | null
+      used_bytes: number | null
+      free_bytes: number | null
+      utilization_percent: number | null
+      polled_at: string | null
+    } | null
+    storage: Array<{
+      volume_id: string
+      mount_name: string | null
+      total_bytes: number | null
+      used_bytes: number | null
+      free_bytes: number | null
+      utilization_percent: number | null
+      type_label: string | null
+      polled_at: string | null
+    }>
+    interfaces: Array<{
+      interface_id: number
+      if_index: number
+      name: string | null
+      oper_status: string
+      admin_status: string
+      speed_bps: number | null
+      rx_mbps: number | null
+      tx_mbps: number | null
+      utilization_percent: number | null
+      polled_at: string | null
+    }>
+    environment: Array<{
+      sensor_id: string
+      sensor_name: string | null
+      sensor_type: string
+      value: number | null
+      unit: string | null
+      status: string
+      polled_at: string | null
+    }>
+  }
+  polling_history: Array<{
+    id: number
+    collector: string
+    status: string
+    duration_ms: number
+    error: string | null
+    timestamp: string
+  }>
+}
+
+export interface LatestCPU {
+  device_id: number
+  supported: boolean
+  current_usage: number | null
+  per_core: Record<string, number>
+  load_avg: Record<string, number>
+  last_poll: string | null
+}
+
+export interface LatestMemory {
+  device_id: number
+  supported: boolean
+  total_bytes: number | null
+  used_bytes: number | null
+  free_bytes: number | null
+  utilization_percent: number | null
+  last_poll: string | null
+}
+
+export interface LatestInterface {
+  interface_id: number
+  if_index: number
+  name: string | null
+  oper_status: string
+  admin_status: string
+  speed_bps: number | null
+  rx_mbps: number | null
+  tx_mbps: number | null
+  rx_octets: number | null
+  tx_octets: number | null
+  rx_packets: number | null
+  tx_packets: number | null
+  errors: number | null
+  discards: number | null
+  utilization_percent: number | null
+  last_poll: string | null
+}
+
+export interface LatestStorage {
+  volume_id: string
+  mount_name: string | null
+  total_bytes: number | null
+  used_bytes: number | null
+  free_bytes: number | null
+  utilization_percent: number | null
+  type_label: string | null
+  last_poll: string | null
+}
+
+export interface LatestEnvironment {
+  sensor_id: string
+  sensor_name: string | null
+  sensor_type: string
+  value: number | null
+  unit: string | null
+  status: string
+  last_poll: string | null
+}
+
+export interface MonitoringStartRequest {
+  module_name: string
+  interval_seconds: number
+}
+
+export interface MonitoringUpdateRequest {
+  enabled?: boolean
+  interval_seconds?: number
+}
+
+// API Functions
+
+export async function listSNMPDevicesOptimized(params: {
+  page?: number
+  page_size?: number
+  search?: string
+  status?: string
+  snmp_status?: string
+  monitoring_status?: string
+  device_type?: string
+  vendor?: string
+  model?: string
+  hostname?: string
+  sort_by?: string
+  sort_order?: string
+}): Promise<SNMPDevicesResponse> {
+  const query = new URLSearchParams()
+  if (params.page) query.set('page', String(params.page))
+  if (params.page_size) query.set('page_size', String(params.page_size))
+  if (params.search) query.set('search', params.search)
+  if (params.status) query.set('status', params.status)
+  if (params.snmp_status) query.set('snmp_status', params.snmp_status)
+  if (params.monitoring_status) query.set('monitoring_status', params.monitoring_status)
+  if (params.device_type) query.set('device_type', params.device_type)
+  if (params.vendor) query.set('vendor', params.vendor)
+  if (params.model) query.set('model', params.model)
+  if (params.hostname) query.set('hostname', params.hostname)
+  if (params.sort_by) query.set('sort_by', params.sort_by)
+  if (params.sort_order) query.set('sort_order', params.sort_order)
+  return requestJson<SNMPDevicesResponse>(`/snmp/devices?${query.toString()}`)
+}
+
+export async function getSNMPDeviceDetails(deviceId: number): Promise<SNMPDeviceDetails> {
+  return requestJson<SNMPDeviceDetails>(`/snmp/devices/${deviceId}`)
+}
+
+export async function getSNMPDeviceMonitoringConfigs(deviceId: number): Promise<MonitoringConfig[]> {
+  return requestJson<MonitoringConfig[]>(`/snmp/devices/${deviceId}/monitoring`)
+}
+
+export async function startModuleMonitoring(deviceId: number, module: string, intervalSeconds: number): Promise<MonitoringConfig & { message: string }> {
+  return requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ module_name: module, interval_seconds: intervalSeconds }),
+  })
+}
+
+export async function stopModuleMonitoring(deviceId: number, module: string): Promise<{ stopped: boolean; message: string }> {
+  return requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/stop`, {
+    method: 'POST',
+  })
+}
+
+export async function updateModuleMonitoring(deviceId: number, module: string, data: MonitoringUpdateRequest): Promise<MonitoringConfig> {
+  return requestJson(`/snmp/devices/${deviceId}/monitoring/${module}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getModuleMonitoringStatus(deviceId: number, module: string): Promise<MonitoringConfig> {
+  return requestJson<MonitoringConfig>(`/snmp/devices/${deviceId}/monitoring/${module}/status`)
+}
+
+export async function getLatestMetrics(deviceId: number): Promise<{
+  cpu: LatestCPU | null
+  memory: LatestMemory | null
+  storage: LatestStorage[]
+  interfaces: LatestInterface[]
+  environment: LatestEnvironment[]
+}> {
+  return requestJson(`/snmp/devices/${deviceId}/metrics/latest`)
+}
+
+export async function getLatestCPU(deviceId: number): Promise<LatestCPU> {
+  return requestJson<LatestCPU>(`/snmp/devices/${deviceId}/cpu/latest`)
+}
+
+export async function getLatestMemory(deviceId: number): Promise<LatestMemory> {
+  return requestJson<LatestMemory>(`/snmp/devices/${deviceId}/memory/latest`)
+}
+
+export async function getLatestInterfaces(deviceId: number): Promise<LatestInterface[]> {
+  return requestJson<LatestInterface[]>(`/snmp/devices/${deviceId}/interfaces/latest`)
+}
+
+export async function getLatestStorage(deviceId: number): Promise<LatestStorage[]> {
+  return requestJson<LatestStorage[]>(`/snmp/devices/${deviceId}/storage/latest`)
+}
+
+export async function getLatestEnvironment(deviceId: number): Promise<LatestEnvironment[]> {
+  return requestJson<LatestEnvironment[]>(`/snmp/devices/${deviceId}/environment/latest`)
+}
+
+// ============================================================================
+// NEW SNMP MONITORING ENDPOINTS FOR ADDITIONAL MODULES
+// ============================================================================
+
+export interface SNMPMemoryStats {
+  device_id: number
+  supported: boolean
+  total_bytes?: number
+  used_bytes?: number
+  free_bytes?: number
+  cached_bytes?: number
+  buffer_bytes?: number
+  swap_total?: number
+  swap_free?: number
+  utilization_percent?: number
+  history: Array<{ timestamp: string; used: number; free: number; utilization: number }>
+  last_poll?: string
+}
+
+export interface SNMPInterfaceStats {
+  interface_id: number
+  device_id: number
+  if_index: number
+  name: string
+  description?: string
+  mac_address?: string
+  speed_bps?: number
+  speed_display?: string
+  status: 'UP' | 'DOWN' | 'UNKNOWN'
+  admin_status: 'UP' | 'DOWN' | 'UNKNOWN'
+  mtu?: number
+  rx_mbps?: number
+  tx_mbps?: number
+  rx_octets?: number
+  tx_octets?: number
+  rx_packets?: number
+  tx_packets?: number
+  errors?: number
+  discards?: number
+  utilization_percent?: number
+  last_change?: string
+  last_updated: string
+}
+
+export interface SNMPInterfaceHistory {
+  interface_id: number
+  history: Array<{
+    timestamp: string
+    rx_mbps: number
+    tx_mbps: number
+    utilization: number
+    errors: number
+    packet_rate: number
+  }>
+  statistics: {
+    peak_mbps: number
+    average_mbps: number
+    percentile_95_mbps: number
+  }
+}
+
+export interface SNMPStorageVolume {
+  id: number
+  device_id: number
+  mount_name: string
+  total_bytes: number
+  used_bytes: number
+  free_bytes: number
+  utilization_percent: number
+  type?: string
+  health: 'healthy' | 'warning' | 'critical'
+  last_updated: string
+}
+
+export interface SNMPStorageStats {
+  device_id: number
+  supported: boolean
+  volumes: SNMPStorageVolume[]
+  last_poll?: string
+}
+
+export interface SNMPEnvironmentSensor {
+  id: number
+  device_id: number
+  sensor_name: string
+  sensor_type: 'temperature' | 'fan' | 'voltage' | 'power' | 'humidity' | 'other'
+  current_value?: number
+  unit?: string
+  threshold_warning?: number
+  threshold_critical?: number
+  status: 'ok' | 'warning' | 'critical' | 'unknown'
+  history: Array<{ timestamp: string; value: number }>
+  last_updated: string
+}
+
+export interface SNMPEnvironmentStats {
+  device_id: number
+  supported: boolean
+  sensors: SNMPEnvironmentSensor[]
+  last_poll?: string
+}
+
+export interface SNMPVLANInfo {
+  id: number
+  device_id: number
+  vlan_id: number
+  vlan_name?: string
+  tagged_ports?: string[]
+  untagged_ports?: string[]
+  status: 'active' | 'inactive'
+  last_updated: string
+}
+
+export interface SNMPLLDPNeighbor {
+  id: number
+  device_id: number
+  local_port: string
+  remote_device: string
+  remote_port: string
+  remote_system_name?: string
+  remote_description?: string
+  remote_mgmt_ip?: string
+  capabilities?: string[]
+  last_updated: string
+}
+
+export interface SNMPRoutingEntry {
+  id: number
+  device_id: number
+  destination: string
+  next_hop: string
+  interface?: string
+  metric?: number
+  protocol?: string
+  type?: string
+  status: 'active' | 'inactive'
+  last_updated: string
+}
+
+export interface SNMPTopologyLink {
+  source_device_id: number
+  source_device_name: string
+  source_port: string
+  target_device_id: number
+  target_device_name: string
+  target_port: string
+  link_type: 'lldp' | 'cdp' | 'discovered'
+  status: 'active' | 'inactive'
+}
+
+export interface SNMPTopologyGraph {
+  devices: Array<{
+    id: number
+    hostname: string
+    ip_address: string
+    type?: string
+    vendor?: string
+  }>
+  links: SNMPTopologyLink[]
+}
+
+export interface SNMPOIDCacheEntry {
+  id: number
+  device_id: number
+  oid: string
+  oid_name?: string
+  value?: string
+  type?: string
+  mib?: string
+  supported: boolean
+  last_seen: string
+  vendor_specific: boolean
+}
+
+export interface SNMPOIDTree {
+  oid: string
+  name: string
+  children?: SNMPOIDTree[]
+  value?: string
+  type?: string
+  supported: boolean
+}
+
+export interface SNMPPollingHistory {
+  id: number
+  device_id: number
+  collector: string
+  status: 'success' | 'failure'
+  duration_ms: number
+  objects_collected?: number
+  error?: string | null
+  timestamp: string
+}
+
+export interface SNMPPollingStatistics {
+  total_polls: number
+  success_count: number
+  failure_count: number
+  success_rate: number
+  average_duration_ms: number
+  max_duration_ms: number
+  min_duration_ms: number
+  by_collector: Array<{
+    collector: string
+    polls: number
+    success_rate: number
+    avg_duration_ms: number
+  }>
+  recent_history: SNMPPollingHistory[]
+}
+
+// API Functions for new endpoints - use the ones defined above to avoid duplicates
+// getSNMPMemoryStats, getSNMPInterfaces, getSNMPInterfaceHistory, getSNMPVLANs, getSNMPLLDPNeighbors
+// getSNMPRoutingTable, getSNMPTopology, getSNMPOIDCache, getSNMPOIDTree, getSNMPPollingHistory, getSNMPPollingStatistics
+// are already exported above in the first SNMP API Functions section
+export async function getSNMPStorageStats(deviceId: number): Promise<SNMPStorageStats> {
+  return requestJson<SNMPStorageStats>(`/snmp/devices/${deviceId}/storage`)
+}
+
+export async function getSNMPEnvironmentStats(deviceId: number): Promise<SNMPEnvironmentStats> {
+  return requestJson<SNMPEnvironmentStats>(`/snmp/devices/${deviceId}/environment`)
+}
+
+// Device CRUD - Add device with SNMP credentials
+export interface AddDeviceRequest {
+  ip_address: string
+  name?: string
+  hostname?: string
+  snmp_version: 'v2c' | 'v3'
+  community_string?: string
+  username?: string
+  auth_protocol?: string
+  auth_password?: string
+  privacy_protocol?: string
+  privacy_password?: string
+  security_level?: string
+  snmp_port?: number
+  location?: string
+  description?: string
+  vendor_override?: string
+  model_override?: string
+  device_type_override?: string
+  site_id?: number
+  mac_address?: string
+  auto_discover?: boolean
+}
+
+export interface AddDeviceResponse {
+  device: {
+    id: number
+    ip_address: string
+    hostname: string
+    status: string
+    created: boolean
+  }
+  discovery: Record<string, unknown>
+}
+
+export async function addSNMPDevice(data: AddDeviceRequest): Promise<AddDeviceResponse> {
+  return requestJson<AddDeviceResponse>('/devices/manual', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+// SNMP Test
+export interface SNMPTestResponse {
+  reachable: boolean
+  snmp_enabled: boolean
+  hostname?: string
+  vendor?: string
+  device_type?: string
+  response_ms: number
+  device_id: number
+  ip: string
+  error?: string
+}
+
+export async function testSNMPConnection(deviceId: number): Promise<SNMPTestResponse> {
+  return requestJson<SNMPTestResponse>(`/snmp/devices/${deviceId}/test-snmp`, {
+    method: 'POST',
+  })
+}
+
+// Discovery
+export interface SNMPDiscoverResponse {
+  identity: Record<string, unknown>
+  capabilities: Record<string, boolean>
+  reachable: boolean
+  vendor: string
+  device_type: string
+  hostname: string
+}
+
+export async function discoverDevice(deviceId: number): Promise<SNMPDiscoverResponse> {
+  return requestJson<SNMPDiscoverResponse>(`/snmp/devices/${deviceId}/discover`, {
+    method: 'POST',
+  })
+}
+
+// ============================================================================
+// MISSING CRUD API FUNCTIONS
+// ============================================================================
+
+// ── Alerts CRUD ─────────────────────────────────────────────────────────────
+
+export async function createAlert(data: {
+  device_id?: number | null
+  severity: string
+  title: string
+  description?: string | null
+  status?: string
+}): Promise<AlertRecord> {
+  return requestJson('/alerts', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateAlert(id: number, data: {
+  severity?: string
+  title?: string
+  description?: string | null
+  status?: string
+}): Promise<AlertRecord> {
+  return requestJson(`/alerts/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteAlert(id: number): Promise<{ detail: string }> {
+  return requestJson(`/alerts/${id}`, { method: 'DELETE' })
+}
+
+export async function acknowledgeAlert(id: number): Promise<AlertRecord> {
+  return requestJson(`/alerts/${id}/acknowledge`, { method: 'POST' })
+}
+
+export async function resolveAlert(id: number): Promise<AlertRecord> {
+  return requestJson(`/alerts/${id}/resolve`, { method: 'POST' })
+}
+
+// ── Events CRUD ─────────────────────────────────────────────────────────────
+
+export async function createEvent(data: {
+  device_id?: number | null
+  event_type: string
+  description?: string | null
+}): Promise<EventRecord> {
+  return requestJson('/events', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateEvent(id: number, data: {
+  event_type?: string
+  description?: string | null
+}): Promise<EventRecord> {
+  return requestJson(`/events/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteEvent(id: number): Promise<{ detail: string }> {
+  return requestJson(`/events/${id}`, { method: 'DELETE' })
+}
+
+// ── Notifications CRUD ──────────────────────────────────────────────────────
+
+export async function createNotification(data: {
+  alert_id?: number | null
+  channel: string
+  sent_to: string
+  status?: string
+}): Promise<NotificationRecord> {
+  return requestJson('/notifications', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateNotification(id: number, data: {
+  channel?: string
+  sent_to?: string
+  status?: string
+}): Promise<NotificationRecord> {
+  return requestJson(`/notifications/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteNotification(id: number): Promise<{ detail: string }> {
+  return requestJson(`/notifications/${id}`, { method: 'DELETE' })
+}
+
+// ── Thresholds ──────────────────────────────────────────────────────────────
+
+export interface ThresholdRecord {
+  id: number
+  metric_name: string
+  threshold_value: number
+  condition: string
+  severity: string
+  description?: string | null
+  created_at: string
+}
+
+export async function listThresholds(): Promise<ThresholdRecord[]> {
+  return requestJson<ThresholdRecord[]>('/thresholds')
+}
+
+export async function createThreshold(data: {
+  metric_name: string
+  threshold_value: number
+  condition: string
+  severity: string
+  description?: string | null
+}): Promise<ThresholdRecord> {
+  return requestJson('/thresholds', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateThreshold(id: number, data: {
+  metric_name?: string
+  threshold_value?: number
+  condition?: string
+  severity?: string
+  description?: string | null
+}): Promise<ThresholdRecord> {
+  return requestJson(`/thresholds/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteThreshold(id: number): Promise<{ detail: string }> {
+  return requestJson(`/thresholds/${id}`, { method: 'DELETE' })
+}
+
+// ── Monitoring Jobs ─────────────────────────────────────────────────────────
+
+export interface MonitoringJobRecord {
+  id: number
+  job_name: string
+  job_type: string
+  schedule: string
+  enabled: boolean
+  last_run?: string | null
+  next_run?: string | null
+  status: string
+  created_at: string
+}
+
+export async function listMonitoringJobs(): Promise<MonitoringJobRecord[]> {
+  return requestJson<MonitoringJobRecord[]>('/monitoring-jobs')
+}
+
+export async function createMonitoringJob(data: {
+  job_name: string
+  job_type: string
+  schedule: string
+  enabled?: boolean
+}): Promise<MonitoringJobRecord> {
+  return requestJson('/monitoring-jobs', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateMonitoringJob(id: number, data: {
+  job_name?: string
+  job_type?: string
+  schedule?: string
+  enabled?: boolean
+}): Promise<MonitoringJobRecord> {
+  return requestJson(`/monitoring-jobs/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteMonitoringJob(id: number): Promise<{ detail: string }> {
+  return requestJson(`/monitoring-jobs/${id}`, { method: 'DELETE' })
+}
+
+// ── Interfaces CRUD ─────────────────────────────────────────────────────────
+
+export async function createInterface(data: {
+  device_id: number
+  interface_name: string
+  status: string
+  speed?: string | null
+  traffic_in?: number
+  traffic_out?: number
+  packet_errors?: number
+}): Promise<InterfaceRecord> {
+  return requestJson('/interfaces', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateInterface(id: number, data: {
+  interface_name?: string
+  status?: string
+  speed?: string | null
+  traffic_in?: number
+  traffic_out?: number
+  packet_errors?: number
+}): Promise<InterfaceRecord> {
+  return requestJson(`/interfaces/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteInterface(id: number): Promise<{ detail: string }> {
+  return requestJson(`/interfaces/${id}`, { method: 'DELETE' })
+}
+
+// ── Device Credentials ──────────────────────────────────────────────────────
+
+export interface DeviceCredentialRecord {
+  id: number
+  device_id: number
+  credential_type: string
+  username?: string | null
+  created_at: string
+}
+
+export async function listDeviceCredentials(): Promise<DeviceCredentialRecord[]> {
+  return requestJson<DeviceCredentialRecord[]>('/device-credentials')
+}
+
+export async function createDeviceCredential(data: {
+  device_id: number
+  credential_type: string
+  username?: string | null
+  password?: string | null
+  community_string?: string | null
+  auth_password?: string | null
+  privacy_password?: string | null
+  api_token?: string | null
+}): Promise<DeviceCredentialRecord> {
+  return requestJson('/device-credentials', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateDeviceCredential(id: number, data: {
+  credential_type?: string
+  username?: string | null
+  password?: string | null
+  community_string?: string | null
+  auth_password?: string | null
+  privacy_password?: string | null
+  api_token?: string | null
+}): Promise<DeviceCredentialRecord> {
+  return requestJson(`/device-credentials/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteDeviceCredential(id: number): Promise<{ detail: string }> {
+  return requestJson(`/device-credentials/${id}`, { method: 'DELETE' })
+}
+
+// ── Device Types ────────────────────────────────────────────────────────────
+
+export interface DeviceTypeRecord {
+  id: number
+  type_name: string
+  description?: string | null
+  created_at: string
+}
+
+export async function listDeviceTypes(): Promise<DeviceTypeRecord[]> {
+  return requestJson<DeviceTypeRecord[]>('/device-types')
+}
+
+export async function createDeviceType(data: {
+  type_name: string
+  description?: string | null
+}): Promise<DeviceTypeRecord> {
+  return requestJson('/device-types', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateDeviceType(id: number, data: {
+  type_name?: string
+  description?: string | null
+}): Promise<DeviceTypeRecord> {
+  return requestJson(`/device-types/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteDeviceType(id: number): Promise<{ detail: string }> {
+  return requestJson(`/device-types/${id}`, { method: 'DELETE' })
+}
+
+// ── Audit Logs (Read-Only) ──────────────────────────────────────────────────
+
+export interface AuditLogRecord {
+  id: number
+  user_id?: number | null
+  action: string
+  resource_name: string
+  timestamp: string
+}
+
+export async function listAuditLogs(): Promise<AuditLogRecord[]> {
+  return requestJson<AuditLogRecord[]>('/audit-logs')
+}
+
+// ── Device Metrics CRUD ─────────────────────────────────────────────────────
+
+export async function createDeviceMetric(data: {
+  device_id: number
+  cpu_usage?: number | null
+  memory_usage?: number | null
+  disk_usage?: number | null
+  temperature?: number | null
+  latency?: number | null
+  packet_loss?: number | null
+  bandwidth_usage?: number | null
+}): Promise<DeviceMetricRecord> {
+  return requestJson('/device-metrics', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateDeviceMetric(id: number, data: {
+  cpu_usage?: number | null
+  memory_usage?: number | null
+  disk_usage?: number | null
+  temperature?: number | null
+  latency?: number | null
+  packet_loss?: number | null
+  bandwidth_usage?: number | null
+}): Promise<DeviceMetricRecord> {
+  return requestJson(`/device-metrics/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteDeviceMetric(id: number): Promise<{ detail: string }> {
+  return requestJson(`/device-metrics/${id}`, { method: 'DELETE' })
 }
