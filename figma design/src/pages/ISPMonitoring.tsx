@@ -5,6 +5,7 @@ import SNMPDiscoveryPanel from '../components/SNMPDiscoveryPanel'
 import SNMPSubnetDiscovery from '../components/SNMPSubnetDiscovery'
 import { PermissionGuard } from '../components/PermissionGuard'
 import { addDiscoveredDevices, checkStoredDevices, createDevice, createOrganization, createSite, deleteAllDevices, deleteDevice, detectLocalSubnet, listAlerts, listDevices, listInterfaces, listOrganizations, listSites, pingIps, startChunkedDiscovery, streamChunkedDiscovery, updateDevice, type AlertRecord, type ChunkedDiscoveryProgress, type DeviceRecord, type InterfaceRecord, type OrganizationRecord, type SiteRecord } from '../lib/api'
+import { confirmDanger, toast } from '../lib/swal'
 
 const moduleCatalog = [
   { key: 'icmp_discovery', label: 'ICMP', description: 'Ping reachability and host alive checks' },
@@ -650,29 +651,45 @@ export default function ISPMonitoring() {
   }
 
   const handleDeleteDevice = async (id: number, hostname: string) => {
-    if (!confirm(`Delete device "${hostname}"? This action cannot be undone.`)) return
+    const ok = await confirmDanger({
+      title: `Delete device "${hostname}"?`,
+      text: 'This action cannot be undone.',
+      confirmText: 'Delete',
+    })
+    if (!ok) return
     setCrudError('')
     setCrudMessage('')
     try {
       await deleteDevice(id)
       setDevices(prev => prev.filter(d => d.id !== id))
       setCrudMessage(`Device "${hostname}" deleted`)
+      toast.success(`Device "${hostname}" deleted`)
     } catch (err) {
-      setCrudError(err instanceof Error ? err.message : 'Failed to delete device')
+      const message = err instanceof Error ? err.message : 'Failed to delete device'
+      setCrudError(message)
+      toast.error(message)
     }
   }
 
   const handleDeleteAll = async () => {
     if (devices.length === 0) return
-    if (!confirm(`Delete ALL ${devices.length} devices? This will permanently remove all devices and their data from the database. This cannot be undone!`)) return
+    const ok = await confirmDanger({
+      title: `Delete all ${devices.length} devices?`,
+      text: 'This will permanently remove all devices and their data from the database. This cannot be undone.',
+      confirmText: 'Delete All',
+    })
+    if (!ok) return
     setCrudError('')
     setCrudMessage('')
     try {
       const result = await deleteAllDevices()
       setDevices([])
       setCrudMessage(`All ${result.deleted} devices deleted successfully`)
+      toast.success(`All ${result.deleted} devices deleted`)
     } catch (err) {
-      setCrudError(err instanceof Error ? err.message : 'Failed to delete all devices')
+      const message = err instanceof Error ? err.message : 'Failed to delete all devices'
+      setCrudError(message)
+      toast.error(message)
     }
   }
 

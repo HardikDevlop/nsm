@@ -5,15 +5,13 @@ import SNMPStatusBadge from '../components/SNMPStatusBadge'
 import SNMPHealthIndicator from '../components/SNMPHealthIndicator'
 import { useSNMPDeviceDetails, useStartModuleMonitoring, useStopModuleMonitoring, useUpdateModuleMonitoring, useInvalidateDeviceQueries } from '../hooks/useSnmpQueries'
 import { 
-  SNMPModuleCard, 
-  SNMPModuleShell, 
   getSupportedModuleConfigs, 
   getModuleConfig,
   MODULE_ORDER,
-  formatUptime,
   formatBytes,
-  getHealthColor
+  formatSpeed,
 } from '../modules';
+import { useLiveSNMPPoll, useMonitoringData } from '../modules/useSNMPModules'
 
 function formatUptimeLocal(seconds: number | undefined): string {
   if (!seconds || seconds <= 0) return '—'
@@ -23,6 +21,129 @@ function formatUptimeLocal(seconds: number | undefined): string {
   if (d > 0) return `${d}d ${h}h ${m}m`
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+function titleize(text: string): string {
+  return text.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function formatValue(value: any): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2)
+  if (typeof value === 'string') return value
+  if (typeof value === 'object' && value.display) return String(value.display)
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function formatMetricValue(key: string, value: any): string {
+  if (value === null || value === undefined) return '—'
+  if (key.includes('bytes') || key.includes('octets')) return formatBytes(Number(value))
+  if (key.includes('speed_bps')) return formatSpeed(Number(value))
+  if (key.includes('percent')) return `${Number(value).toFixed(1)}%`
+  if (key.includes('timestamp') || key.includes('polled_at') || key.includes('last_poll')) {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
+  }
+  return formatValue(value)
+}
+
+function findRows(data: any): any[] {
+  if (!data) return []
+  if (Array.isArray(data)) return data
+  for (const value of Object.values(data)) {
+    if (Array.isArray(value)) return value
+  }
+  return []
+}
+
+function getSummaryItems(data: any): Array<[string, any]> {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return []
+  return Object.entries(data)
+    .filter(([, value]) => !Array.isArray(value) && !(value && typeof value === 'object' && !('display' in value)))
+    .slice(0, 10)
+}
+
+function CollectorDataCard({ name, collector }: { name: string; collector: any }) {
+  const config = getModuleConfig(name)
+  const color = collector?.supported ? (config?.color || '#00d4ff') : '#ff3366'
+  const rows = findRows(collector?.data)
+  const summary = getSummaryItems(collector?.data)
+  const columns = rows.length > 0
+    ? Array.from(new Set(rows.flatMap(row => Object.keys(row || {})))).slice(0, 10)
+    : []
+
+  return (
+    <GlassCard className="overflow-hidden">
+      <div className="p-4" style={{ borderBottom: `1px solid ${color}33` }}>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="font-display font-bold text-sm tracking-wider" style={{ color }}>
+            {titleize(config?.label || name)}
+          </div>
+          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+            style={{ background: collector?.supported ? 'rgba(0,255,136,0.12)' : 'rgba(255,51,102,0.12)', color }}>
+            {collector?.supported ? 'SUPPORTED' : 'NOT SUPPORTED'}
+          </span>
+          {collector?.timestamp && <span className="font-mono text-[10px] ml-auto" style={{ color: '#667799' }}>{new Date(collector.timestamp).toLocaleString()}</span>}
+        </div>
+        {!collector?.supported && collector?.reason && (
+          <div className="font-mono text-xs mt-2" style={{ color: '#ffaa00' }}>{collector.reason}</div>
+        )}
+      </div>
+
+      {collector?.supported ? (
+        <>
+          {summary.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 p-4">
+              {summary.map(([key, value]) => (
+                <div key={key} className="p-2 rounded" style={{ background: 'rgba(8,25,55,0.45)', border: '1px solid rgba(0,212,255,0.08)' }}>
+                  <div className="font-mono text-[10px]" style={{ color: '#667799' }}>{titleize(key)}</div>
+                  <div className="font-mono text-xs mt-1 break-words" style={{ color: '#c8d8ee' }}>{formatMetricValue(key, value)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {rows.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full" style={{ minWidth: 900 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
+                    {columns.map(col => (
+                      <th key={col} className="text-left px-4 py-2 font-mono text-xs"
+                        style={{ color: '#8899bb', background: 'rgba(8,25,55,0.95)' }}>{titleize(col)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, index) => (
+                    <tr key={index} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
+                      {columns.map(col => (
+                        <td key={col} className="px-4 py-2 font-mono text-[10px] max-w-[260px] truncate" style={{ color: '#c8d8ee' }}>
+                          {formatMetricValue(col, row?.[col])}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {summary.length === 0 && rows.length === 0 && (
+            <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>Supported, but no rows stored yet.</div>
+          )}
+        </>
+      ) : (
+        <div className="p-4">
+          {collector?.missing?.length > 0 && (
+            <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>
+              Missing: {collector.missing.join(', ')}
+            </div>
+          )}
+        </div>
+      )}
+    </GlassCard>
+  )
 }
 
 export default function SNMPDeviceDetails() {
@@ -36,6 +157,13 @@ export default function SNMPDeviceDetails() {
   const updateMonitoring = useUpdateModuleMonitoring()
 
   const { data, isLoading, error, refetch } = useSNMPDeviceDetails(id)
+  const { data: monitoringData, error: monitoringError, refetch: refetchMonitoring } = useMonitoringData(id)
+  const { data: livePoll, isFetching: livePolling, error: livePollError, refetch: refetchLivePoll } = useLiveSNMPPoll(id)
+  const liveCollectors = livePoll?.collectors || {}
+  const liveCaps = Object.fromEntries(Object.entries(liveCollectors).map(([key, value]: [string, any]) => [key, value?.supported === true]))
+  const mergedCaps = { ...(data?.capabilities || {}), ...(monitoringData?.capabilities || {}), ...liveCaps }
+  const supportedModules = useMemo(() => getSupportedModuleConfigs(mergedCaps), [mergedCaps])
+  const allModuleConfigs = useMemo(() => MODULE_ORDER.map(moduleId => getModuleConfig(moduleId)).filter(Boolean), [])
 
   const [activeTab, setActiveTab] = useState<'overview' | 'monitoring' | 'metrics' | 'history'>('overview')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -80,6 +208,8 @@ export default function SNMPDeviceDetails() {
 
   const handleRefresh = () => {
     refetch()
+    refetchMonitoring()
+    refetchLivePoll()
   }
 
   if (isLoading) {
@@ -122,10 +252,10 @@ export default function SNMPDeviceDetails() {
   }
 
   const { device, snmp, capabilities, monitoring, latest_metrics, polling_history } = data
-  const caps = capabilities || {}
-
-  const supportedModules = useMemo(() => getSupportedModuleConfigs(caps), [caps])
-  const allModuleConfigs = useMemo(() => MODULE_ORDER.map(id => getModuleConfig(id)).filter(Boolean), [])
+  const caps = mergedCaps
+  const collectorEntries = Object.entries(liveCollectors)
+  const supportedCollectorEntries = collectorEntries.filter(([, collector]: [string, any]) => collector?.supported === true)
+  const unsupportedCollectorEntries = collectorEntries.filter(([, collector]: [string, any]) => collector?.supported !== true)
 
   const modulesWithConfig = allModuleConfigs.map(moduleConfig => {
     const config = monitoring.find(m => m.module_name === moduleConfig!.id)
@@ -187,6 +317,20 @@ export default function SNMPDeviceDetails() {
         <div className="font-mono text-xs p-3 rounded" style={{ color: '#ff3366', background: 'rgba(255,51,102,0.1)', border: '1px solid rgba(255,51,102,0.3)' }}>
           {errorMessage}
         </div>
+      )}
+
+      {(livePolling || livePollError || monitoringError || livePoll?.timestamp || livePoll?.collection_ms) && (
+        <GlassCard className="p-3">
+          <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
+            <span style={{ color: livePolling ? '#ffaa00' : livePollError ? '#ff3366' : '#00ff88' }}>
+              {livePolling ? 'Polling live SNMP...' : livePollError ? 'Live poll unavailable' : 'Live SNMP data active'}
+            </span>
+            {livePoll?.collection_ms != null && <span style={{ color: '#8899bb' }}>{livePoll.collection_ms} ms</span>}
+            {livePoll?.timestamp && <span style={{ color: '#8899bb' }}>Updated {new Date(livePoll.timestamp).toLocaleString()}</span>}
+            {livePollError && <span className="truncate" style={{ color: '#ff6688' }}>{livePollError.message}</span>}
+            {!livePollError && monitoringError && <span className="truncate" style={{ color: '#ffaa00' }}>DB latest fallback: {monitoringError.message}</span>}
+          </div>
+        </GlassCard>
       )}
 
       {/* Tabs */}
@@ -324,17 +468,17 @@ export default function SNMPDeviceDetails() {
               style={{ border: `1px solid #7c3aed33`, background: `#7c3aed0d`, color: '#7c3aed' }}>
               <div className="font-semibold">MONITORING</div>
             </button>
-            <button key="oids" onClick={() => navigate(`/snmp/oids/${id}`)}
+            <button key="oids" onClick={() => navigate(`/snmp/devices/${id}/oids`)}
               className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
               style={{ border: `1px solid #14b8a633`, background: `#14b8a60d`, color: '#14b8a6' }}>
               <div className="font-semibold">OID EXPLORER</div>
             </button>
-            <button key="polling" onClick={() => navigate(`/snmp/polling/${id}`)}
+            <button key="polling" onClick={() => navigate(`/snmp/devices/${id}/polling`)}
               className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
               style={{ border: `1px solid #f9731633`, background: `#f973160d`, color: '#f97316' }}>
               <div className="font-semibold">POLLING</div>
             </button>
-            <button key="topology" onClick={() => navigate(`/snmp/topology/${id}`)}
+            <button key="topology" onClick={() => navigate(`/snmp/devices/${id}/topology`)}
               className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
               style={{ border: `1px solid #6366f133`, background: `#6366f10d`, color: '#6366f1' }}>
               <div className="font-semibold">TOPOLOGY</div>
@@ -345,6 +489,35 @@ export default function SNMPDeviceDetails() {
               <div className="font-semibold">↑ DEVICES</div>
             </button>
           </div>
+
+          {collectorEntries.length > 0 && (
+            <div className="space-y-4">
+              <div>
+                <div className="font-display font-bold text-sm tracking-wider neon-cyan">LIVE SNMP DATA</div>
+                <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+                  Showing every collector returned by the API. Supported data is expanded; unsupported modules keep their reason.
+                </div>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {supportedCollectorEntries.map(([name, collector]) => (
+                  <CollectorDataCard key={name} name={name} collector={collector} />
+                ))}
+              </div>
+              {unsupportedCollectorEntries.length > 0 && (
+                <GlassCard className="p-4">
+                  <div className="font-display font-bold text-sm tracking-wider mb-3" style={{ color: '#ff3366' }}>NOT SUPPORTED</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {unsupportedCollectorEntries.map(([name, collector]: [string, any]) => (
+                      <div key={name} className="p-3 rounded" style={{ background: 'rgba(255,51,102,0.05)', border: '1px solid rgba(255,51,102,0.12)' }}>
+                        <div className="font-mono text-xs font-semibold" style={{ color: '#ff3366' }}>{titleize(name)}</div>
+                        <div className="font-mono text-[10px] mt-1" style={{ color: '#ffaa00' }}>{collector?.reason || 'No data returned by this collector.'}</div>
+                      </div>
+                    ))}
+                  </div>
+                </GlassCard>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -496,6 +669,14 @@ export default function SNMPDeviceDetails() {
       {/* METRICS TAB */}
       {activeTab === 'metrics' && (
         <>
+          {collectorEntries.length > 0 && (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {supportedCollectorEntries.map(([name, collector]) => (
+                <CollectorDataCard key={name} name={name} collector={collector} />
+              ))}
+            </div>
+          )}
+
           {/* CPU */}
           {latest_metrics.cpu && (
             <GlassCard className="p-4">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
 import { listAlerts, listDevices, getMonitoringStatus, streamMonitoring, clearAllAlerts, type AlertRecord, type DeviceRecord } from '../lib/api'
+import { confirmDanger, toast } from '../lib/swal'
 
 type Sev = 'critical' | 'high' | 'medium' | 'low'
 type Status = 'open' | 'investigating' | 'resolved'
@@ -169,13 +170,21 @@ export default function Incidents() {
   const downCount = deviceRows.filter(d => d.status === 'DOWN' || d.status === 'OFFLINE').length
 
   const handleClearAll = async () => {
-    if (!confirm(`Clear all ${alerts.length} alerts? This cannot be undone.`)) return
+    const ok = await confirmDanger({
+      title: `Clear all ${alerts.length} alerts?`,
+      text: 'This cannot be undone.',
+      confirmText: 'Clear',
+    })
+    if (!ok) return
     try {
       await clearAllAlerts()
       setAlerts([])
       setError(null)
+      toast.success('All alerts cleared')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to clear alerts')
+      const message = err instanceof Error ? err.message : 'Failed to clear alerts'
+      setError(message)
+      toast.error(message)
     }
   }
 

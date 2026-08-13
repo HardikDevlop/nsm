@@ -1,11 +1,29 @@
 import { useParams } from 'react-router'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
-import { getModuleConfig, getHealthColor, getStatusColor, formatBytes, formatSpeed } from '../modules/snmpModuleRegistry'
+import { getModuleConfig, getHealthColor } from '../modules/snmpModuleRegistry'
 import GlassCard from '../components/GlassCard'
-import SNMPDynamicTable from '../components/SNMPDynamicTable'
 import SNMPMetricChart from '../components/SNMPMetricChart'
+import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { useModuleData, useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
 import { useLatestCPU } from '../hooks/useSnmpQueries'
+
+function normalizePerCore(value: any): Array<{ id: string; percent: number }> {
+  if (!value) return []
+  if (Array.isArray(value)) {
+    return value
+      .map((core, index) => ({
+        id: String(core?.index ?? core?.core ?? index),
+        percent: Number(core?.percent ?? core?.usage ?? core),
+      }))
+      .filter(core => Number.isFinite(core.percent))
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([id, percent]) => ({ id, percent: Number((percent as any)?.percent ?? (percent as any)?.usage ?? percent) }))
+      .filter(core => Number.isFinite(core.percent))
+  }
+  return []
+}
 
 export default function SNMPCPUMonitoring() {
   const { deviceId } = useParams<{ deviceId: string }>()
@@ -19,9 +37,20 @@ export default function SNMPCPUMonitoring() {
   // NEW: Use our working monitoring API
   const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
   
-  // Extract CPU data from monitoring API response
+  // Extract CPU data from all available APIs. Prefer direct/live data, then DB/cache fallbacks.
   const cpuModuleData = monitoringData?.modules?.cpu
-  const supported = monitoringData?.capabilities?.cpu === true || caps?.cpu === true
+  const stats = data as any
+  const history = stats?.history || []
+  const cpuData = stats?.data || cpuModuleData?.data || latestCPU || {}
+  const currentUsage = cpuData?.overall_percent ?? cpuData?.utilization_percent ?? latestCPU?.current_usage ?? stats?.overall_percent
+  const perCore = normalizePerCore(cpuData?.per_core ?? latestCPU?.per_core)
+  const hasCpuData = Object.keys(cpuData || {}).length > 0 || perCore.length > 0 || currentUsage !== undefined
+  const supported =
+    monitoringData?.capabilities?.cpu === true ||
+    caps?.cpu === true ||
+    stats?.supported === true ||
+    cpuModuleData?.supported === true ||
+    hasCpuData
 
   // Debug logging
   console.log('CPU Module Debug:', {
@@ -46,13 +75,15 @@ export default function SNMPCPUMonitoring() {
     )
   }
 
-  const stats = data as any
-  const history = stats?.history || []
-  
-  // Use data from our working monitoring API first
-  const cpuData = cpuModuleData?.data
-  const currentUsage = cpuData?.utilization_percent ?? latestCPU?.current_usage ?? stats?.data?.overall_percent ?? stats?.overall_percent
   const health = currentUsage !== undefined && currentUsage >= 90 ? 'critical' : currentUsage !== undefined && currentUsage >= 70 ? 'warning' : 'healthy'
+  const cpuCollector = {
+    collector: 'cpu',
+    supported: true,
+    timestamp: stats?.timestamp || cpuModuleData?.timestamp || cpuData?.polled_at,
+    data: cpuData,
+    missing: stats?.missing || [],
+    warnings: stats?.warnings || [],
+  }
 
   // Debug logging
   console.log('CPU Stats Data:', { 
@@ -70,10 +101,10 @@ export default function SNMPCPUMonitoring() {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
         {[
           { label: 'Current', value: currentUsage !== undefined ? `${currentUsage.toFixed(1)}%` : '—', color: currentUsage !== undefined && currentUsage >= 90 ? '#ff3366' : currentUsage !== undefined && currentUsage >= 70 ? '#ffaa00' : '#00ff88' },
-          { label: 'Average', value: (cpuData?.average_percent ?? stats?.data?.average_percent ?? stats?.average) !== undefined ? `${(cpuData?.average_percent ?? stats?.data?.average_percent ?? stats?.average).toFixed(1)}%` : '—', color: '#00d4ff' },
-          { label: 'Load 1m', value: (cpuData?.load_avg?.['1min'] ?? stats?.data?.load_avg?.['1min'] ?? stats?.load_1min) !== undefined ? `${(cpuData?.load_avg?.['1min'] ?? stats?.data?.load_avg?.['1min'] ?? stats?.load_1min).toFixed(2)}` : '—', color: '#ffaa00' },
-          { label: 'Load 5m', value: (cpuData?.load_avg?.['5min'] ?? stats?.data?.load_avg?.['5min'] ?? stats?.load_5min) !== undefined ? `${(cpuData?.load_avg?.['5min'] ?? stats?.data?.load_avg?.['5min'] ?? stats?.load_5min).toFixed(2)}` : '—', color: '#7c3aed' },
-          { label: 'Source', value: cpuData ? 'DB Latest' : stats?.data?.source ?? stats?.source ?? '—', color: '#00d4ff' },
+          { label: 'Average', value: cpuData?.average_percent !== undefined ? `${cpuData.average_percent.toFixed(1)}%` : '—', color: '#00d4ff' },
+          { label: 'Cores', value: String(cpuData?.core_count ?? (perCore.length || '—')), color: '#34d399' },
+          { label: 'Load 1m', value: cpuData?.load_avg?.['1min'] !== undefined ? `${Number(cpuData.load_avg['1min']).toFixed(2)}` : '—', color: '#ffaa00' },
+          { label: 'Source', value: cpuData?.source ?? (cpuModuleData?.data ? 'DB Cache' : latestCPU ? 'DB Latest' : '—'), color: '#00d4ff' },
         ].map(tile => (
           <GlassCard key={tile.label} className="p-4 text-center">
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
@@ -97,9 +128,9 @@ export default function SNMPCPUMonitoring() {
             Last Poll: {new Date(cpuData?.polled_at || stats.timestamp).toLocaleString()}
           </span>
         )}
-        {stats?.data?.display && (
+        {cpuData?.display && (
           <span className="font-mono text-xs" style={{ color: '#00d4ff' }}>
-            Display: {stats.data.display}
+            Display: {cpuData.display}
           </span>
         )}
       </div>
@@ -131,16 +162,15 @@ export default function SNMPCPUMonitoring() {
       </GlassCard>
 
       {/* Per Core */}
-      {(cpuData?.per_core || (stats?.data?.per_core && stats.data.per_core.length > 0)) && (
+      {perCore.length > 0 && (
         <GlassCard className="p-4 mb-4">
           <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-4">PER CORE USAGE</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-            {Object.entries(cpuData?.per_core || {}).length > 0 
-              ? Object.entries(cpuData.per_core).map(([coreId, usage]: [string, any]) => {
-                  const pct = typeof usage === 'number' ? usage : usage?.usage ?? 0
+            {perCore.map(core => {
+                  const pct = core.percent
                   const coreColor = pct >= 90 ? '#ff3366' : pct >= 70 ? '#ffaa00' : '#00ff88'
                   return (
-                    <div key={coreId} className="text-center">
+                    <div key={core.id} className="text-center">
                       <svg width="56" height="56" viewBox="0 0 56 56" className="mx-auto">
                         <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(0,212,255,0.1)" strokeWidth="4" />
                         <circle
@@ -158,42 +188,16 @@ export default function SNMPCPUMonitoring() {
                         </text>
                       </svg>
                       <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
-                        Core {coreId}
+                        Core {core.id}
                       </div>
                     </div>
                   )
-                })
-              : stats.data.per_core.map((core: any, idx: number) => {
-                  const pct = core.usage ?? core
-                  const coreColor = pct >= 90 ? '#ff3366' : pct >= 70 ? '#ffaa00' : '#00ff88'
-                  return (
-                    <div key={core.core ?? idx} className="text-center">
-                      <svg width="56" height="56" viewBox="0 0 56 56" className="mx-auto">
-                        <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(0,212,255,0.1)" strokeWidth="4" />
-                        <circle
-                          cx="28" cy="28" r="22"
-                          fill="none"
-                          stroke={coreColor}
-                          strokeWidth="4"
-                          strokeDasharray={`${(pct / 100) * 138.2} 138.2`}
-                          strokeLinecap="round"
-                          transform="rotate(-90 28 28)"
-                          style={{ transition: 'stroke-dasharray 0.5s ease' }}
-                        />
-                        <text x="28" y="33" textAnchor="middle" fontSize="11" fontFamily="monospace" fill={coreColor}>
-                          {pct.toFixed(0)}%
-                        </text>
-                      </svg>
-                      <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
-                        Core {core.core ?? idx}
-                      </div>
-                    </div>
-                  )
-                })
-            }
+            })}
           </div>
         </GlassCard>
       )}
+
+      <SNMPCollectorDataCard name="cpu" collector={cpuCollector} />
 
       {/* History Table */}
       {history.length > 0 && (

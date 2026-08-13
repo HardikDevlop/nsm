@@ -221,13 +221,90 @@ export const SNMP_MODULES: Record<string, SNMPModuleConfig> = {
       { key: 'last_updated', label: 'Last Updated', sortable: true, type: 'timestamp' },
     ],
   },
+  cdp: {
+    id: 'cdp',
+    label: 'CDP',
+    icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M15 7a3 3 0 11-6 0 3 3 0 016 0z',
+    color: '#22d3ee',
+    route: 'cdp',
+    apiEndpoint: '/snmp/devices/{deviceId}/cdp',
+    queryKey: ['snmp', 'cdp'],
+    supportedCheck: (caps) => caps.cdp === true,
+    summaryFields: ['neighbors'],
+  },
+  arp: {
+    id: 'arp',
+    label: 'ARP',
+    icon: 'M4 7h16M4 12h16M4 17h16',
+    color: '#fb7185',
+    route: 'arp',
+    apiEndpoint: '/snmp/devices/{deviceId}/arp',
+    queryKey: ['snmp', 'arp'],
+    supportedCheck: (caps) => caps.arp === true,
+    summaryFields: ['entries'],
+  },
+  mac_table: {
+    id: 'mac_table',
+    label: 'MAC Table',
+    icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+    color: '#38bdf8',
+    route: 'mac_table',
+    apiEndpoint: '/snmp/devices/{deviceId}/mac-table',
+    queryKey: ['snmp', 'mac-table'],
+    supportedCheck: (caps) => caps.mac_table === true,
+    summaryFields: ['entries'],
+  },
+  firewall: {
+    id: 'firewall',
+    label: 'Firewall',
+    icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+    color: '#f43f5e',
+    route: 'firewall',
+    apiEndpoint: '/snmp/devices/{deviceId}/firewall',
+    queryKey: ['snmp', 'firewall'],
+    supportedCheck: (caps) => caps.firewall === true,
+    summaryFields: ['sessions', 'policies'],
+  },
+  wireless: {
+    id: 'wireless',
+    label: 'Wireless',
+    icon: 'M5 12.55a11 11 0 0114.08 0M8.5 16.05a6 6 0 017 0M12 20h.01',
+    color: '#2dd4bf',
+    route: 'wireless',
+    apiEndpoint: '/snmp/devices/{deviceId}/wireless',
+    queryKey: ['snmp', 'wireless'],
+    supportedCheck: (caps) => caps.wireless === true,
+    summaryFields: ['ssids', 'clients'],
+  },
+  inventory: {
+    id: 'inventory',
+    label: 'Inventory',
+    icon: 'M3 7h18M5 7v12h14V7M9 11h6',
+    color: '#eab308',
+    route: 'inventory',
+    apiEndpoint: '/snmp/devices/{deviceId}/inventory',
+    queryKey: ['snmp', 'inventory'],
+    supportedCheck: (caps) => caps.inventory === true,
+    summaryFields: ['items'],
+  },
+  health: {
+    id: 'health',
+    label: 'Health',
+    icon: 'M20 6L9 17l-5-5',
+    color: '#00ff88',
+    route: 'health',
+    apiEndpoint: '/snmp/devices/{deviceId}/health',
+    queryKey: ['snmp', 'health'],
+    supportedCheck: (caps) => caps.health !== false,
+    summaryFields: ['status', 'reachable', 'snmp_enabled', 'alarm_count'],
+  },
   topology: {
     id: 'topology',
     label: 'Topology',
     icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9',
     color: '#6366f1',
     route: 'topology',
-    apiEndpoint: '/snmp/topology',
+    apiEndpoint: '/snmp/devices/{deviceId}/device-topology',
     queryKey: ['snmp', 'topology'],
     supportedCheck: (caps) => caps.topology === true || caps.lldp === true,
     summaryFields: ['devices', 'links'],
@@ -279,8 +356,15 @@ export const MODULE_ORDER = [
   'environment',
   'vlan',
   'lldp',
+  'cdp',
   'routing',
+  'arp',
+  'mac_table',
+  'firewall',
+  'wireless',
+  'inventory',
   'topology',
+  'health',
   'oids',
   'polling',
 ];
@@ -312,7 +396,8 @@ export function formatBytes(bytes: number | undefined | null): string {
 }
 
 export function formatSpeed(bps: number | undefined | null): string {
-  if (!bps) return '—';
+  if (bps === undefined || bps === null || !Number.isFinite(Number(bps)) || Number(bps) === 0) return '—';
+  bps = Number(bps);
   if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(1)} Gbps`;
   if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
   if (bps >= 1000) return `${(bps / 1000).toFixed(1)} Kbps`;
@@ -320,8 +405,8 @@ export function formatSpeed(bps: number | undefined | null): string {
 }
 
 export function formatRate(mbps: number | undefined | null): string {
-  if (mbps === undefined || mbps === null) return '—';
-  return `${mbps.toFixed(2)} Mbps`;
+  if (mbps === undefined || mbps === null || !Number.isFinite(Number(mbps))) return '—';
+  return `${Number(mbps).toFixed(2)} Mbps`;
 }
 
 export function formatSensorValue(sensor: any): string {

@@ -90,6 +90,7 @@ def get_monitoring_data(
     
     if dc:
         result["capabilities"] = dc.to_map()
+    capability_detail = dc.capability_detail if dc and isinstance(dc.capability_detail, dict) else {}
     
     # Get monitoring configurations
     configs = db.query(MonitoringConfig).filter(
@@ -415,7 +416,7 @@ def get_monitoring_data(
         inventory_data = device_samples.get("inventory") if "inventory" in device_samples else None
         
         result["modules"]["inventory"] = {
-            "supported": result["capabilities"].get("inventory", True),  # Most devices support inventory
+            "supported": result["capabilities"].get("inventory", False),
             "data": inventory_data,
             "history": [],
         }
@@ -435,7 +436,7 @@ def get_monitoring_data(
         topology_data = device_samples.get("topology") if "topology" in device_samples else None
         
         result["modules"]["topology"] = {
-            "supported": result["capabilities"].get("topology", True),  # Most devices support topology discovery
+            "supported": result["capabilities"].get("topology", False),
             "data": topology_data,
             "history": [],
         }
@@ -467,6 +468,33 @@ def get_monitoring_data(
             "data": env_data,
             "history": [],
         }
+
+    for module in request.modules:
+        cached = capability_detail.get(module) if isinstance(capability_detail.get(module), dict) else None
+        if not cached:
+            continue
+        current = result["modules"].get(module)
+        cached_supported = cached.get("supported") is True
+        cached_data = cached.get("data")
+        if current is None:
+            result["modules"][module] = {
+                "supported": cached_supported,
+                "data": cached_data if cached_supported else None,
+                "history": [],
+                "timestamp": cached.get("timestamp"),
+                "reason": cached.get("reason"),
+                "missing": cached.get("missing", []),
+                "warnings": cached.get("warnings", []),
+            }
+            result["capabilities"][module] = cached_supported
+            continue
+        if current.get("data") is None and cached_supported:
+            current["data"] = cached_data
+        current["supported"] = current.get("supported") or cached_supported
+        current["timestamp"] = current.get("timestamp") or cached.get("timestamp")
+        current["reason"] = current.get("reason") or cached.get("reason")
+        current["missing"] = current.get("missing") or cached.get("missing", [])
+        current["warnings"] = current.get("warnings") or cached.get("warnings", [])
     
     return result
 

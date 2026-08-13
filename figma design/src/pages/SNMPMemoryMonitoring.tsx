@@ -3,6 +3,7 @@ import { SNMPModuleShell } from '../modules/SNMPModuleShell'
 import { getModuleConfig, getHealthColor, getStatusColor, formatBytes } from '../modules/snmpModuleRegistry'
 import GlassCard from '../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
+import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { useModuleData, useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
 import { useLatestMemory } from '../hooks/useSnmpQueries'
 
@@ -25,9 +26,17 @@ export default function SNMPMemoryMonitoring() {
   // NEW: Use our working monitoring API
   const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
   
-  // Extract Memory data from monitoring API response
+  // Extract Memory data from all available APIs. Prefer DB/cache plus direct/live fallback.
   const memoryModuleData = monitoringData?.modules?.memory
-  const supported = monitoringData?.capabilities?.memory === true || caps?.memory === true
+  const stats = data as any
+  const memoryData = memoryModuleData?.data || stats?.data || latestMemory || {}
+  const hasMemoryData = Object.keys(memoryData || {}).length > 0
+  const supported =
+    monitoringData?.capabilities?.memory === true ||
+    caps?.memory === true ||
+    stats?.supported === true ||
+    memoryModuleData?.supported === true ||
+    hasMemoryData
 
   if (!supported) {
     return (
@@ -37,11 +46,7 @@ export default function SNMPMemoryMonitoring() {
     )
   }
 
-  const stats = data as any
   const history = stats?.history || []
-  
-  // Use data from our working monitoring API first
-  const memoryData = memoryModuleData?.data
   const utilization = memoryData?.utilization_percent ?? latestMemory?.utilization_percent ?? stats?.data?.utilization_percent ?? stats?.utilization_percent
   const totalBytes = memoryData?.total_bytes ?? stats?.data?.total_bytes ?? stats?.total_bytes
   const usedBytes = memoryData?.used_bytes ?? stats?.data?.used_bytes ?? stats?.used_bytes
@@ -50,6 +55,14 @@ export default function SNMPMemoryMonitoring() {
   const bufferBytes = memoryData?.buffer_bytes ?? stats?.data?.buffer_bytes ?? stats?.buffer_bytes
   
   const health = memoryHealth(utilization)
+  const memoryCollector = {
+    collector: 'memory',
+    supported: true,
+    timestamp: stats?.timestamp || memoryModuleData?.timestamp || memoryData?.polled_at,
+    data: memoryData,
+    missing: stats?.missing || [],
+    warnings: stats?.warnings || [],
+  }
 
   // Debug logging
   console.log('Memory Stats Data:', { 
@@ -183,6 +196,8 @@ export default function SNMPMemoryMonitoring() {
           </div>
         </div>
       </GlassCard>
+
+      <SNMPCollectorDataCard name="memory" collector={memoryCollector} />
 
       {/* History Table */}
       {history.length > 0 && (

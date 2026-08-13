@@ -5,6 +5,7 @@ import SNMPDiscoveryPanel from '../components/SNMPDiscoveryPanel'
 import { useSNMPDevices, usePrefetchDeviceDetails, useInvalidateDeviceQueries } from '../hooks/useSnmpQueries'
 import { updateDevice, deleteDevice } from '../lib/api'
 import { useAuth } from '../components/AuthContext'
+import { confirmDanger, toast } from '../lib/swal'
 
 const STATUS_COLORS: Record<string, { dot: string; text: string }> = {
   online: { dot: '#00ff88', text: '#00ff88' },
@@ -372,15 +373,20 @@ export default function SNMPDevicesPage() {
     const device = devices.find(d => d.id === deviceId)
     const deviceName = device?.name || device?.hostname || device?.ip_address || `device-${deviceId}`
     
-    if (!isSuperAdmin || !window.confirm(
-      `Delete device "${deviceName}"?\n\nThis will:\n- Remove the device from monitoring\n- Delete all collected metrics\n- Stop all monitoring jobs\n\nThis action cannot be undone.`
-    )) return
+    if (!isSuperAdmin) return
+    const ok = await confirmDanger({
+      title: `Delete device "${deviceName}"?`,
+      text: 'This will remove the device from monitoring, delete collected metrics, and stop monitoring jobs. This action cannot be undone.',
+      confirmText: 'Delete',
+    })
+    if (!ok) return
 
     setDeleting(deviceId)
     try {
       await deleteDevice(deviceId)
       refetch() // Refresh the device list
       setError(null)
+      toast.success(`Device "${deviceName}" deleted`)
       
       // Show success message
       setError(`Device "${deviceName}" deleted successfully`)

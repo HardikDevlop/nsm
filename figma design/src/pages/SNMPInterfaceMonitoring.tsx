@@ -1,8 +1,9 @@
+import { useMemo } from 'react'
 import { useParams } from 'react-router'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
-import { getModuleConfig, getHealthColor, getStatusColor, formatBytes, formatSpeed } from '../modules/snmpModuleRegistry'
+import { formatBytes, formatSpeed } from '../modules/snmpModuleRegistry'
 import GlassCard from '../components/GlassCard'
-import SNMPDynamicTable from '../components/SNMPDynamicTable'
+import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { useModuleData, useDeviceCapabilities } from '../modules/useSNMPModules'
 import { useLatestInterfaces } from '../hooks/useSnmpQueries'
 
@@ -14,18 +15,59 @@ function interfaceHealth(util: number | undefined, status: string): 'healthy' | 
   return 'healthy'
 }
 
+function asNumber(value: any): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function formatInterfaceSpeed(iface: any): string {
+  if (iface?.speed_label) return String(iface.speed_label)
+  const speed = asNumber(iface?.speed_bps)
+  return speed !== undefined ? formatSpeed(speed) : '—'
+}
+
+function formatTraffic(iface: any, direction: 'rx' | 'tx'): string {
+  const mbps = asNumber(direction === 'rx' ? iface?.rx_mbps : iface?.tx_mbps)
+  if (mbps !== undefined) return `${mbps.toFixed(2)} Mbps`
+
+  const bps = asNumber(direction === 'rx' ? iface?.rx_bps : iface?.tx_bps)
+  if (bps !== undefined) return `${formatSpeed(bps)}/s`
+
+  const octets = asNumber(direction === 'rx' ? (iface?.rx_octets ?? iface?.in_octets) : (iface?.tx_octets ?? iface?.out_octets))
+  return octets !== undefined ? formatBytes(octets) : '—'
+}
+
 export default function SNMPInterfaceMonitoring() {
   const { deviceId } = useParams<{ deviceId: string }>()
   const id = Number(deviceId)
-  const moduleConfig = getModuleConfig('interfaces')!
 
   const { data: caps } = useDeviceCapabilities(id)
   const { data, isLoading, error } = useModuleData(id, 'interfaces')
   const { data: latestInterfaces } = useLatestInterfaces(id)
 
-  const supported = caps?.interfaces === true
+  const livePayload = data as any
+  const liveData = livePayload?.data ?? {}
+  const interfaces = useMemo(() => {
+    const rows = Array.isArray(liveData?.interfaces)
+      ? liveData.interfaces
+      : Array.isArray(livePayload)
+        ? livePayload
+        : []
+    return rows.length > 0 ? rows : (latestInterfaces || [])
+  }, [latestInterfaces, liveData?.interfaces, livePayload])
+  const supported = caps?.interfaces === true || livePayload?.supported === true || interfaces.length > 0
+  const interfaceCollector = {
+    collector: 'interfaces',
+    supported: true,
+    timestamp: livePayload?.timestamp || interfaces.find(i => i.last_poll || i.polled_at || i.last_updated)?.last_poll,
+    data: Object.keys(liveData || {}).length > 0 ? liveData : { interfaces },
+    reason: livePayload?.reason,
+    missing: livePayload?.missing || [],
+    warnings: livePayload?.warnings || [],
+  }
 
-  if (!supported) {
+  if (!isLoading && !supported && !interfaces.length) {
     return (
       <SNMPModuleShell module="interfaces" title="Interface Monitoring" unsupportedMessage="Interface monitoring is not supported by this device.">
         <div />
@@ -33,23 +75,34 @@ export default function SNMPInterfaceMonitoring() {
     )
   }
 
-  // Backend returns data.interfaces array
-  const interfaces = (data as any)?.data?.interfaces ?? (data as any[]) ?? (latestInterfaces || [])
   const upCount = interfaces.filter(i => (i.oper_status ?? '').toUpperCase() === 'UP').length
   const downCount = interfaces.filter(i => (i.oper_status ?? '').toUpperCase() === 'DOWN' || i.oper_status === 'down').length
-
-  // Debug logging
-  console.log('Interfaces Data:', { data, interfaces, latestInterfaces })
+  const maxSpeed = interfaces.length > 0 ? Math.max(...interfaces.map(i => asNumber(i.speed_bps) || 0)) : 0
+  const updatedAt = livePayload?.timestamp || interfaces.find(i => i.last_poll || i.polled_at || i.last_updated)?.last_poll || interfaces.find(i => i.last_updated)?.last_updated
 
   return (
     <SNMPModuleShell module="interfaces" title="Interface Monitoring" showMonitoringControls={true}>
+      {(isLoading || error || livePayload?.reason || updatedAt) && (
+        <GlassCard className="p-3">
+          <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
+            <span style={{ color: isLoading ? '#ffaa00' : error ? '#ff3366' : '#00ff88' }}>
+              {isLoading ? 'Polling live SNMP...' : error ? 'Live poll failed' : 'Live data active'}
+            </span>
+            {updatedAt && <span style={{ color: '#8899bb' }}>Updated {new Date(updatedAt).toLocaleString()}</span>}
+            {livePayload?.collection_ms != null && <span style={{ color: '#8899bb' }}>{livePayload.collection_ms} ms</span>}
+            {error && <span className="truncate" style={{ color: '#ff6688' }}>{error.message}</span>}
+            {!error && livePayload?.reason && <span className="truncate" style={{ color: '#ffaa00' }}>{livePayload.reason}</span>}
+          </div>
+        </GlassCard>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         {[
           { label: 'Total', value: interfaces.length, color: '#00d4ff' },
           { label: 'UP', value: upCount, color: '#00ff88' },
           { label: 'DOWN', value: downCount, color: downCount > 0 ? '#ff3366' : '#00ff88' },
-          { label: 'Max Speed', value: formatSpeed(Math.max(...interfaces.map(i => i.speed_bps || 0))), color: '#ffaa00' },
+          { label: 'Max Speed', value: formatSpeed(maxSpeed), color: '#ffaa00' },
         ].map(tile => (
           <GlassCard key={tile.label} className="p-4 text-center">
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
@@ -68,6 +121,11 @@ export default function SNMPInterfaceMonitoring() {
           </div>
         </div>
         <div className="overflow-x-auto">
+          {interfaces.length === 0 ? (
+            <div className="font-mono text-xs text-center py-8" style={{ color: '#8899bb' }}>
+              No interface rows yet. Start interface monitoring or use REFRESH after SNMP credentials are verified.
+            </div>
+          ) : (
           <table className="w-full" style={{ minWidth: 1100 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
@@ -123,16 +181,16 @@ export default function SNMPInterfaceMonitoring() {
                       </span>
                     </td>
                     <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      {formatSpeed(iface.speed_bps)}
+                      {formatInterfaceSpeed(iface)}
                     </td>
                     <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
                       {iface.mac_address ?? iface.mac ?? '—'}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#00ff88' }}>
-                      {formatBytes((iface.rx_mbps ? iface.rx_mbps * 1_000_000 / 8 : iface.rx_octets) ?? (iface.in_octets ?? 0))}/s
+                      {formatTraffic(iface, 'rx')}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#ff6644' }}>
-                      {formatBytes((iface.tx_mbps ? iface.tx_mbps * 1_000_000 / 8 : iface.tx_octets) ?? (iface.out_octets ?? 0))}/s
+                      {formatTraffic(iface, 'tx')}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: iface.utilization_percent && iface.utilization_percent >= 90 ? '#ff3366' : iface.utilization_percent && iface.utilization_percent >= 75 ? '#ffaa00' : '#ffaa00' }}>
                       {iface.utilization_percent !== null && iface.utilization_percent !== undefined ? `${iface.utilization_percent.toFixed(1)}%` : '—'}
@@ -148,8 +206,11 @@ export default function SNMPInterfaceMonitoring() {
               })}
             </tbody>
           </table>
+          )}
         </div>
       </GlassCard>
+
+      <SNMPCollectorDataCard name="interfaces" collector={interfaceCollector} />
     </SNMPModuleShell>
   )
 }

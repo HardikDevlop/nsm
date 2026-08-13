@@ -208,6 +208,25 @@ class SNMPPoller:
         now = datetime.utcnow()
 
         try:
+            cap = self.db.query(DeviceCapabilities).filter(
+                DeviceCapabilities.device_id == device_id
+            ).first()
+            if cap:
+                detail = dict(cap.capability_detail or {})
+                existing = detail.get(module, {}) if isinstance(detail.get(module), dict) else {}
+                detail[module] = {
+                    **existing,
+                    "collector": module,
+                    "supported": supported,
+                    "timestamp": now.isoformat(),
+                    "data": data or existing.get("data") or {},
+                    "missing": existing.get("missing", []),
+                    "warnings": existing.get("warnings", []),
+                    "reason": None if supported else existing.get("reason") or "Module not supported",
+                }
+                cap.capability_detail = detail
+                cap.updated_at = now
+
             if module == "cpu" and data:
                 await self._persist_cpu(device_id, data, now)
             elif module == "memory" and data:
@@ -239,7 +258,11 @@ class SNMPPoller:
             latest = LatestCPU(device_id=device_id)
             self.db.add(latest)
         latest.utilization_percent = overall
-        latest.per_core = {str(c.get("core")): c.get("usage") for c in per_core if isinstance(c, dict)}
+        latest.per_core = {
+            str(c.get("index") or c.get("core")): c.get("percent") if c.get("percent") is not None else c.get("usage")
+            for c in per_core
+            if isinstance(c, dict) and (c.get("index") is not None or c.get("core") is not None)
+        }
         latest.load_avg = load_avg
         latest.polled_at = now
 
@@ -354,11 +377,17 @@ class SNMPPoller:
             if not if_index:
                 continue
 
-            # Find interface record
+            iface_name = iface.get("name") or iface.get("description") or f"IF-{if_index}"
+
+            # Find or create legacy interface row; latest/history tables FK to interfaces.id.
             iface_rec = self.db.query(Interface).filter(
                 Interface.device_id == device_id,
-                Interface.id == if_index,
+                Interface.interface_name == str(iface_name),
             ).first()
+            if not iface_rec:
+                iface_rec = Interface(device_id=device_id, interface_name=str(iface_name)[:120])
+                self.db.add(iface_rec)
+                self.db.flush()
 
             in_oct = iface.get("in_octets") or iface.get("hc_in_octets")
             out_oct = iface.get("out_octets") or iface.get("hc_out_octets")
@@ -368,6 +397,26 @@ class SNMPPoller:
             discards = (iface.get("in_discards", 0) or 0) + (iface.get("out_discards", 0) or 0)
             speed = iface.get("speed_bps")
             util = iface.get("utilization_percent")
+            iface_rec.status = str(iface.get("oper_status") or "unknown").lower()[:30]
+            iface_rec.speed = str(speed or iface.get("speed_label") or "unknown")[:50]
+            iface_rec.traffic_in = float(in_oct or 0)
+            iface_rec.traffic_out = float(out_oct or 0)
+            iface_rec.packet_errors = int(errors or 0)
+            iface_rec.last_updated = now
+
+            prev = self.db.query(InterfaceStatistic).filter(
+                InterfaceStatistic.device_id == device_id,
+                InterfaceStatistic.interface_id == iface_rec.id,
+            ).order_by(InterfaceStatistic.id.desc()).first()
+            if prev:
+                prev_counters[if_index] = {
+                    "rx_octets": prev.rx_octets,
+                    "tx_octets": prev.tx_octets,
+                    "rx_packets": 0,
+                    "tx_packets": 0,
+                    "errors": prev.error_rate,
+                    "created_at": prev.created_at,
+                }
 
             # Calculate rates if we have previous data
             rx_mbps = tx_mbps = packet_rate = error_rate = None
@@ -388,13 +437,13 @@ class SNMPPoller:
             # Latest
             latest = self.db.query(LatestInterface).filter(
                 LatestInterface.device_id == device_id,
-                LatestInterface.interface_id == if_index,
+                LatestInterface.interface_id == iface_rec.id,
             ).first()
             if not latest:
-                latest = LatestInterface(device_id=device_id, interface_id=if_index)
+                latest = LatestInterface(device_id=device_id, interface_id=iface_rec.id)
                 self.db.add(latest)
             latest.if_index = if_index
-            latest.name = iface.get("name") or iface.get("description") or f"IF-{if_index}"
+            latest.name = str(iface_name)
             latest.oper_status = (iface.get("oper_status") or "UNKNOWN").upper()
             latest.admin_status = (iface.get("admin_status") or "UNKNOWN").upper()
             latest.speed_bps = speed
@@ -412,7 +461,7 @@ class SNMPPoller:
             # History
             hist = InterfaceStatistic(
                 device_id=device_id,
-                interface_id=if_index,
+                interface_id=iface_rec.id,
                 rx_mbps=rx_mbps,
                 tx_mbps=tx_mbps,
                 utilization_percent=util,

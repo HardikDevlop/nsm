@@ -18,6 +18,7 @@ interface SNMPModuleShellProps {
   children: ReactNode;
   unsupportedMessage?: string;
   showMonitoringControls?: boolean;
+  allowUnsupportedContent?: boolean;
 }
 
 export function SNMPModuleShell({
@@ -26,6 +27,7 @@ export function SNMPModuleShell({
   children,
   unsupportedMessage,
   showMonitoringControls = true,
+  allowUnsupportedContent = false,
 }: SNMPModuleShellProps) {
   const { deviceId } = useParams<{ deviceId: string }>();
   const navigate = useNavigate();
@@ -181,7 +183,7 @@ export function SNMPModuleShell({
       </div>
 
       {/* Module Navigation Tabs */}
-      <div className="flex gap-1 overflow-x-auto pb-1">
+      <div className="flex flex-wrap gap-1.5 pb-1">
         {MODULE_ORDER.map(key => {
           const modConfig = getModuleConfig(key);
           if (!modConfig) return null;
@@ -189,21 +191,21 @@ export function SNMPModuleShell({
           const active = key === module;
           const route = modConfig.route ? `/${modConfig.route}` : '';
           return (
-            <button key={key} type="button" disabled={!ok} onClick={() => navigate(`/snmp/devices/${id}${route}`)}
-              className="font-mono text-xs px-3 py-2 rounded whitespace-nowrap"
+            <button key={key} type="button" onClick={() => navigate(`/snmp/devices/${id}${route}`)}
+              className="font-mono text-[11px] sm:text-xs px-2.5 py-2 rounded"
               style={{
                 background: active ? 'rgba(0,212,255,0.15)' : 'transparent',
                 color: active ? '#00d4ff' : ok ? '#8899bb' : '#556677',
                 border: `1px solid ${active ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.1)'}`,
-                cursor: ok ? 'pointer' : 'not-allowed',
+                cursor: 'pointer',
               }}>
-              {modConfig.label}{!ok ? ' · Not Supported' : ''}
+              {modConfig.label}{!ok ? ' · NS' : ''}
             </button>
           );
         })}
       </div>
 
-      {!supported ? (
+      {!supported && !allowUnsupportedContent ? (
         <GlassCard className="p-8 text-center">
           <div className="font-display font-bold text-base" style={{ color: '#8899bb' }}>
             {unsupportedMessage ?? `${moduleConfig?.label ?? title(module)} is not supported by this device.`}

@@ -45,6 +45,7 @@ import SNMPTopologyMonitoring from './pages/SNMPTopologyMonitoring'
 import SNMPOIDExplorer from './pages/SNMPOIDExplorer'
 import SNMPPollingMonitoring from './pages/SNMPPollingMonitoring'
 import SNMPCapabilities from './pages/SNMPCapabilities'
+import SNMPGenericModulePage from './pages/SNMPGenericModulePage'
 
 // New CRUD Pages
 import AlertsManagement from './pages/AlertsManagement'
@@ -99,13 +100,14 @@ export const router = createBrowserRouter([
           { path: 'snmp/devices/:deviceId/interfaces', Component: withPermission(SNMPInterfaceMonitoring, 'devices:read') },
           { path: 'snmp/devices/:deviceId/storage', Component: withPermission(SNMPStorageMonitoring, 'devices:read') },
           { path: 'snmp/devices/:deviceId/environment', Component: withPermission(SNMPEnvironmentMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/vlan', Component: withPermission(SNMPVLANMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/lldp', Component: withPermission(SNMPLLDPMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/routing', Component: withPermission(SNMPRoutingMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/topology', Component: withPermission(SNMPTopologyMonitoring, 'devices:read') },
+          { path: 'snmp/devices/:deviceId/vlan', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
+          { path: 'snmp/devices/:deviceId/lldp', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
+          { path: 'snmp/devices/:deviceId/routing', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
+          { path: 'snmp/devices/:deviceId/topology', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
           { path: 'snmp/devices/:deviceId/oids', Component: withPermission(SNMPOIDExplorer, 'devices:read') },
           { path: 'snmp/devices/:deviceId/polling', Component: withPermission(SNMPPollingMonitoring, 'devices:read') },
           { path: 'snmp/devices/:deviceId/capabilities', Component: withPermission(SNMPCapabilities, 'devices:read') },
+          { path: 'snmp/devices/:deviceId/:moduleId', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
           
           // Additional common routes
           { path: 'snmp/capabilities', Component: withPermission(SNMPCapabilities, 'devices:read') },

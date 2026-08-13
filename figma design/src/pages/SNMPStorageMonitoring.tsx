@@ -3,6 +3,7 @@ import { SNMPModuleShell } from '../modules/SNMPModuleShell'
 import { getModuleConfig, getHealthColor, getStatusColor, formatBytes } from '../modules/snmpModuleRegistry'
 import GlassCard from '../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
+import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { useModuleData, useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
 
 function storageHealth(util: number | undefined): 'healthy' | 'warning' | 'critical' | 'unknown' {
@@ -23,9 +24,18 @@ export default function SNMPStorageMonitoring() {
   // NEW: Use our working monitoring API
   const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
   
-  // Extract Storage data from monitoring API response
+  // Extract Storage data from all available APIs. Prefer DB/cache plus direct/live fallback.
   const storageModuleData = monitoringData?.modules?.storage
-  const supported = monitoringData?.capabilities?.storage === true || caps?.storage === true
+  const stats = data as any
+  const storageData = storageModuleData?.data || stats?.data || {}
+  const volumes = storageData?.volumes || stats?.data?.volumes || []
+  const hasStorageData = Object.keys(storageData || {}).length > 0 || volumes.length > 0
+  const supported =
+    monitoringData?.capabilities?.storage === true ||
+    caps?.storage === true ||
+    stats?.supported === true ||
+    storageModuleData?.supported === true ||
+    hasStorageData
 
   // Debug logging
   console.log('Storage Module Debug:', {
@@ -49,13 +59,16 @@ export default function SNMPStorageMonitoring() {
     )
   }
 
-  const stats = data as any
   const history = stats?.history || []
-  
-  // Use data from our working monitoring API first
-  const storageData = storageModuleData?.data
-  const volumes = storageData?.volumes || stats?.data?.volumes || []
   const volumeCount = storageData?.volume_count || stats?.data?.volume_count || volumes.length
+  const storageCollector = {
+    collector: 'storage',
+    supported: true,
+    timestamp: stats?.timestamp || storageModuleData?.timestamp || storageData?.polled_at,
+    data: storageData,
+    missing: stats?.missing || [],
+    warnings: stats?.warnings || [],
+  }
 
   // Calculate overall storage health
   const overallUtilization = volumes.length > 0 ? 
@@ -265,6 +278,8 @@ export default function SNMPStorageMonitoring() {
           </div>
         </GlassCard>
       )}
+
+      <SNMPCollectorDataCard name="storage" collector={storageCollector} />
     </SNMPModuleShell>
   )
 }

@@ -257,11 +257,11 @@ export default function DeviceMonitoring() {
   const summary = history?.summary
 
   return (
-    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+    <div className="p-3 md:p-4 space-y-3 md:space-y-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">DEVICE MONITORING</h1>
+          <h1 className="font-display font-bold text-lg sm:text-xl tracking-widest neon-cyan">DEVICE MONITORING</h1>
           <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
             {device ? `${device.hostname} · ${device.ip_address}` : 'Loading device details…'}
           </p>
@@ -274,28 +274,28 @@ export default function DeviceMonitoring() {
       {device ? (
         <>
           {/* Top row: Live status + Device overview */}
-          <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
+          <div className="grid gap-3 grid-cols-1 lg:grid-cols-3">
             {/* Live Status Card */}
-            <GlassCard className="p-4 md:p-5" glow={isUp ? 'green' : isDown ? 'red' : 'amber'}>
-              <div className="font-display font-bold text-base tracking-wider neon-cyan mb-3">LIVE STATUS</div>
-              <div className="flex items-center gap-4 mb-4">
+            <GlassCard className="p-3 md:p-4" glow={isUp ? 'green' : isDown ? 'red' : 'amber'}>
+              <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">LIVE STATUS</div>
+              <div className="flex items-center gap-3 mb-3">
                 <div
-                  className="w-16 h-16 rounded-full flex items-center justify-center"
+                  className="w-12 h-12 rounded-full flex items-center justify-center"
                   style={{
                     background: isUp ? 'rgba(0,255,136,0.12)' : isDown ? 'rgba(255,51,102,0.12)' : 'rgba(255,170,0,0.12)',
                     border: `2px solid ${isUp ? '#00ff88' : isDown ? '#ff3366' : '#ffaa00'}`,
-                    boxShadow: `0 0 20px ${isUp ? 'rgba(0,255,136,0.3)' : isDown ? 'rgba(255,51,102,0.3)' : 'rgba(255,170,0,0.3)'}`,
+                    boxShadow: `0 0 15px ${isUp ? 'rgba(0,255,136,0.3)' : isDown ? 'rgba(255,51,102,0.3)' : 'rgba(255,170,0,0.3)'}`,
                   }}
                 >
-                  <span className="font-display font-bold text-2xl" style={{ color: isUp ? '#00ff88' : isDown ? '#ff3366' : '#ffaa00' }}>
-                    {isUp ? 'UP' : isDown ? 'DOWN' : '?'}
+                  <span className="font-display font-bold text-sm" style={{ color: isUp ? '#00ff88' : isDown ? '#ff3366' : '#ffaa00' }}>
+                    {isUp ? 'UP' : isDown ? 'DN' : '?'}
                   </span>
                 </div>
                 <div>
-                  <div className="font-display text-lg tracking-wider" style={{ color: '#c8d8ee' }}>{device.hostname}</div>
+                  <div className="font-display text-sm tracking-wide" style={{ color: '#c8d8ee' }}>{device.hostname}</div>
                   <div className="font-mono text-xs" style={{ color: '#8899bb' }}>{device.ip_address}</div>
                   {liveRtt !== null && liveRtt !== undefined ? (
-                    <div className="font-mono text-xs mt-1" style={{ color: '#00d4ff' }}>RTT: {liveRtt.toFixed(1)} ms</div>
+                    <div className="font-mono text-xs mt-0.5" style={{ color: '#00d4ff' }}>RTT: {liveRtt.toFixed(1)}ms</div>
                   ) : null}
                   {liveLastCheck ? (
                     <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Last check: {formatTimestamp(liveLastCheck)}</div>
@@ -329,9 +329,9 @@ export default function DeviceMonitoring() {
             </GlassCard>
 
             {/* Device Overview */}
-            <GlassCard className="p-4 md:p-5">
-              <div className="font-display font-bold text-base tracking-wider neon-cyan mb-3">DEVICE OVERVIEW</div>
-              <div className="space-y-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>
+            <GlassCard className="p-3 md:p-4">
+              <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">DEVICE OVERVIEW</div>
+              <div className="space-y-1.5 font-mono text-xs" style={{ color: '#c8d8ee' }}>
                 <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Hostname</span><span>{device.hostname}</span></div>
                 <div className="flex justify-between"><span style={{ color: '#8899bb' }}>IP Address</span><span>{device.ip_address}</span></div>
                 <div className="flex justify-between"><span style={{ color: '#8899bb' }}>MAC Address</span><span>{device.mac_address || '—'}</span></div>
@@ -346,66 +346,66 @@ export default function DeviceMonitoring() {
             </GlassCard>
 
             {/* Uptime / Availability Stats */}
-            <GlassCard className="p-4 md:p-5">
-              <div className="font-display font-bold text-base tracking-wider neon-cyan mb-3">AVAILABILITY</div>
+            <GlassCard className="p-3 md:p-4">
+              <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">AVAILABILITY</div>
               {summary ? (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
                     <div className="flex-1">
-                      <div className="font-mono text-xs mb-1" style={{ color: '#8899bb' }}>AVAILABILITY</div>
-                      <div className="font-display text-3xl font-bold" style={{ color: summary.availability_pct >= 99 ? '#00ff88' : summary.availability_pct >= 95 ? '#ffaa00' : '#ff3366' }}>
+                      <div className="font-mono text-xs mb-0.5" style={{ color: '#8899bb' }}>AVAILABILITY</div>
+                      <div className="font-display text-xl font-bold" style={{ color: summary.availability_pct >= 99 ? '#00ff88' : summary.availability_pct >= 95 ? '#ffaa00' : '#ff3366' }}>
                         {summary.availability_pct}%
                       </div>
                     </div>
-                    <div className="h-12 w-px" style={{ background: 'rgba(0,212,255,0.15)' }} />
+                    <div className="h-8 w-px" style={{ background: 'rgba(0,212,255,0.15)' }} />
                     <div className="flex-1">
-                      <div className="font-mono text-xs mb-1" style={{ color: '#8899bb' }}>STATUS CHANGES</div>
-                      <div className="font-display text-2xl font-bold" style={{ color: '#00d4ff' }}>{summary.total_status_changes}</div>
+                      <div className="font-mono text-xs mb-0.5" style={{ color: '#8899bb' }}>CHANGES</div>
+                      <div className="font-display text-lg font-bold" style={{ color: '#00d4ff' }}>{summary.total_status_changes}</div>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-lg p-2" style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.15)' }}>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded p-2" style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.15)' }}>
                       <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Uptime</div>
                       <div className="font-mono text-sm" style={{ color: '#00ff88' }}>{formatDuration(summary.uptime_seconds)}</div>
                     </div>
-                    <div className="rounded-lg p-2" style={{ background: 'rgba(255,51,102,0.06)', border: '1px solid rgba(255,51,102,0.15)' }}>
-                      <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>Downtime</div>
+                    <div className="rounded p-2" style={{ background: 'rgba(255,51,102,0.06)', border: '1px solid rgba(255,51,102,0.15)' }}>
+                      <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Downtime</div>
                       <div className="font-mono text-sm" style={{ color: '#ff3366' }}>{formatDuration(summary.downtime_seconds)}</div>
                     </div>
                   </div>
-                  <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                    Total pings: {summary.total_pings} · Window: {summary.total_hours}h
+                  <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+                    {summary.total_pings} pings • {summary.total_hours}h window
                   </div>
                   {summary.last_status_change ? (
-                    <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      Last change: {formatTimestamp(summary.last_status_change)}
+                    <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+                      Last: {formatTimestamp(summary.last_status_change)}
                     </div>
                   ) : null}
                 </div>
               ) : (
-                <div className="space-y-2 font-mono text-xs" style={{ color: '#8899bb' }}>
+                <div className="space-y-1.5 font-mono text-xs" style={{ color: '#8899bb' }}>
                   <div className="flex justify-between"><span>Uptime</span><span>{formatDuration(device.uptime_seconds)}</span></div>
                   <div className="flex justify-between"><span>Downtime</span><span>{formatDuration(device.downtime_seconds)}</span></div>
-                  <div className="flex justify-between"><span>Last Status Change</span><span>{formatTimestamp(device.last_status_change)}</span></div>
-                  <div className="mt-3" style={{ color: '#8899bb' }}>Start monitoring to see availability stats.</div>
+                  <div className="flex justify-between"><span>Last Change</span><span>{formatTimestamp(device.last_status_change)}</span></div>
+                  <div className="mt-2" style={{ color: '#8899bb' }}>Start monitoring for stats.</div>
                 </div>
               )}
             </GlassCard>
           </div>
 
           {/* Latency Chart */}
-          <GlassCard className="p-5">
-            <div className="font-display font-bold text-base tracking-wider neon-cyan mb-2">LATENCY & PACKET LOSS</div>
-            <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>5-minute aggregated chunks — last 5+ buckets · IST · auto-refreshed every 15s</div>
+          <GlassCard className="p-4">
+            <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">LATENCY & PACKET LOSS</div>
+            <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>5-min chunks • Last 5+ buckets • Auto-refresh 15s</div>
             {chartData.length === 0 ? (
-              <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No metric data yet. Start monitoring to see latency trends.</div>
+              <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No data yet. Start monitoring to see trends.</div>
             ) : (
-              <ResponsiveContainer width="100%" height={220}>
+              <ResponsiveContainer width="100%" height={180}>
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,212,255,0.08)" />
-                  <XAxis dataKey="time" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                  <YAxis yAxisId="left" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <XAxis dataKey="time" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis yAxisId="left" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} domain={[0, 100]} />
                   <Tooltip contentStyle={ttStyle} />
                   <Line yAxisId="left" type="monotone" dataKey="latency" stroke="#00d4ff" strokeWidth={1.5} dot={false} name="Latency (ms)" />
                   <Line yAxisId="right" type="monotone" dataKey="packet_loss" stroke="#ff3366" strokeWidth={1} dot={false} name="Packet Loss (%)" strokeDasharray="4 2" />
@@ -415,23 +415,23 @@ export default function DeviceMonitoring() {
           </GlassCard>
 
           {/* Live Monitoring History + Status Change History */}
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2">
             {/* Live Ping History (from SSE) */}
-            <GlassCard className="p-4 md:p-5">
-              <div className="font-display font-bold text-base tracking-wider neon-cyan mb-2">LIVE PING HISTORY</div>
-              <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Last 20 pings from the real-time monitor</div>
+            <GlassCard className="p-3 md:p-4">
+              <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">LIVE PING HISTORY</div>
+              <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>Last 20 pings from real-time monitor</div>
               {liveHistory.length === 0 ? (
-                <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No live data yet. Start monitoring to see real-time pings.</div>
+                <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No live data. Start monitoring for real-time pings.</div>
               ) : (
-                <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
+                <div className="space-y-1 max-h-[320px] overflow-y-auto">
                   {liveHistory.slice().reverse().map((entry, i) => (
-                    <div key={i} className="flex items-center justify-between rounded-lg p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
+                    <div key={i} className="flex items-center justify-between rounded p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full" style={{ background: entry.status === 'up' ? '#00ff88' : '#ff3366' }} />
-                        <span className="font-mono text-[11px]" style={{ color: '#c8d8ee' }}>{entry.status === 'up' ? 'UP' : 'DOWN'}</span>
+                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.status === 'up' ? '#00ff88' : '#ff3366' }} />
+                        <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{entry.status === 'up' ? 'UP' : 'DN'}</span>
                       </div>
-                      <span className="font-mono text-[11px]" style={{ color: '#8899bb' }}>{entry.rtt_ms !== null ? `${entry.rtt_ms.toFixed(1)} ms` : 'timeout'}</span>
-                      <span className="font-mono text-[10px]" style={{ color: '#667799' }}>{formatTimestamp(entry.time)}</span>
+                      <span className="font-mono text-xs" style={{ color: '#8899bb' }}>{entry.rtt_ms !== null ? `${entry.rtt_ms.toFixed(1)}ms` : 'timeout'}</span>
+                      <span className="font-mono text-xs" style={{ color: '#667799' }}>{formatTimestamp(entry.time)}</span>
                     </div>
                   ))}
                 </div>
@@ -439,32 +439,32 @@ export default function DeviceMonitoring() {
             </GlassCard>
 
             {/* Status Change History */}
-            <GlassCard className="p-4 md:p-5">
-              <div className="font-display font-bold text-base tracking-wider neon-cyan mb-2">STATUS CHANGE HISTORY</div>
-              <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Up/down transitions from the database</div>
+            <GlassCard className="p-3 md:p-4">
+              <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">STATUS CHANGE HISTORY</div>
+              <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>Up/down transitions from database</div>
               {statusHistory.length === 0 ? (
                 <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No status changes recorded yet.</div>
               ) : (
                 <>
-                  <div className="space-y-1.5 max-h-[350px] overflow-y-auto">
+                  <div className="space-y-1 max-h-[280px] overflow-y-auto">
                     {pagedStatusHistory.map(entry => (
-                      <div key={entry.id} className="flex items-center justify-between rounded-lg p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
+                      <div key={entry.id} className="flex items-center justify-between rounded p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                         <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full" style={{ background: entry.new_status === 'online' ? '#00ff88' : '#ff3366' }} />
-                          <span className="font-mono text-[11px]" style={{ color: '#c8d8ee' }}>
+                          <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.new_status === 'online' ? '#00ff88' : '#ff3366' }} />
+                          <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>
                             {entry.old_status ?? '?'} → {entry.new_status}
                           </span>
                         </div>
-                        <span className="font-mono text-[10px]" style={{ color: '#667799' }}>{formatTimestamp(entry.timestamp)}</span>
+                        <span className="font-mono text-xs" style={{ color: '#667799' }}>{formatTimestamp(entry.timestamp)}</span>
                       </div>
                     ))}
                   </div>
                   {totalStatusPages > 1 && (
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>Page {statusPage} of {totalStatusPages}</div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Page {statusPage} of {totalStatusPages}</div>
                       <div className="flex gap-1">
-                        <button onClick={() => setStatusPage(p => Math.max(1, p - 1))} disabled={statusPage === 1} className="rounded px-2 py-0.5 font-mono text-[10px]" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' }}>←</button>
-                        <button onClick={() => setStatusPage(p => Math.min(totalStatusPages, p + 1))} disabled={statusPage >= totalStatusPages} className="rounded px-2 py-0.5 font-mono text-[10px]" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' }}>→</button>
+                        <button onClick={() => setStatusPage(p => Math.max(1, p - 1))} disabled={statusPage === 1} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' }}>←</button>
+                        <button onClick={() => setStatusPage(p => Math.min(totalStatusPages, p + 1))} disabled={statusPage >= totalStatusPages} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' }}>→</button>
                       </div>
                     </div>
                   )}

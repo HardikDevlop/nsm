@@ -447,6 +447,9 @@ def discovery_snmp(payload: IpsRequest):
             # Save device capabilities from collectors
             collectors = result.get("collectors", {})
             if collectors:
+                import asyncio
+                from backend.services.snmp_polling import PollJob, SNMPPoller
+
                 # UPSERT capabilities
                 capabilities = db.query(DeviceCapabilities).filter(
                     DeviceCapabilities.device_id == device.id
@@ -477,6 +480,23 @@ def discovery_snmp(payload: IpsRequest):
                 # Store full capability detail
                 capabilities.capability_detail = collectors
                 capabilities.updated_at = datetime.utcnow()
+
+                poller = SNMPPoller(db)
+                for module_name, collector in collectors.items():
+                    if not isinstance(collector, dict):
+                        continue
+                    job = PollJob(
+                        device_id=device.id,
+                        module_name=module_name,
+                        collector_name=module_name,
+                        interval_seconds=0,
+                        config_id=0,
+                    )
+                    asyncio.run(poller._persist_results(
+                        job,
+                        collector.get("data") or {},
+                        collector.get("supported") is True,
+                    ))
                 
                 logger.info(f"Saved capabilities for device {device.id} ({ip}): {capabilities.to_map()}")
 
@@ -911,14 +931,37 @@ def add_discovered_devices(payload: AddDevicesRequest):
     Returns a summary of added / skipped devices.
     """
     from backend.database.session import SessionLocal
-    from backend.models import Device, DeviceMetric, Interface
+    from backend.models import Device, DeviceMetric, Interface, DeviceCapabilities
+    from backend.services.snmp_polling import PollJob, SNMPPoller
     from datetime import datetime
+    import asyncio
 
     added = []
     skipped = []
 
     try:
         with SessionLocal() as db:
+            def persist_collectors(device_id: int, collectors: dict) -> None:
+                if not isinstance(collectors, dict) or not collectors:
+                    return
+                capabilities = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+                if capabilities is None:
+                    capabilities = DeviceCapabilities(device_id=device_id)
+                    db.add(capabilities)
+                for name in ("system", "cpu", "memory", "storage", "interfaces", "environment", "inventory", "vlan", "lldp", "cdp", "routing", "arp", "mac_table", "firewall", "wireless", "topology"):
+                    if hasattr(capabilities, f"cap_{name}"):
+                        setattr(capabilities, f"cap_{name}", collectors.get(name, {}).get("supported", False))
+                capabilities.capability_detail = collectors
+                capabilities.updated_at = datetime.utcnow()
+                poller = SNMPPoller(db)
+                for module_name, collector in collectors.items():
+                    if isinstance(collector, dict):
+                        asyncio.run(poller._persist_results(
+                            PollJob(device_id=device_id, module_name=module_name, collector_name=module_name, interval_seconds=0, config_id=0),
+                            collector.get("data") or {},
+                            collector.get("supported") is True,
+                        ))
+
             for dev in payload.devices:
                 ip = dev.get("ip_address") or dev.get("ip")
                 if not ip:
@@ -938,6 +981,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     existing.status = "online"
                     existing.monitoring_status = True
                     existing.last_seen = datetime.utcnow()
+                    persist_collectors(existing.id, dev.get("collectors") or {})
                     added.append({"id": existing.id, "ip": ip, "hostname": existing.hostname, "updated": True})
                     continue
 
@@ -957,6 +1001,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     soft_deleted.monitoring_status = True
                     if payload.site_id is not None:
                         soft_deleted.site_id = payload.site_id
+                    persist_collectors(soft_deleted.id, dev.get("collectors") or {})
                     added.append({"id": soft_deleted.id, "ip": ip, "hostname": soft_deleted.hostname})
                     continue
 
@@ -998,6 +1043,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     memory_usage=float(memory.get("utilization_percent") or 0) if memory else None,
                     temperature=float((dev.get("environment") or {}).get("temperature") or 0) if (dev.get("environment") or {}).get("temperature") is not None else None,
                 ))
+                persist_collectors(device.id, dev.get("collectors") or {})
                 added.append({"id": device.id, "ip": ip, "hostname": hostname})
 
             db.commit()

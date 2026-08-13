@@ -1,9 +1,10 @@
 import { useParams } from 'react-router'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
-import { getModuleConfig, getHealthColor, getStatusColor, formatBytes } from '../modules/snmpModuleRegistry'
+import { getModuleConfig } from '../modules/snmpModuleRegistry'
 import GlassCard from '../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
+import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { useModuleData, useDeviceCapabilities } from '../modules/useSNMPModules'
 import { useLatestEnvironment } from '../hooks/useSnmpQueries'
 
@@ -71,7 +72,16 @@ export default function SNMPEnvironmentMonitoring() {
   const { data, isLoading, error } = useModuleData(id, 'environment')
   const { data: latestEnv } = useLatestEnvironment(id)
 
-  const supported = caps?.environment === true
+  const payload = data as any
+  const envData = payload?.data || {}
+  const sensors = Array.isArray(envData?.sensors)
+    ? envData.sensors
+    : Array.isArray(payload)
+      ? payload
+      : Array.isArray(latestEnv)
+        ? latestEnv
+        : []
+  const supported = caps?.environment === true || payload?.supported === true || sensors.length > 0
 
   if (!supported) {
     return (
@@ -81,8 +91,6 @@ export default function SNMPEnvironmentMonitoring() {
     )
   }
 
-  const sensors = (data as any[]) || (latestEnv || [])
-
   const presentTypes = Array.from(new Set(sensors.map(s => s.sensor_type)))
   const criticalCount = sensors.filter(s => s.status === 'critical').length
   const warningCount = sensors.filter(s => s.status === 'warning').length
@@ -91,6 +99,15 @@ export default function SNMPEnvironmentMonitoring() {
     acc[type] = sensors.filter(s => s.sensor_type === type)
     return acc
   }, {})
+  const environmentCollector = {
+    collector: 'environment',
+    supported: true,
+    timestamp: payload?.timestamp || sensors.find(s => s.last_updated)?.last_updated,
+    data: Object.keys(envData || {}).length > 0 ? envData : { sensors },
+    reason: payload?.reason,
+    missing: payload?.missing || [],
+    warnings: payload?.warnings || [],
+  }
 
   return (
     <SNMPModuleShell module="environment" title="Environment Monitoring" showMonitoringControls={true}>
@@ -129,7 +146,7 @@ export default function SNMPEnvironmentMonitoring() {
       {/* Sensor Cards — grouped by type */}
       {presentTypes.map(type => {
         const group = sensorGroups[type] ?? []
-        const cfg = SENSOR_TYPE_CONFIG[type]
+        const cfg = SENSOR_TYPE_CONFIG[type] || SENSOR_TYPE_CONFIG.other
         return (
           <div key={type}>
             <div className="flex items-center gap-2 mb-3">
@@ -236,6 +253,8 @@ export default function SNMPEnvironmentMonitoring() {
           </div>
         )
       })}
+
+      <SNMPCollectorDataCard name="environment" collector={environmentCollector} />
     </SNMPModuleShell>
   )
 }

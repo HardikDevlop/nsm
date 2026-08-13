@@ -29,7 +29,7 @@ export async function fetchMonitoringData(deviceId: number): Promise<any> {
     method: 'POST',
     body: JSON.stringify({
       device_id: deviceId,
-      modules: ["cpu", "memory", "storage", "interfaces", "vlan", "lldp", "routing", "arp", "mac_table", "inventory", "topology"],
+      modules: ["system", "cpu", "memory", "storage", "interfaces", "environment", "vlan", "lldp", "cdp", "routing", "arp", "mac_table", "firewall", "wireless", "inventory", "topology", "health"],
       include_history: false,
       history_hours: 1
     }),
@@ -42,7 +42,27 @@ export function useMonitoringData(deviceId: number | null) {
     queryKey: ['monitoring', 'data', deviceId],
     queryFn: () => fetchMonitoringData(deviceId!),
     enabled: !!deviceId,
-    staleTime: 30000, // 30 seconds
+    staleTime: 5000,
+    refetchInterval: 15000,
+    refetchIntervalInBackground: true,
+    retry: 1,
+  });
+}
+
+export async function fetchLiveSNMPPoll(deviceId: number): Promise<any> {
+  return requestJson<any>(`/snmp/devices/${deviceId}/poll`, {
+    method: 'POST',
+  });
+}
+
+export function useLiveSNMPPoll(deviceId: number | null) {
+  return useQuery<any>({
+    queryKey: ['snmp', 'live-poll', deviceId],
+    queryFn: () => fetchLiveSNMPPoll(deviceId!),
+    enabled: !!deviceId,
+    staleTime: 5000,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
     retry: 1,
   });
 }
@@ -137,7 +157,9 @@ export function useModuleData(deviceId: number | null, moduleId: string | null) 
     queryKey: moduleKeys.moduleData(deviceId!, moduleId!),
     queryFn: () => fetchModuleData(deviceId!, moduleId!),
     enabled: !!deviceId && !!moduleId,
-    staleTime: 30000, // 30 seconds
+    staleTime: 5000,
+    refetchInterval: 15000,
+    refetchIntervalInBackground: true,
   });
 }
 

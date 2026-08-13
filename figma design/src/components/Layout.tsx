@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Outlet, useNavigate } from 'react-router'
+import { Outlet, useLocation, useNavigate } from 'react-router'
 import Sidebar from './Sidebar'
 import NotificationPanel from './NotificationPanel'
 import ThemePicker from './ThemePicker'
@@ -15,7 +15,9 @@ export default function Layout() {
   const { theme, toggleTheme, colors } = useTheme()
   const isDark = theme === 'dark'
   const navigate = useNavigate()
+  const location = useLocation()
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
+  const showBack = location.pathname !== '/'
 
   useEffect(() => {
     const loadAlerts = () => { void listAlerts().then(setAlerts).catch(() => setAlerts([])) }
@@ -71,6 +73,21 @@ export default function Layout() {
           </button>
 
           <div className="flex items-center gap-2 md:gap-4">
+            {showBack && (
+              <button
+                type="button"
+                onClick={() => navigate(-1)}
+                className={`${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1.5 cursor-pointer transition-all hover:bg-cyan-400/10`}
+                style={{ border: '1px solid var(--t-border-alpha)', color: 'var(--t-accent)' }}
+                title="Go back"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M19 12H5" />
+                  <path d="M12 19l-7-7 7-7" />
+                </svg>
+                <span className="hidden sm:inline font-mono text-xs">BACK</span>
+              </button>
+            )}
             <div className="hidden sm:flex items-center gap-2">
               <span className="status-dot online" />
               <span className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>SYSTEM OPERATIONAL</span>

@@ -9,6 +9,7 @@ import {
   type InterfaceRecord, deleteDevice, updateDevice,
 } from '../lib/api'
 import { useAuth } from '../components/AuthContext'
+import { confirmDanger, promptText, toast } from '../lib/swal'
 
 /* ── severity colours ─────────────────────────────────────────────────────── */
 const SEV: Record<string, { c: string; bg: string }> = {
@@ -53,15 +54,15 @@ const TYPE_ICON: Record<string, string> = {
 /* ── SNMP sub-page navigation cards ─────────────────────────────────────── */
 interface NavCard { label: string; path: (id: number) => string; icon: string; desc: string; color: string }
 const SNMP_NAV: NavCard[] = [
-  { label: 'Dashboard',    path: id=>`/snmp/dashboard/${id}`,   color: '#00d4ff', desc: 'Overview & modules',       icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-  { label: 'CPU',          path: id=>`/snmp/cpu/${id}`,         color: '#00ff88', desc: 'Utilisation & cores',       icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z' },
-  { label: 'Memory',       path: id=>`/snmp/memory/${id}`,      color: '#7c3aed', desc: 'RAM, swap & buffers',       icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4' },
-  { label: 'Interfaces',   path: id=>`/snmp/interfaces/${id}`,  color: '#00bfff', desc: 'IF-MIB traffic & errors',   icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4' },
-  { label: 'Storage',      path: id=>`/snmp/storage/${id}`,     color: '#ffaa00', desc: 'hrStorageTable volumes',    icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
-  { label: 'Environment',  path: id=>`/snmp/environment/${id}`, color: '#ff6644', desc: 'Temp, fans, PSU, sensors',  icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
-  { label: 'Topology',     path: id=>`/snmp/topology/${id}`,    color: '#a78bfa', desc: 'LLDP / CDP / ARP graph',    icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' },
-  { label: 'OID Explorer', path: id=>`/snmp/oids/${id}`,        color: '#34d399', desc: 'Browse all polled OIDs',    icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
-  { label: 'Polling',      path: id=>`/snmp/polling/${id}`,     color: '#f472b6', desc: 'History & statistics',      icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { label: 'Dashboard',    path: id=>`/snmp/devices/${id}`,              color: '#00d4ff', desc: 'Overview & modules',       icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+  { label: 'CPU',          path: id=>`/snmp/devices/${id}/cpu`,          color: '#00ff88', desc: 'Utilisation & cores',       icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z' },
+  { label: 'Memory',       path: id=>`/snmp/devices/${id}/memory`,       color: '#7c3aed', desc: 'RAM, swap & buffers',       icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4' },
+  { label: 'Interfaces',   path: id=>`/snmp/devices/${id}/interfaces`,   color: '#00bfff', desc: 'IF-MIB traffic & errors',   icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4' },
+  { label: 'Storage',      path: id=>`/snmp/devices/${id}/storage`,      color: '#ffaa00', desc: 'hrStorageTable volumes',    icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
+  { label: 'Environment',  path: id=>`/snmp/devices/${id}/environment`,  color: '#ff6644', desc: 'Temp, fans, PSU, sensors',  icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+  { label: 'Topology',     path: id=>`/snmp/devices/${id}/topology`,     color: '#a78bfa', desc: 'LLDP / CDP / ARP graph',    icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' },
+  { label: 'OID Explorer', path: id=>`/snmp/devices/${id}/oids`,         color: '#34d399', desc: 'Browse all polled OIDs',    icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
+  { label: 'Polling',      path: id=>`/snmp/devices/${id}/polling`,      color: '#f472b6', desc: 'History & statistics',      icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
 ]
 
 /* ── service start/stop button ───────────────────────────────────────────── */
@@ -144,13 +145,42 @@ export default function SNMPMonitoring() {
   }
 
   const removeDevice = async (id: number) => {
-    if (!isSuperAdmin || !window.confirm('Delete device?')) return
-    try { await deleteDevice(id); void loadData() } catch (e) { setError((e as Error).message) }
+    if (!isSuperAdmin) return
+    const dev = devices.find(d => d.id === id)
+    const ok = await confirmDanger({
+      title: `Delete ${dev?.hostname || dev?.ip_address || 'device'}?`,
+      text: 'This action cannot be undone.',
+      confirmText: 'Delete',
+    })
+    if (!ok) return
+    try {
+      await deleteDevice(id)
+      toast.success('Device deleted')
+      void loadData()
+    } catch (e) {
+      const message = (e as Error).message
+      setError(message)
+      toast.error(message)
+    }
   }
   const editDevice = async (dev: DeviceRecord) => {
     if (!isSuperAdmin) return
-    const h = window.prompt('Hostname', dev.hostname); if (!h) return
-    try { await updateDevice(dev.id, { hostname: h }); void loadData() } catch (e) { setError((e as Error).message) }
+    const h = await promptText({
+      title: 'Edit hostname',
+      inputLabel: 'Hostname',
+      inputValue: dev.hostname,
+      confirmText: 'Update',
+    })
+    if (!h) return
+    try {
+      await updateDevice(dev.id, { hostname: h })
+      toast.success('Device updated')
+      void loadData()
+    } catch (e) {
+      const message = (e as Error).message
+      setError(message)
+      toast.error(message)
+    }
   }
 
   /* ── derived maps ─────────────────────────────────────────────────────── */
@@ -382,9 +412,9 @@ export default function SNMPMonitoring() {
                 const icon = TYPE_ICON[dev.type]??TYPE_ICON.default
                 return (
                   <div key={dev.id}
-                    onClick={()=>{ if (selectedId===dev.id) navigate(`/snmp/dashboard/${dev.id}`); else setSelected(dev.id) }}
+                    onClick={()=>{ if (selectedId===dev.id) navigate(`/snmp/devices/${dev.id}`); else setSelected(dev.id) }}
                     role="button" tabIndex={0}
-                    onKeyDown={e=>{ if(e.key==='Enter') navigate(`/snmp/dashboard/${dev.id}`) }}
+                    onKeyDown={e=>{ if(e.key==='Enter') navigate(`/snmp/devices/${dev.id}`) }}
                     className="p-3 sm:p-4 flex gap-3 sm:gap-4 transition-all hover:bg-cyan-400/5 cursor-pointer"
                     style={{ borderBottom:'1px solid rgba(0,212,255,0.06)', borderRight:'1px solid rgba(0,212,255,0.06)',
                       background: selectedId===dev.id ? 'rgba(0,212,255,0.05)' : undefined }}>

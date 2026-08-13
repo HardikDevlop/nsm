@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 from backend.database.session import get_db
 from backend.dependencies import get_current_user, require_permission
 from backend.models import Device, DeviceCredential, Event, Interface, Vendor, DeviceType
-from backend.models.snmp import MonitoringStatus
+from backend.models.snmp import LatestInterface, MonitoringStatus
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,42 @@ def _collector_data(result: dict[str, Any], name: str) -> dict[str, Any]:
         "collector": name, "supported": False,
         "reason": "Collector not present in poll result", "missing": [],
     }
+
+
+def _persist_collect_result(device_id: int, result: dict[str, Any], db: Session) -> None:
+    """Cache live/discovery collector output into latest tables and capability detail."""
+    import asyncio
+    from backend.services.snmp_polling import PollJob, SNMPPoller
+
+    collectors = result.get("collectors") or {}
+    if not isinstance(collectors, dict):
+        return
+
+    from backend.models.identity import DeviceCapabilities
+    cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    if cap is None:
+        cap = DeviceCapabilities(device_id=device_id)
+        db.add(cap)
+    for name in ("system", "cpu", "memory", "storage", "interfaces", "environment", "inventory", "vlan", "lldp", "cdp", "routing", "arp", "mac_table", "firewall", "wireless", "topology"):
+        attr = f"cap_{name}"
+        if hasattr(cap, attr):
+            setattr(cap, attr, collectors.get(name, {}).get("supported", False))
+    cap.capability_detail = collectors
+    cap.updated_at = datetime.utcnow()
+    db.flush()
+
+    poller = SNMPPoller(db)
+    for module, collector in collectors.items():
+        if not isinstance(collector, dict):
+            continue
+        job = PollJob(
+            device_id=device_id,
+            module_name=module,
+            collector_name=module,
+            interval_seconds=0,
+            config_id=0,
+        )
+        asyncio.run(poller._persist_results(job, collector.get("data") or {}, collector.get("supported") is True))
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +475,8 @@ def _run_identity_discovery(
     device.status   = "online" if result.get("reachable") else "offline"
     device.last_seen = datetime.utcnow()
 
+    _persist_collect_result(device.id, result, db)
+
     db.add(Event(
         device_id=device.id,
         event_type="SNMP_DISCOVERY",
@@ -566,7 +604,9 @@ def poll_device_now(
     """Trigger a full live SNMP collect and return the raw result."""
     device = _get_device_or_404(device_id, db)
     cred   = _get_credentials(device_id, db)
-    return _live_collect(device, cred)
+    result = _live_collect(device, cred)
+    _persist_collect_result(device_id, result, db)
+    return result
 
 
 @router.get("/snmp/devices/{device_id}/overview")
@@ -783,6 +823,58 @@ def get_snmp_interfaces(device_id: int, db: Session = Depends(get_db), _: Any = 
     result = _live_collect(device, _get_credentials(device_id, db))
     col      = _collector_data(result, "interfaces")
     col_data = col.get("data") or {}
+    live_interfaces = col_data.get("interfaces", [])
+    previous_by_index = {
+        row.if_index: row
+        for row in db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
+        if row.if_index is not None
+    }
+    now = datetime.utcnow()
+    enriched_interfaces = []
+    for iface in live_interfaces:
+        if not isinstance(iface, dict):
+            enriched_interfaces.append(iface)
+            continue
+        if_index = iface.get("ifIndex") or iface.get("if_index")
+        latest = previous_by_index.get(if_index)
+        merged = dict(iface)
+        in_octets = iface.get("in_octets") or iface.get("rx_octets") or iface.get("hc_in_octets")
+        out_octets = iface.get("out_octets") or iface.get("tx_octets") or iface.get("hc_out_octets")
+        rx_mbps = iface.get("rx_mbps")
+        tx_mbps = iface.get("tx_mbps")
+
+        if latest:
+            merged.setdefault("interface_id", latest.interface_id)
+            merged.setdefault("rx_octets", in_octets if in_octets is not None else latest.rx_octets)
+            merged.setdefault("tx_octets", out_octets if out_octets is not None else latest.tx_octets)
+            merged.setdefault("rx_packets", latest.rx_packets)
+            merged.setdefault("tx_packets", latest.tx_packets)
+            if latest.polled_at and in_octets is not None and latest.rx_octets is not None:
+                elapsed = max((now - latest.polled_at).total_seconds(), 0)
+                if elapsed > 0:
+                    from backend.snmp.statistics_engine import counter_delta
+                    rx_mbps = round(counter_delta(float(in_octets), float(latest.rx_octets)) * 8 / elapsed / 1_000_000, 3)
+            if latest.polled_at and out_octets is not None and latest.tx_octets is not None:
+                elapsed = max((now - latest.polled_at).total_seconds(), 0)
+                if elapsed > 0:
+                    from backend.snmp.statistics_engine import counter_delta
+                    tx_mbps = round(counter_delta(float(out_octets), float(latest.tx_octets)) * 8 / elapsed / 1_000_000, 3)
+
+            speed_bps = iface.get("speed_bps") or latest.speed_bps
+            utilization = latest.utilization_percent
+            if speed_bps and (rx_mbps is not None or tx_mbps is not None):
+                utilization = round(((rx_mbps or 0) + (tx_mbps or 0)) * 1_000_000 / float(speed_bps) * 100, 2)
+
+            merged["rx_mbps"] = rx_mbps
+            merged["tx_mbps"] = tx_mbps
+            merged["utilization_percent"] = utilization
+            merged["errors"] = latest.errors
+            merged["discards"] = latest.discards
+            merged["polled_at"] = now.isoformat()
+        enriched_interfaces.append(merged)
+
+    _persist_collect_result(device_id, result, db)
+    db.commit()
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -803,7 +895,7 @@ def get_snmp_interfaces(device_id: int, db: Session = Depends(get_db), _: Any = 
             "interface_count": col_data.get("interface_count", 0),
             "up_count":        col_data.get("up_count", 0),
             "down_count":      col_data.get("down_count", 0),
-            "interfaces":      col_data.get("interfaces", []),
+            "interfaces":      enriched_interfaces,
         },
     }
 
