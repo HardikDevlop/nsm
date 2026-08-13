@@ -190,13 +190,24 @@ export function SNMPModuleShell({
           const ok = key === 'overview' || key === 'monitoring' || Boolean(capabilities[key]);
           const active = key === module;
           const route = modConfig.route ? `/${modConfig.route}` : '';
+          const bg = active
+            ? 'rgba(0,212,255,0.15)'
+            : ok
+              ? 'rgba(0,255,136,0.10)'
+              : 'transparent';
+          const fg = active ? '#00d4ff' : ok ? '#00ff88' : '#556677';
+          const border = active
+            ? 'rgba(0,212,255,0.4)'
+            : ok
+              ? 'rgba(0,255,136,0.35)'
+              : 'rgba(0,212,255,0.1)';
           return (
             <button key={key} type="button" onClick={() => navigate(`/snmp/devices/${id}${route}`)}
               className="font-mono text-[11px] sm:text-xs px-2.5 py-2 rounded"
               style={{
-                background: active ? 'rgba(0,212,255,0.15)' : 'transparent',
-                color: active ? '#00d4ff' : ok ? '#8899bb' : '#556677',
-                border: `1px solid ${active ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.1)'}`,
+                background: bg,
+                color: fg,
+                border: `1px solid ${border}`,
                 cursor: 'pointer',
               }}>
               {modConfig.label}{!ok ? ' · NS' : ''}
