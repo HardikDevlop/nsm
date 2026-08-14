@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.auth.security import create_access_token, hash_password, verify_password
 from backend.database.session import get_db
-from backend.dependencies import get_current_user, require_permission
+from backend.dependencies import get_current_user, require_permission, require_any_permission
 from backend.models import (
     Alert,
     AuditLog,
@@ -759,7 +759,7 @@ def delete_monitoring_job(item_id: int, db: Session = Depends(get_db), current_u
 
 # ---------------------------------------------------------------- Device metrics
 @router.get("/device-metrics", response_model=list[DeviceMetricRead])
-def list_device_metrics(device_id: int | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("device_metrics:read"))):
+def list_device_metrics(device_id: int | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_any_permission("device_metrics:read", "devices:read"))):
     query = db.query(DeviceMetric)
     if device_id:
         query = query.filter(DeviceMetric.device_id == device_id)
@@ -772,7 +772,7 @@ def create_device_metric(payload: DeviceMetricCreate, db: Session = Depends(get_
 
 
 @router.get("/device-metrics/{item_id}", response_model=DeviceMetricRead)
-def get_device_metric(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("device_metrics:read"))):
+def get_device_metric(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission("device_metrics:read", "devices:read"))):
     return metric_crud.get(db, item_id)
 
 
@@ -1240,9 +1240,30 @@ def delete_report(item_id: int, db: Session = Depends(get_db), current_user: Use
 
 
 # ---------------------------------------------------------------- Audit logs (read-only)
+@router.post("/audit-logs/page-view", response_model=AuditLogRead)
+def record_page_view(page: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    entry = AuditLog(user_id=current_user.id, action="VIEW_PAGE", resource_name=page[:160])
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+@router.get("/audit-logs/users")
+def list_audit_log_users(db: Session = Depends(get_db), _: User = Depends(require_permission("audit_logs:read"))):
+    return [
+        {"id": user_id, "name": name, "email": email}
+        for user_id, name, email in db.query(User.id, User.name, User.email).order_by(User.name.asc()).all()
+    ]
+
+
 @router.get("/audit-logs", response_model=list[AuditLogRead])
-def list_audit_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("audit_logs:read"))):
-    return db.query(AuditLog).order_by(AuditLog.timestamp.desc()).offset(skip).limit(min(limit, 500)).all()
+def list_audit_logs(skip: int = 0, limit: int = 100, user_id: int | None = None, db: Session = Depends(get_db), _: User = Depends(require_permission("audit_logs:read"))):
+    query = db.query(AuditLog, User.name.label("user_name")).outerjoin(User, AuditLog.user_id == User.id)
+    if user_id is not None:
+        query = query.filter(AuditLog.user_id == user_id)
+    rows = query.order_by(AuditLog.timestamp.desc()).offset(skip).limit(min(limit, 500)).all()
+    return [{**log.__dict__, "user_name": name} for log, name in rows]
 
 
 @router.get("/audit-logs/{item_id}", response_model=AuditLogRead)

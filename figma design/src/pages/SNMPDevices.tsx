@@ -251,7 +251,10 @@ function EditDeviceDialog({ device, onClose, onSave }: {
 
 export default function SNMPDevicesPage() {
   const navigate = useNavigate()
-  const { isSuperAdmin } = useAuth()
+  const { hasPermission } = useAuth()
+  const canCreate = hasPermission('devices:create')
+  const canUpdate = hasPermission('devices:update')
+  const canDelete = hasPermission('devices:delete')
   const prefetchDevice = usePrefetchDeviceDetails()
   const invalidateDevice = useInvalidateDeviceQueries()
 
@@ -373,7 +376,7 @@ export default function SNMPDevicesPage() {
     const device = devices.find(d => d.id === deviceId)
     const deviceName = device?.name || device?.hostname || device?.ip_address || `device-${deviceId}`
     
-    if (!isSuperAdmin) return
+    if (!canDelete) return
     const ok = await confirmDanger({
       title: `Delete device "${deviceName}"?`,
       text: 'This will remove the device from monitoring, delete collected metrics, and stop monitoring jobs. This action cannot be undone.',
@@ -424,7 +427,7 @@ export default function SNMPDevicesPage() {
             </svg>
             REFRESH
           </button>
-          {isSuperAdmin && (
+          {canCreate && (
             <button onClick={() => navigate('/snmp/devices/add')}
               className="glass-bright px-3 py-1.5 rounded font-mono text-xs hover:bg-cyan-400/10 flex items-center gap-1.5"
               style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff' }}>
@@ -647,9 +650,9 @@ export default function SNMPDevicesPage() {
                               <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
                             </svg>
                           </ActionButton>
-                          {isSuperAdmin && (
+                          {(canUpdate || canDelete) && (
                             <>
-                              <ActionButton
+                              {canUpdate && <ActionButton
                                 onClick={(e) => handleEditDevice(device, e)}
                                 color="#ffaa00"
                                 title="Edit Device"
@@ -658,8 +661,8 @@ export default function SNMPDevicesPage() {
                                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                                   <path d="m18.5 2.5 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                                 </svg>
-                              </ActionButton>
-                              <ActionButton
+                              </ActionButton>}
+                              {canDelete && <ActionButton
                                 onClick={(e) => handleDeleteDevice(device.id, e)}
                                 color="#ff3366"
                                 title="Delete Device"
@@ -675,7 +678,7 @@ export default function SNMPDevicesPage() {
                                     <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
                                   </svg>
                                 )}
-                              </ActionButton>
+                              </ActionButton>}
                             </>
                           )}
                         </div>

@@ -28,16 +28,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   const permissions = new Set(user?.permissions ?? [])
-  const isSuperAdmin = user?.role_name === 'Admin'
+  // A role name must never grant implicit access. Permissions are the source
+  // of truth; this flag is kept for backwards compatibility with consumers.
+  const isSuperAdmin = false
 
   const hasPermission = useCallback(
-    (code: string) => isSuperAdmin || permissions.has(code),
-    [isSuperAdmin, permissions],
+    (code: string) => permissions.has(code),
+    [permissions],
   )
 
   const hasAnyPermission = useCallback(
-    (...codes: string[]) => isSuperAdmin || codes.some(c => permissions.has(c)),
-    [isSuperAdmin, permissions],
+    (...codes: string[]) => codes.some(c => permissions.has(c)),
+    [permissions],
   )
 
   // On mount: if token exists in localStorage, fetch user

@@ -200,8 +200,20 @@ export function useRealtimeDevices(refreshInterval = 5, timeWindow = 30, enabled
 }
 
 export function useRealtimeMetrics(refreshInterval = 2, timeWindow = 60, enabled = true) {
+  const fetchMetrics = useCallback(async () => {
+    try {
+      return await listDeviceMetrics()
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('403')) return []
+      throw error
+    }
+  }, [])
+
   return useRealtimeData({
-    fetchFunction: listDeviceMetrics,
+    // Metrics are supplementary to the dashboard. A role may be allowed to
+    // view devices without having the separate metrics-management permission.
+    // In that case keep the dashboard operational and show no chart points.
+    fetchFunction: fetchMetrics,
     refreshInterval,
     timeWindow,
     enabled

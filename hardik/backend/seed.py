@@ -107,6 +107,10 @@ def seed_rbac(db: Session) -> None:
     # 2. Roles
     all_permissions = list(existing.values())
     role_map = {role.role_name: role for role in db.query(Role).all()}
+    # Only a completely fresh database gets the bundled Operator/Viewer
+    # roles. After that, role management is authoritative: deleting a role
+    # must not cause startup seeding to recreate it.
+    fresh_roles = not role_map
 
     def ensure_role(name: str, codes: set[str] | None) -> Role:
         role = role_map.get(name)
@@ -114,15 +118,16 @@ def seed_rbac(db: Session) -> None:
             role = Role(role_name=name)
             db.add(role)
             role_map[name] = role
-        if codes is None:
-            role.permissions = all_permissions
-        else:
-            role.permissions = [perm for code, perm in existing.items() if code in codes]
+            if codes is None:
+                role.permissions = all_permissions
+            else:
+                role.permissions = [perm for code, perm in existing.items() if code in codes]
         return role
 
     admin_role = ensure_role("Admin", None)
-    ensure_role("Operator", OPERATOR_CODES)
-    ensure_role("Viewer", VIEWER_CODES)
+    if fresh_roles:
+        ensure_role("Operator", OPERATOR_CODES)
+        ensure_role("Viewer", VIEWER_CODES)
     db.flush()
 
     # 3. Default admin user

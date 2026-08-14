@@ -391,7 +391,7 @@ export default function AddSNMPDevicePage() {
               <input
                 type="text"
                 value={formData.model_override}
-                onChange={(e) => handleChange('model_override', e.target.value))
+                onChange={(e) => handleChange('model_override', e.target.value)}
                 placeholder="e.g., Catalyst 9300"
                 className="w-full glass-bright rounded px-3 py-2 font-mono text-xs"
                 style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)' }}
@@ -402,7 +402,7 @@ export default function AddSNMPDevicePage() {
               <input
                 type="text"
                 value={formData.device_type_override}
-                onChange={(e) => handleChange('device_type_override', e.target.value))
+              onChange={(e) => handleChange('device_type_override', e.target.value)}
                 placeholder="e.g., switch, router, firewall"
                 className="w-full glass-bright rounded px-3 py-2 font-mono text-xs"
                 style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)' }}

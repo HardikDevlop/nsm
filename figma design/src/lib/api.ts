@@ -2165,13 +2165,25 @@ export async function deleteDeviceType(id: number): Promise<{ detail: string }> 
 export interface AuditLogRecord {
   id: number
   user_id?: number | null
+  user_name?: string | null
   action: string
   resource_name: string
   timestamp: string
 }
 
-export async function listAuditLogs(): Promise<AuditLogRecord[]> {
-  return requestJson<AuditLogRecord[]>('/audit-logs')
+export async function listAuditLogs(userId?: number): Promise<AuditLogRecord[]> {
+  const query = userId == null ? '' : `?user_id=${userId}`
+  return requestJson<AuditLogRecord[]>(`/audit-logs${query}`)
+}
+
+export async function recordPageView(page: string): Promise<void> {
+  await requestJson(`/audit-logs/page-view?page=${encodeURIComponent(page)}`, { method: 'POST' })
+}
+
+export interface AuditLogUser { id: number; name: string; email: string }
+
+export async function listAuditLogUsers(): Promise<AuditLogUser[]> {
+  return requestJson<AuditLogUser[]>('/audit-logs/users')
 }
 
 // ── Device Metrics CRUD ─────────────────────────────────────────────────────

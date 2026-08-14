@@ -9,6 +9,43 @@ import {
   type RoleRecord, type PermissionRecord, type RoleWithPermissions,
 } from '../lib/api'
 
+const permissionModuleLabels: Record<string, string> = {
+  alerts: 'Alert Management',
+  audit_logs: 'Audit Logs',
+  attack_path: 'Attack Path',
+  compliance: 'Compliance',
+  dashboard: 'Overview',
+  device_credentials: 'Device Credentials',
+  device_metrics: 'Device Metrics',
+  device_monitoring: 'Device Monitoring',
+  device_types: 'Device Types',
+  devices: 'SNMP Devices',
+  discovery: 'Network Discovery',
+  events: 'Events',
+  firewall: 'Firewall',
+  forensics: 'Forensics',
+  incidents: 'Incidents',
+  interfaces: 'Network Interfaces',
+  isp: 'IP Scan',
+  monitoring: 'Monitoring Controls',
+  monitoring_jobs: 'Monitoring Jobs',
+  nginx: 'Nginx Monitor',
+  notifications: 'Notifications',
+  organizations: 'Organizations',
+  packet_analysis: 'Packet Analysis',
+  reports: 'Daily Report',
+  server_monitoring: 'Server Monitor',
+  sites: 'Sites',
+  thresholds: 'Thresholds',
+  topology: 'Network Topology',
+  users: 'User Management',
+  vendors: 'Vendors',
+}
+
+function permissionModuleLabel(module: string) {
+  return permissionModuleLabels[module] ?? module.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
 export default function RoleManagement() {
   const [roles,          setRoles]          = useState<RoleRecord[]>([])
   const [allPerms,       setAllPerms]       = useState<PermissionRecord[]>([])
@@ -79,7 +116,9 @@ export default function RoleManagement() {
     if (!selectedRole) return
     setSavingPerms(true)
     try {
-      await setRolePermissions(selectedRole.id, Array.from(selectedIds))
+      const updated = await setRolePermissions(selectedRole.id, Array.from(selectedIds))
+      setSelectedRole(updated)
+      setSelectedIds(new Set(updated.permissions.map(permission => permission.id)))
       toast.success(`Permissions saved for "${selectedRole.role_name}"`)
       await load()
     } catch (e) {
@@ -291,6 +330,14 @@ export default function RoleManagement() {
                 </div>
               </div>
 
+              <div className="rounded-lg px-3 py-2.5 mb-4 font-mono text-[11px]" style={{ background: 'rgba(0,212,255,0.05)', border: '1px solid rgba(0,212,255,0.15)', color: 'var(--t-muted)' }}>
+                <span style={{ color: 'var(--t-accent)' }}>READ</span> = view data ·{' '}
+                <span style={{ color: '#00ff88' }}>CREATE</span> = add data ·{' '}
+                <span style={{ color: '#ffaa00' }}>UPDATE</span> = edit data ·{' '}
+                <span style={{ color: '#ff3366' }}>DELETE</span> = remove data ·{' '}
+                <span style={{ color: '#a78bfa' }}>EXECUTE</span> = run an action
+              </div>
+
               {/* color legend */}
               <div className="flex flex-wrap items-center gap-3 mb-3 px-1">
                 {([
@@ -324,7 +371,7 @@ export default function RoleManagement() {
                   const none   = sel === 0
 
                   // Clean module label: replace underscores, title-case
-                  const modLabel = mod.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                  const modLabel = permissionModuleLabel(mod)
 
                   // Module category colors
                   const isCrud     = perms.some(p => ['create','read','update','delete'].includes(p.action))
@@ -408,10 +455,14 @@ export default function RoleManagement() {
                                   }}>
                                   {checked && <span style={{ color: '#000', fontSize: 8, lineHeight: 1, fontWeight: 700 }}>✓</span>}
                                 </span>
-                                <span
-                                  className="font-mono text-[10px] uppercase font-semibold tracking-wider"
-                                  style={{ color: checked ? col : 'var(--t-muted)' }}>
-                                  {perm.action}
+                                <span className="min-w-0">
+                                  <span className="block font-mono text-[10px] uppercase font-semibold tracking-wider truncate"
+                                    style={{ color: checked ? col : 'var(--t-muted)' }}>
+                                    {perm.name}
+                                  </span>
+                                  <span className="block font-mono text-[9px] truncate" style={{ color: 'var(--t-muted)' }}>
+                                    {perm.code}
+                                  </span>
                                 </span>
                               </button>
                             )

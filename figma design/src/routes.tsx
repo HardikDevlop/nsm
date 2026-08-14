@@ -29,6 +29,7 @@ import SNMPDashboard from './pages/SNMPDashboard'
 
 // New DB-First SNMP Pages
 import SNMPDevices from './pages/SNMPDevices'
+import AddSNMPDevice from './pages/AddSNMPDevice'
 import SNMPDeviceDetails from './pages/SNMPDeviceDetails'
 import SNMPMonitoringConfig from './pages/SNMPMonitoringConfig'
 
@@ -91,6 +92,7 @@ export const router = createBrowserRouter([
           { path: 'snmp/dashboard', Component: withPermission(SNMPDashboard, 'devices:read') },
           { path: 'snmp/dashboard/:deviceId', Component: withPermission(SNMPDashboard, 'devices:read') },
           { path: 'snmp/devices', Component: withPermission(SNMPDevices, 'devices:read') },
+          { path: 'snmp/devices/add', Component: withPermission(AddSNMPDevice, 'devices:create') },
           { path: 'snmp/devices/:deviceId', Component: withPermission(SNMPDeviceDetails, 'devices:read') },
           { path: 'snmp/devices/:deviceId/monitoring', Component: withPermission(SNMPMonitoringConfig, 'devices:update') },
           

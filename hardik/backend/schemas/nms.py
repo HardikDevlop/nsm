@@ -499,6 +499,7 @@ class AuditLogRead(BaseModel):
 
     id: int
     user_id: int | None = None
+    user_name: str | None = None
     action: str
     resource_name: str
     timestamp: datetime

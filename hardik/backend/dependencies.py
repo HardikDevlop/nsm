@@ -8,8 +8,6 @@ from backend.models import Role, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
-SUPERUSER_ROLE = "Admin"
-
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
@@ -49,11 +47,9 @@ def get_user_permission_codes(user: User) -> set[str]:
 
 def require_permission(code: str):
     """RBAC dependency factory: allows the request only when the current
-    user's role owns the permission code (Admin role bypasses all checks)."""
+    user's role owns the permission code. Role names never grant implicit access."""
 
     def checker(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role and current_user.role.role_name == SUPERUSER_ROLE:
-            return current_user
         if code not in get_user_permission_codes(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -61,4 +57,17 @@ def require_permission(code: str):
             )
         return current_user
 
+    return checker
+
+
+def require_any_permission(*codes: str):
+    """Allow a read endpoint when the user has any relevant permission."""
+    def checker(current_user: User = Depends(get_current_user)) -> User:
+        granted = get_user_permission_codes(current_user)
+        if not granted.intersection(codes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing one of permissions: {', '.join(codes)}",
+            )
+        return current_user
     return checker

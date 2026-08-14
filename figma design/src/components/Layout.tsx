@@ -4,7 +4,7 @@ import Sidebar from './Sidebar'
 import NotificationPanel from './NotificationPanel'
 import ThemePicker from './ThemePicker'
 import { useTheme } from './ThemeContext'
-import { listAlerts, type AlertRecord } from '../lib/api'
+import { listAlerts, recordPageView, type AlertRecord } from '../lib/api'
 
 export default function Layout() {
   const [notifOpen, setNotifOpen] = useState(false)
@@ -18,6 +18,10 @@ export default function Layout() {
   const location = useLocation()
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
   const showBack = location.pathname !== '/'
+
+  useEffect(() => {
+    void recordPageView(location.pathname).catch(() => {})
+  }, [location.pathname])
 
   useEffect(() => {
     const loadAlerts = () => { void listAlerts().then(setAlerts).catch(() => setAlerts([])) }

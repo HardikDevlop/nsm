@@ -88,7 +88,9 @@ function SvcBtn({ label, active, busy, onToggle }: { label: string; active: bool
 /* ── main page ───────────────────────────────────────────────────────────── */
 export default function SNMPMonitoring() {
   const navigate = useNavigate()
-  const { isSuperAdmin } = useAuth()
+  const { hasPermission } = useAuth()
+  const canUpdate = hasPermission('devices:update')
+  const canDelete = hasPermission('devices:delete')
 
   const [tab,         setTab]        = useState<'devices'|'oids'|'traps'>('devices')
   const [devices,     setDevices]    = useState<DeviceRecord[]>([])
@@ -145,7 +147,7 @@ export default function SNMPMonitoring() {
   }
 
   const removeDevice = async (id: number) => {
-    if (!isSuperAdmin) return
+    if (!canDelete) return
     const dev = devices.find(d => d.id === id)
     const ok = await confirmDanger({
       title: `Delete ${dev?.hostname || dev?.ip_address || 'device'}?`,
@@ -164,7 +166,7 @@ export default function SNMPMonitoring() {
     }
   }
   const editDevice = async (dev: DeviceRecord) => {
-    if (!isSuperAdmin) return
+    if (!canUpdate) return
     const h = await promptText({
       title: 'Edit hostname',
       inputLabel: 'Hostname',
@@ -435,14 +437,14 @@ export default function SNMPMonitoring() {
                         )}
                       </div>
                       <div className="font-mono text-[10px] mb-1 truncate" style={{color:'#8899bb'}}>{dev.model}</div>
-                      {isSuperAdmin && (
+                      {(canUpdate || canDelete) && (
                         <div className="flex gap-2 mb-1">
-                          <button onClick={e=>{e.stopPropagation();const orig=deviceById.get(dev.id);if(orig)void editDevice(orig)}}
+                          {canUpdate && <button onClick={e=>{e.stopPropagation();const orig=deviceById.get(dev.id);if(orig)void editDevice(orig)}}
                             className="font-mono text-[10px] px-2 py-0.5 rounded border"
-                            style={{color:'#00d4ff',borderColor:'rgba(0,212,255,0.35)'}}>EDIT</button>
-                          <button onClick={e=>{e.stopPropagation();void removeDevice(dev.id)}}
+                            style={{color:'#00d4ff',borderColor:'rgba(0,212,255,0.35)'}}>EDIT</button>}
+                          {canDelete && <button onClick={e=>{e.stopPropagation();void removeDevice(dev.id)}}
                             className="font-mono text-[10px] px-2 py-0.5 rounded border"
-                            style={{color:'#ff6688',borderColor:'rgba(255,102,136,0.35)'}}>DELETE</button>
+                            style={{color:'#ff6688',borderColor:'rgba(255,102,136,0.35)'}}>DELETE</button>}
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
