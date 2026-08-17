@@ -829,7 +829,8 @@ def get_snmp_interfaces(device_id: int, db: Session = Depends(get_db), _: Any = 
         for row in db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
         if row.if_index is not None
     }
-    now = datetime.utcnow()
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
     enriched_interfaces = []
     for iface in live_interfaces:
         if not isinstance(iface, dict):

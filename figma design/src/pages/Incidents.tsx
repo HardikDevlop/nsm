@@ -155,12 +155,14 @@ export default function Incidents() {
     title: alert.title,
     sev: (alert.severity === 'critical' || alert.severity === 'high' || alert.severity === 'medium' || alert.severity === 'low' ? alert.severity : 'medium') as Sev,
     status: (alert.status === 'resolved' ? 'resolved' : alert.status === 'acknowledged' ? 'investigating' : 'open') as Status,
-    src: alert.device_id ? `Device ${alert.device_id}` : 'System',
+    src: alert.device_id
+      ? `${alert.hostname || devices.find(d => d.id === alert.device_id)?.hostname || `Device ${alert.device_id}`} · ${alert.ip_address || alert.ip || devices.find(d => d.id === alert.device_id)?.ip_address || 'IP N/A'}`
+      : 'System',
     dst: alert.description ?? 'NMS',
     time: new Date(alert.created_at).toLocaleString('en-GB', { hour12: false }),
     assigned: alert.acknowledged_by ? `User ${alert.acknowledged_by}` : 'Auto',
     type: alert.severity,
-  })), [alerts])
+  })), [alerts, devices])
 
   const filtered = incidents.filter(inc => {
     if (filter === 'all') return true
@@ -330,7 +332,10 @@ export default function Incidents() {
                       onMouseEnter={e => { if (selected?.id !== inc.id) (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }}
                       onMouseLeave={e => { if (selected?.id !== inc.id) (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
                       <td className="px-4 py-3 font-mono text-xs neon-cyan whitespace-nowrap">{inc.id}</td>
-                      <td className="px-4 py-3 font-mono text-xs max-w-xs truncate" style={{ color: '#c8d8ee' }}>{inc.title}</td>
+                      <td className="px-4 py-3 font-mono text-xs max-w-xs" style={{ color: '#c8d8ee' }}>
+                        <div className="truncate">{inc.title}</div>
+                        <div className="text-[10px] mt-1 truncate" style={{ color: '#667799' }}>SOURCE: {inc.src}</div>
+                      </td>
                       <td className="px-4 py-3">
                         <span className="font-mono text-xs px-2 py-0.5 rounded uppercase"
                           style={{ color: s.c, background: s.bg }}>{inc.sev}</span>

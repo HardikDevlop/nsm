@@ -61,7 +61,8 @@ export function useLiveSNMPPoll(deviceId: number | null) {
     queryFn: () => fetchLiveSNMPPoll(deviceId!),
     enabled: !!deviceId,
     staleTime: 5000,
-    refetchInterval: 30000,
+    // Trigger a live collect every 15s; the backend persists it before returning.
+    refetchInterval: 15000,
     refetchIntervalInBackground: true,
     retry: 1,
   });

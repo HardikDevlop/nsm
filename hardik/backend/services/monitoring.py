@@ -3,7 +3,8 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from backend.models import Alert, DeviceMetric, DeviceStatusHistory, Device
+from backend.models import DeviceMetric, DeviceStatusHistory, Device
+from backend.services.alerting import create_offline_alert
 from backend.services.discovery import _ping
 
 
@@ -29,15 +30,7 @@ def _record_status_change(db: Session, device: Device, new_status: str, reason: 
     device.status = new_status
     device.last_status_change = now
     if new_status == "offline":
-        db.add(
-            Alert(
-                device_id=device.id,
-                severity="critical",
-                title=f"Device Down: {device.hostname}",
-                description=f"{device.ip_address} stopped responding to ICMP",
-                status="open",
-            )
-        )
+        create_offline_alert(db, device.id, device.hostname, device.ip_address)
 
 
 def run_monitoring_check(

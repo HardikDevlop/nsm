@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440
     credential_encryption_key: str = ""
     backend_cors_origins: str = "http://localhost:3000,http://localhost:5173"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_tls: bool = True
+    alert_email_recipients: str = ""
 
     @property
     def cors_origins(self) -> list[str]:

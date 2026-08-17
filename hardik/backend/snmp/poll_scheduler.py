@@ -1,7 +1,7 @@
 """Polling cadence definitions used by the SNMP scheduler."""
 
 POLL_INTERVALS = {
-    "interfaces": 30,
+    "interfaces": 15,
     "cpu": 60,
     "memory": 60,
     "environment": 300,

@@ -6,6 +6,7 @@ typed and indexed for PostgreSQL queries.
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from enum import Enum as PyEnum
 from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -13,14 +14,14 @@ from backend.database.session import Base
 
 
 def now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
 
 
 class SNMPBase:
     """Common audit timestamps required by all SNMP tables."""
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True, comment="UTC creation time")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now, comment="UTC last update time")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True, comment="India time creation time")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now, comment="India time last update time")
 
 
 class MonitoringStatus(PyEnum):

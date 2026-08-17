@@ -95,6 +95,7 @@ from backend.schemas.nms import (
 )
 from backend.services.discovery import discover_network
 from backend.services.monitoring import run_monitoring_check
+from backend.services.alerting import _notify
 from backend.utils.crypto import encrypt_secret
 
 
@@ -832,6 +833,8 @@ def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 10
 @router.post("/alerts", response_model=AlertRead, status_code=status.HTTP_201_CREATED)
 def create_alert(payload: AlertCreate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:create"))):
     item = alert_crud.create(db, payload)
+    if item.status in {"open", "acknowledged"}:
+        _notify(db, item)
     db.add(Event(device_id=item.device_id, event_type="ALERT_CREATED", description=item.title))
     db.commit()
     db.refresh(item)

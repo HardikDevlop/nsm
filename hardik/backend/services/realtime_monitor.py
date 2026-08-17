@@ -467,13 +467,8 @@ class MonitorEngine:
 
                 # Create a critical alert when device goes offline
                 if db_new_status == "offline":
-                    db.add(Alert(
-                        device_id=device.id,
-                        severity="critical",
-                        title=f"Device Down: {device.hostname}",
-                        description=f"{device.ip_address} stopped responding to ICMP (realtime monitor)",
-                        status="open",
-                    ))
+                    from backend.services.alerting import create_offline_alert
+                    create_offline_alert(db, device.id, device.hostname, device.ip_address)
 
             db.commit()
         except Exception as exc:

@@ -21,6 +21,7 @@ Design
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     Boolean, DateTime, Float, ForeignKey, Index,
@@ -32,7 +33,7 @@ from backend.database.session import Base
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------

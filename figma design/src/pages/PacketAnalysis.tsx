@@ -106,6 +106,19 @@ export default function PacketAnalysis() {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
   }
 
+  const formatSpeed = (bps?: number | null): string => {
+  if (!bps || bps <= 0) return '—'
+
+  const gbps = 1_000_000_000
+  const mbps = 1_000_000
+  const kbps = 1_000
+
+  if (bps >= gbps) return `${(bps / gbps).toFixed(2)} Gbps`
+  if (bps >= mbps) return `${(bps / mbps).toFixed(0)} Mbps`
+  if (bps >= kbps) return `${(bps / kbps).toFixed(0)} Kbps`
+  return `${bps} bps`
+}
+
   // --- Protocol distribution from interface traffic ---
   const protocols = useMemo(() => {
     // Use real traffic data split into protocol categories
@@ -369,7 +382,7 @@ export default function PacketAnalysis() {
             <table className="w-full" style={{ minWidth: 700 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
-                {['Device', 'IP', 'Interface', 'Status', 'Speed', 'Traffic In', 'Traffic Out', 'Total', 'Errors'].map(h => (
+                {['Device', 'IP', 'Interface', 'Status', 'Speed', 'Total In', 'Total Out', 'Total', 'Errors'].map(h => (
                   <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: '#8899bb' }}>{h}</th>
                 ))}
               </tr>
@@ -386,7 +399,9 @@ export default function PacketAnalysis() {
                       background: iface.status === 'up' ? 'rgba(0,255,136,0.1)' : 'rgba(255,51,102,0.1)',
                     }}>{iface.status}</span>
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>{iface.speed ?? '—'}</td>
+                  <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>
+                    {formatSpeed(iface.speed)}
+                  </td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00ff88' }}>{formatBytes(iface.traffic_in)}</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#7c3aed' }}>{formatBytes(iface.traffic_out)}</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00d4ff' }}>{formatBytes(iface.totalTraffic)}</td>

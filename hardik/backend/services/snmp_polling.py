@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -31,6 +32,12 @@ from backend.snmp.credentials import SNMPCredentials
 from backend.utils.crypto import decrypt_secret
 
 logger = logging.getLogger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def now_ist() -> datetime:
+    """Return a naive IST timestamp for PostgreSQL TIMESTAMP columns."""
+    return datetime.now(IST).replace(tzinfo=None)
 
 # Module name to collector name mapping
 MODULE_COLLECTOR_MAP = {
@@ -59,7 +66,9 @@ DEFAULT_INTERVALS = {
     "cpu": 60,
     "memory": 60,
     "storage": 300,
-    "interfaces": 30,
+    # Interface counters/status are refreshed every 15 seconds so the
+    # monitoring screen and PostgreSQL latest/history records stay near-real-time.
+    "interfaces": 15,
     "environment": 300,
     "vlan": 600,
     "lldp": 600,
@@ -205,7 +214,7 @@ class SNMPPoller:
         """Persist poll results to latest-value tables and history."""
         module = job.module_name
         device_id = job.device_id
-        now = datetime.utcnow()
+        now = now_ist()
 
         try:
             cap = self.db.query(DeviceCapabilities).filter(
@@ -238,6 +247,8 @@ class SNMPPoller:
             elif module == "environment" and data:
                 await self._persist_environment(device_id, data, now)
 
+            self._evaluate_alerts(device_id, module, data)
+
             # Always persist to history tables
             await self._persist_history(device_id, module, data, supported, now)
 
@@ -245,6 +256,28 @@ class SNMPPoller:
         except Exception as exc:
             logger.error("Failed to persist results for %s: %s", job.job_id, exc)
             self.db.rollback()
+
+    def _evaluate_alerts(self, device_id: int, module: str, data: dict) -> None:
+        """Turn supported SNMP health values into deduplicated alerts."""
+        from backend.services.alerting import create_threshold_alert
+        checks: list[tuple[str, float | None, float, str]] = []
+        if module == "cpu":
+            checks.append(("High CPU", data.get("overall_percent"), 85, "%"))
+        elif module == "memory":
+            checks.append(("High Memory", data.get("utilization_percent"), 85, "%"))
+        elif module == "storage":
+            checks.append(("High Storage", data.get("utilization_percent"), 80, "%"))
+        elif module == "interfaces":
+            for iface in data.get("interfaces", []):
+                if str(iface.get("oper_status", iface.get("status", ""))).lower() in {"down", "2", "false"}:
+                    create_threshold_alert(self.db, device_id, f"Interface Down: {iface.get('name', iface.get('interface', 'unknown'))}", "SNMP reports interface is down", "critical")
+        elif module == "environment":
+            for sensor in data.get("temperatures", []):
+                checks.append((f"High Temperature: {sensor.get('name', 'sensor')}", sensor.get("value"), 70, "°C"))
+        for name, value, threshold, unit in checks:
+            if value is not None and float(value) >= threshold:
+                severity = "critical" if float(value) >= threshold + 10 else "warning"
+                create_threshold_alert(self.db, device_id, name, f"Value {value}{unit} reached threshold {threshold}{unit}", severity)
 
     async def _persist_cpu(self, device_id: int, data: dict, now: datetime) -> None:
         from backend.models.snmp import CPUStatistic, LatestCPU
@@ -602,9 +635,9 @@ class PollingScheduler:
                 return
 
         # Calculate next poll time
-        next_poll = config.next_poll_at or datetime.utcnow()
-        if next_poll < datetime.utcnow():
-            next_poll = datetime.utcnow() + timedelta(seconds=5)
+        next_poll = config.next_poll_at or now_ist()
+        if next_poll < now_ist():
+            next_poll = now_ist() + timedelta(seconds=5)
 
         config.next_poll_at = next_poll
         if db:
@@ -650,7 +683,7 @@ class PollingScheduler:
                 # Update config
                 config = db.query(MonitoringConfig).filter(MonitoringConfig.id == config_id).first()
                 if config:
-                    config.last_poll_at = datetime.utcnow()
+                    config.last_poll_at = now_ist()
                     if result.get("success"):
                         config.status = MonitoringStatus.RUNNING.value
                         config.error_message = None
@@ -662,7 +695,7 @@ class PollingScheduler:
                             config.error_message = result.get("error", "Unknown error")
 
                     # Schedule next poll
-                    config.next_poll_at = datetime.utcnow() + timedelta(seconds=config.interval_seconds)
+                    config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
                     db.commit()
 
                     # Reschedule if still running
@@ -675,7 +708,7 @@ class PollingScheduler:
                 if config:
                     config.status = MonitoringStatus.ERROR.value
                     config.error_message = str(exc)
-                    config.next_poll_at = datetime.utcnow() + timedelta(seconds=config.interval_seconds)
+                    config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
                     db.commit()
             finally:
                 db.close()
@@ -696,14 +729,14 @@ class PollingScheduler:
                     enabled=True,
                     interval_seconds=interval_seconds,
                     status=MonitoringStatus.RUNNING.value,
-                    last_started_at=datetime.utcnow(),
+                    last_started_at=now_ist(),
                 )
                 db.add(config)
             else:
                 config.enabled = True
                 config.interval_seconds = interval_seconds
                 config.status = MonitoringStatus.RUNNING.value
-                config.last_started_at = datetime.utcnow()
+                config.last_started_at = now_ist()
                 config.error_message = None
 
             db.commit()
@@ -727,7 +760,7 @@ class PollingScheduler:
             if config:
                 config.enabled = False
                 config.status = MonitoringStatus.STOPPED.value
-                config.last_stopped_at = datetime.utcnow()
+                config.last_stopped_at = now_ist()
                 config.next_poll_at = None
                 db.commit()
                 return True

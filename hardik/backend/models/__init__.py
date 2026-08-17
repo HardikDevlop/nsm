@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -16,7 +17,8 @@ role_permissions = Table(
 
 
 def utc_now() -> datetime:
-    return datetime.utcnow()
+    # PostgreSQL TIMESTAMP columns are naive; store application timestamps in IST.
+    return datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
 
 
 class Role(Base):

@@ -120,6 +120,9 @@ export interface DeviceMetricRecord {
 export interface AlertRecord {
   id: number
   device_id?: number | null
+  hostname?: string | null
+  ip_address?: string | null
+  ip?: string | null
   severity: string
   title: string
   description?: string | null
