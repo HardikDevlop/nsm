@@ -39,6 +39,7 @@ POST /api/v1/devices/manual           — add device manually with SNMP creds
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -49,6 +50,7 @@ from sqlalchemy.orm import Session
 from backend.database.session import get_db
 from backend.dependencies import get_current_user, require_permission
 from backend.models import Device, DeviceCredential, Event, Interface, Vendor, DeviceType
+from backend.models.identity import DeviceCapabilities
 from backend.models.snmp import LatestInterface, MonitoringStatus
 
 logger = logging.getLogger(__name__)
@@ -75,7 +77,7 @@ def _get_credentials(device_id: int, db: Session) -> DeviceCredential | None:
     ).first()
 
 
-def _live_collect(device: Device, cred: DeviceCredential | None) -> dict[str, Any]:
+def _live_collect(device: Device, cred: DeviceCredential | None, domain: str | None = None) -> dict[str, Any]:
     """Run a live SNMP collect on the device using stored credentials."""
     from backend.snmp.collector import SNMPService  # noqa: PLC0415
     from backend.snmp.credentials import SNMPCredentials  # noqa: PLC0415
@@ -120,7 +122,26 @@ def _live_collect(device: Device, cred: DeviceCredential | None) -> dict[str, An
         security_level=cred.security_level,
     )
     service = SNMPService(credentials=credentials, timeout=10.0, retries=3)
-    return service.collect(device.ip_address)
+    if not domain:
+        return service.collect(device.ip_address)
+
+    # collect_domain returns the collector payload directly, while the HTTP
+    # routes use the same stable envelope as a full collection. Keep the
+    # envelope here so every module route can read its real data consistently.
+    domain_result = service.collect_domain(device.ip_address, domain)
+    return {
+        "api_version": "2.0",
+        "ip": device.ip_address,
+        "reachable": domain_result.get("supported") is not False,
+        "snmp_enabled": True,
+        "snmp_version": version,
+        "vendor": device.vendor.vendor_name if device.vendor else None,
+        "device_type": device.device_type.name if device.device_type else None,
+        "hostname": device.hostname,
+        "collection_ms": domain_result.get("collection_ms", 0),
+        "collectors": {domain: domain_result},
+        "unsupported": [] if domain_result.get("supported") else [domain],
+    }
 
 
 def _collector_data(result: dict[str, Any], name: str) -> dict[str, Any]:
@@ -141,7 +162,6 @@ def _persist_collect_result(device_id: int, result: dict[str, Any], db: Session)
     if not isinstance(collectors, dict):
         return
 
-    from backend.models.identity import DeviceCapabilities
     cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
     if cap is None:
         cap = DeviceCapabilities(device_id=device_id)
@@ -272,6 +292,7 @@ def add_device_manual(
         description=f"Device {ip} added manually",
     ))
     db.commit()
+
     db.refresh(device)
 
     discovery_result: dict[str, Any] = {}
@@ -296,6 +317,26 @@ def add_device_manual(
         },
         "discovery": discovery_result,
     }
+
+
+def _persist_domain_result(device_id: int, result: dict[str, Any], domain: str, db: Session) -> None:
+    """Merge one lightweight domain result without erasing other cached modules."""
+    collectors = result.get("collectors") or {}
+    collector = collectors.get(domain)
+    if not isinstance(collector, dict):
+        return
+    cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    if cap is None:
+        cap = DeviceCapabilities(device_id=device_id, capability_detail={})
+        db.add(cap)
+    detail = dict(cap.capability_detail or {})
+    detail[domain] = collector
+    cap.capability_detail = detail
+    attr = f"cap_{domain}"
+    if hasattr(cap, attr):
+        setattr(cap, attr, collector.get("supported", False))
+    cap.updated_at = datetime.utcnow()
+    db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -668,7 +709,7 @@ def get_snmp_system(
 ) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     cred   = _get_credentials(device_id, db)
-    result = _live_collect(device, cred)
+    result = _live_collect(device, cred, domain="system")
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -709,7 +750,7 @@ def get_snmp_cpu(
         for r in history_rows
     ]
 
-    result   = _live_collect(device, cred)
+    result   = _live_collect(device, cred, domain="cpu")
     col      = _collector_data(result, "cpu")
     col_data = col.get("data") or {}
 
@@ -754,7 +795,7 @@ def get_snmp_cpu(
 @router.get("/snmp/devices/{device_id}/memory")
 def get_snmp_memory(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="memory")
     col      = _collector_data(result, "memory")
     col_data = col.get("data") or {}
     return {
@@ -791,7 +832,7 @@ def get_snmp_memory(device_id: int, db: Session = Depends(get_db), _: Any = Depe
 @router.get("/snmp/devices/{device_id}/storage")
 def get_snmp_storage(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="storage")
     col      = _collector_data(result, "storage")
     col_data = col.get("data") or {}
     return {
@@ -914,7 +955,7 @@ def get_snmp_interface_history(interface_id: int, hours: int = Query(default=24,
 @router.get("/snmp/devices/{device_id}/environment")
 def get_snmp_environment(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="environment")
     col      = _collector_data(result, "environment")
     col_data = col.get("data") or {}
     return {
@@ -1010,7 +1051,7 @@ def get_snmp_routing(device_id: int, db: Session = Depends(get_db), _: Any = Dep
 @router.get("/snmp/devices/{device_id}/vlans")
 def get_snmp_vlans(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="vlan")
     col      = _collector_data(result, "vlan")
     col_data = col.get("data") or {}
     return {
@@ -1039,7 +1080,7 @@ def get_snmp_vlans(device_id: int, db: Session = Depends(get_db), _: Any = Depen
 @router.get("/snmp/devices/{device_id}/cdp")
 def get_snmp_cdp(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="cdp")
     col      = _collector_data(result, "cdp")
     col_data = col.get("data") or {}
     return {
@@ -1068,9 +1109,17 @@ def get_snmp_cdp(device_id: int, db: Session = Depends(get_db), _: Any = Depends
 @router.get("/snmp/devices/{device_id}/arp")
 def get_snmp_arp(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="arp")
     col      = _collector_data(result, "arp")
     col_data = col.get("data") or {}
+    stored_cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    stored_arp = ((stored_cap.capability_detail or {}).get("arp") or {}) if stored_cap else {}
+    stored_data = stored_arp.get("data") or {}
+    current_entries = col_data.get("entries") or []
+    entries = current_entries or (stored_data.get("entries") or [])
+    if current_entries:
+        _persist_domain_result(device_id, result, "arp", db)
+        db.commit()
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -1088,8 +1137,9 @@ def get_snmp_arp(device_id: int, db: Session = Depends(get_db), _: Any = Depends
         "warnings":      col.get("warnings", []),
         "reason":        col.get("reason"),
         "data": {
-            "entry_count": col_data.get("entry_count", 0),
-            "entries":     col_data.get("entries", []),
+            "entry_count": len(entries),
+            "entries":     entries,
+            "port_groups": col_data.get("port_groups", []),
         },
     }
 
@@ -1097,9 +1147,53 @@ def get_snmp_arp(device_id: int, db: Session = Depends(get_db), _: Any = Depends
 @router.get("/snmp/devices/{device_id}/mac-table")
 def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    cred = _get_credentials(device_id, db)
+    result = _live_collect(device, cred, domain="mac_table")
     col      = _collector_data(result, "mac_table")
     col_data = col.get("data") or {}
+    arp_data = (_collector_data(result, "arp").get("data") or {})
+    # Keep the last successful ARP mapping so a transient/empty ARP walk does
+    # not make previously known device IPs disappear from the MAC table.
+    stored_cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    stored_arp = ((stored_cap.capability_detail or {}).get("arp") or {}).get("data") or {} if stored_cap else {}
+    current_arp_entries = arp_data.get("entries") or []
+    arp_entries = current_arp_entries or (stored_arp.get("entries") or [])
+    if not arp_entries:
+        # MAC and ARP are collected independently. On a first visit there may
+        # be no ARP cache yet, so fetch it once and persist it for subsequent
+        # MAC-table requests. Later requests use the cached mapping unless the
+        # ARP endpoint has refreshed it.
+        arp_result = _live_collect(device, cred, domain="arp")
+        live_arp_data = (_collector_data(arp_result, "arp").get("data") or {})
+        current_arp_entries = live_arp_data.get("entries") or []
+        if current_arp_entries:
+            _persist_domain_result(device_id, arp_result, "arp", db)
+            db.commit()
+            arp_entries = current_arp_entries
+    arp_by_mac: dict[str, list[str]] = {}
+    for arp_entry in arp_entries:
+        mac = "".join(ch for ch in str(arp_entry.get("mac") or "").lower() if ch.isalnum())
+        ip = arp_entry.get("ip_address") or arp_entry.get("ip")
+        if mac and ip:
+            arp_by_mac.setdefault(mac, []).append(str(ip))
+    port_groups = []
+    for group in col_data.get("port_groups", []):
+        enriched = dict(group)
+        ips = list(group.get("ip_addresses") or group.get("ips") or [])
+        for mac_value in group.get("macs", []):
+            mac_key = "".join(ch for ch in str(mac_value).lower() if ch.isalnum())
+            ips.extend(arp_by_mac.get(mac_key, []))
+        enriched["ip_addresses"] = list(dict.fromkeys(ips))
+        port_groups.append(enriched)
+    enriched_entries = []
+    for entry in col_data.get("entries", []):
+        enriched_entry = dict(entry)
+        mac_key = "".join(ch for ch in str(entry.get("mac") or "").lower() if ch.isalnum())
+        mapped_ips = arp_by_mac.get(mac_key, [])
+        if mapped_ips:
+            enriched_entry["ip_address"] = mapped_ips[0]
+            enriched_entry["ip_addresses"] = mapped_ips
+        enriched_entries.append(enriched_entry)
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -1119,7 +1213,8 @@ def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = D
         "data": {
             "entry_count": col_data.get("entry_count", 0),
             "vlan_aware":  col_data.get("vlan_aware", False),
-            "entries":     col_data.get("entries", []),
+            "entries":     enriched_entries,
+            "port_groups": port_groups,
         },
     }
 
@@ -1127,7 +1222,7 @@ def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = D
 @router.get("/snmp/devices/{device_id}/inventory")
 def get_snmp_inventory(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="inventory")
     col      = _collector_data(result, "inventory")
     col_data = col.get("data") or {}
     return {
@@ -1164,7 +1259,7 @@ def get_snmp_inventory(device_id: int, db: Session = Depends(get_db), _: Any = D
 @router.get("/snmp/devices/{device_id}/health")
 def get_snmp_health(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="health")
     col      = _collector_data(result, "health")
     col_data = col.get("data") or {}
     return {
@@ -1246,7 +1341,7 @@ def get_snmp_wireless(device_id: int, db: Session = Depends(get_db), _: Any = De
 @router.get("/snmp/devices/{device_id}/device-topology")
 def get_snmp_device_topology(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="topology")
     col      = _collector_data(result, "topology")
     col_data = col.get("data") or {}
     return {
@@ -1272,6 +1367,7 @@ def get_snmp_device_topology(device_id: int, db: Session = Depends(get_db), _: A
             "sources_used":  col_data.get("sources_used", []),
             "nodes":         col_data.get("nodes", []),
             "links":         col_data.get("links", []),
+            "verification_mismatches": col_data.get("verification_mismatches", []),
         },
     }
 
@@ -1318,13 +1414,111 @@ def get_snmp_polling_stats(device_id: int, db: Session = Depends(get_db), _: Any
 
 
 @router.get("/snmp/topology")
-def get_snmp_topology(device_id: int | None = Query(default=None), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool = Query(default=False), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     devices_q = db.query(Device).filter(Device.deleted_at.is_(None))
     if device_id:
         devices_q = devices_q.filter(Device.id == device_id)
-    d_list = devices_q.limit(200).all()
-    nodes = [{"id": d.id, "hostname": d.hostname, "ip_address": d.ip_address, "status": d.status, "type": d.device_type.name if d.device_type else None, "vendor": d.vendor.vendor_name if d.vendor else None} for d in d_list]
-    return {"devices": nodes, "links": []}
+    all_devices = devices_q.limit(200).all()
+    # The network topology is rooted at the core switch. Poll only that
+    # SNMP device; polling every inventory device mixes unrelated ICMP/
+    # inventory nodes into the graph and makes the page unnecessarily slow.
+    core_devices = [d for d in all_devices if any(token in (d.hostname or '').lower() for token in ('core', 'switch', 'sw-'))]
+    d_list = core_devices[:1] or all_devices[:1]
+    if not refresh and d_list:
+        cached_cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d_list[0].id).first()
+        cached_topology = ((cached_cap.capability_detail or {}).get("topology") or {}) if cached_cap else {}
+        cached_data = cached_topology.get("data") or {}
+        if cached_data.get("nodes") or cached_data.get("links"):
+            return {
+                "devices": cached_data.get("nodes", []),
+                "links": cached_data.get("links", []),
+                "verified_only": True,
+                "cached": True,
+                "timestamp": cached_topology.get("timestamp"),
+            }
+    nodes: dict[str, dict[str, Any]] = {
+        str(d.id): {"id": str(d.id), "hostname": d.hostname, "ip_address": d.ip_address,
+                    "status": d.status, "type": d.device_type.name if d.device_type else None,
+                    "vendor": d.vendor.vendor_name if d.vendor else None}
+        for d in d_list
+    }
+    links: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    # Topology used to poll every device serially. A slow/unreachable device
+    # therefore blocked the whole page behind SNMP timeout + retries. Fetch
+    # credentials before starting workers and collect devices concurrently.
+    poll_targets = [(d, _get_credentials(d.id, db)) for d in d_list]
+    def collect_topology(target: tuple[Device, DeviceCredential | None]) -> tuple[Device, dict[str, Any]]:
+        device, credential = target
+        return device, _live_collect(device, credential, domain="topology")
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(poll_targets)))) as executor:
+        future_targets = {executor.submit(collect_topology, target): target for target in poll_targets}
+        for future in as_completed(future_targets):
+          target_device = future_targets[future][0]
+          try:
+            d, result = future.result()
+            topology = (result.get("collectors") or {}).get("topology") or {}
+            data = topology.get("data") or {}
+            # Persist only a successful topology result. An empty/failing
+            # poll must not erase the last known graph.
+            if topology.get("supported") and (data.get("nodes") or data.get("links")):
+                cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d.id).first()
+                if cap is None:
+                    cap = DeviceCapabilities(device_id=d.id, capability_detail={})
+                    db.add(cap)
+                detail = dict(cap.capability_detail or {})
+                detail["topology"] = topology
+                cap.capability_detail = detail
+                db.flush()
+            else:
+                cached = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d.id).first()
+                data = ((cached.capability_detail or {}).get("topology") or {}).get("data") or {} if cached else {}
+            topology_nodes = data.get("nodes", [])
+            node_alias: dict[str, str] = {}
+            local_topology_id = str(topology_nodes[0].get("id")) if topology_nodes else None
+            if local_topology_id:
+                node_alias[local_topology_id] = str(d.id)
+            for node in topology_nodes:
+                node_id = str(node.get("id") or "")
+                if node_id and node_id not in nodes:
+                    node_ip = node.get("ip_address") or node.get("ip")
+                    node_mac = node.get("mac_address") or node.get("mac")
+                    normalized_node_mac = str(node_mac or '').replace(':', '').replace('-', '').replace('.', '').lower()
+                    matching_device = next((known for known in all_devices if
+                        (node_ip and known.ip_address == node_ip) or
+                        (normalized_node_mac and str(getattr(known, "mac_address", "") or '').replace(':', '').replace('-', '').replace('.', '').lower() == normalized_node_mac)), None)
+                    canonical_id = str(matching_device.id) if matching_device else node_id
+                    node_alias[node_id] = canonical_id
+                    nodes[canonical_id] = {"id": canonical_id, "hostname": node.get("hostname") or (matching_device.hostname if matching_device else None),
+                                       "ip_address": node_ip or (matching_device.ip_address if matching_device else None), "status": "online",
+                                       "type": node.get("device_type") or (matching_device.device_type.name if matching_device and matching_device.device_type else None), "vendor": node.get("vendor"),
+                                       "mac_address": node_mac or (getattr(matching_device, "mac_address", None) if matching_device else None)}
+            for link in data.get("links", []):
+                link = {**link,
+                        "source_node": node_alias.get(str(link.get("source_node")), str(link.get("source_node"))),
+                        "target_node": node_alias.get(str(link.get("target_node")), str(link.get("target_node")))}
+                key = (str(link.get("source_node")), str(link.get("target_node")),
+                       str(link.get("source_port")), str(link.get("target_port")))
+                if link.get("verified") and key not in seen:
+                    seen.add(key)
+                    links.append({**link, "verified": True})
+          except Exception:
+            cached = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == target_device.id).first()
+            data = ((cached.capability_detail or {}).get("topology") or {}).get("data") or {} if cached else {}
+            for node in data.get("nodes", []):
+                node_id = str(node.get("id") or "")
+                if node_id and node_id not in nodes:
+                    nodes[node_id] = {"id": node_id, "hostname": node.get("hostname"),
+                                      "ip_address": node.get("ip") or node.get("ip_address"),
+                                      "status": "online", "type": node.get("device_type"),
+                                      "vendor": node.get("vendor"), "mac_address": node.get("mac")}
+            for link in data.get("links", []):
+                if link.get("verified"):
+                    links.append({**link, "verified": True})
+            continue
+    db.commit()
+    return {"devices": list(nodes.values()), "links": links, "verified_only": True}
 
 
 # ---------------------------------------------------------------------------

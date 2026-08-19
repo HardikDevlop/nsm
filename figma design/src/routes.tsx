@@ -11,7 +11,6 @@ import Incidents from './pages/Incidents'
 import PacketAnalysis from './pages/PacketAnalysis'
 import NginxMonitoring from './pages/NginxMonitoring'
 import Firewall from './pages/Firewall'
-import SNMPMonitoring from './pages/SNMPMonitoring'
 import ServerMonitoring from './pages/ServerMonitoring'
 import Forensics from './pages/Forensics'
 import Compliance from './pages/Compliance'
@@ -25,28 +24,7 @@ import Sites from './pages/Sites'
 import DailyReport from './pages/DailyReport'
 import ErrorPage from './pages/ErrorPage'
 
-import SNMPDashboard from './pages/SNMPDashboard'
-
-// New DB-First SNMP Pages
-import SNMPDevices from './pages/SNMPDevices'
-import AddSNMPDevice from './pages/AddSNMPDevice'
-import SNMPDeviceDetails from './pages/SNMPDeviceDetails'
-import SNMPMonitoringConfig from './pages/SNMPMonitoringConfig'
-
-// Module-based SNMP Pages
-import SNMPCPUMonitoring from './pages/SNMPCPUMonitoring'
-import SNMPMemoryMonitoring from './pages/SNMPMemoryMonitoring'
-import SNMPInterfaceMonitoring from './pages/SNMPInterfaceMonitoring'
-import SNMPStorageMonitoring from './pages/SNMPStorageMonitoring'
-import SNMPEnvironmentMonitoring from './pages/SNMPEnvironmentMonitoring'
-import SNMPVLANMonitoring from './pages/SNMPVLANMonitoring'
-import SNMPLLDPMonitoring from './pages/SNMPLLDPMonitoring'
-import SNMPRoutingMonitoring from './pages/SNMPRoutingMonitoring'
-import SNMPTopologyMonitoring from './pages/SNMPTopologyMonitoring'
-import SNMPOIDExplorer from './pages/SNMPOIDExplorer'
-import SNMPPollingMonitoring from './pages/SNMPPollingMonitoring'
-import SNMPCapabilities from './pages/SNMPCapabilities'
-import SNMPGenericModulePage from './pages/SNMPGenericModulePage'
+import { snmpRoutes } from './features/snmp/routes'
 
 // New CRUD Pages
 import AlertsManagement from './pages/AlertsManagement'
@@ -85,35 +63,7 @@ export const router = createBrowserRouter([
           { path: 'packet-analysis', Component: withPermission(PacketAnalysis, 'packet_analysis:read') },
           { path: 'nginx', Component: withPermission(NginxMonitoring, 'nginx:read') },
           { path: 'firewall', Component: withPermission(Firewall, 'firewall:read') },
-          { path: 'snmp', Component: withPermission(SNMPMonitoring, 'devices:read') },
-          { path: 'snmp-monitoring', Component: withPermission(SNMPMonitoring, 'devices:read') },
-          
-          // New DB-First SNMP Routes
-          { path: 'snmp/dashboard', Component: withPermission(SNMPDashboard, 'devices:read') },
-          { path: 'snmp/dashboard/:deviceId', Component: withPermission(SNMPDashboard, 'devices:read') },
-          { path: 'snmp/devices', Component: withPermission(SNMPDevices, 'devices:read') },
-          { path: 'snmp/devices/add', Component: withPermission(AddSNMPDevice, 'devices:create') },
-          { path: 'snmp/devices/:deviceId', Component: withPermission(SNMPDeviceDetails, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/monitoring', Component: withPermission(SNMPMonitoringConfig, 'devices:update') },
-          
-          // Module-based SNMP Routes (dynamic - only show if supported)
-          { path: 'snmp/devices/:deviceId/cpu', Component: withPermission(SNMPCPUMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/memory', Component: withPermission(SNMPMemoryMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/interfaces', Component: withPermission(SNMPInterfaceMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/storage', Component: withPermission(SNMPStorageMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/environment', Component: withPermission(SNMPEnvironmentMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/vlan', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/lldp', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/routing', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/topology', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/oids', Component: withPermission(SNMPOIDExplorer, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/polling', Component: withPermission(SNMPPollingMonitoring, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/capabilities', Component: withPermission(SNMPCapabilities, 'devices:read') },
-          { path: 'snmp/devices/:deviceId/:moduleId', Component: withPermission(SNMPGenericModulePage, 'devices:read') },
-          
-          // Additional common routes
-          { path: 'snmp/capabilities', Component: withPermission(SNMPCapabilities, 'devices:read') },
-          { path: 'snmp/capabilities/:deviceId', Component: withPermission(SNMPCapabilities, 'devices:read') },
+          ...snmpRoutes,
           
           { path: 'servers', Component: withPermission(ServerMonitoring, 'server_monitoring:read') },
           { path: 'forensics', Component: withPermission(Forensics, 'forensics:read') },

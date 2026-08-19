@@ -195,12 +195,51 @@ class MACTableCollector(BaseCollector):
         # Sort by VLAN then MAC
         entries.sort(key=lambda e: (e.get("vlan_id") or 0, e["mac"]))
 
+        # Build a port-centric view. LLDP presence is the strongest signal
+        # that a port is an uplink/trunk; otherwise one learned MAC is an
+        # endpoint hint and ambiguous/multi-MAC ports remain UNKNOWN.
+        lldp_ports: set[str] = set()
+        lldp_prefix = "1.0.8802.1.1.2.1.4.1.1."
+        for oid in raw_flat:
+            sk = str(oid)
+            if sk.startswith(lldp_prefix):
+                suffix = sk[len(lldp_prefix):].split(".")
+                if len(suffix) >= 3:
+                    # column.timeMark.localPort.remoteIndex
+                    lldp_ports.add(suffix[2])
+
+        groups: dict[str, dict[str, Any]] = {}
+        for entry in entries:
+            port_key = str(entry.get("if_index") or entry.get("port") or "unknown")
+            group = groups.setdefault(port_key, {
+                "port": entry.get("port"), "if_index": entry.get("if_index"),
+                "mac_count": 0, "macs": [], "ip_addresses": [], "vlans": [],
+            })
+            group["mac_count"] += 1
+            group["macs"].append(entry["mac"])
+            # Some devices expose an IP alongside the forwarding entry.
+            # Keep it available for the UI; the API can also enrich this
+            # from the ARP collector when the switch does not.
+            ip_address = entry.get("ip_address") or entry.get("ip")
+            if ip_address and ip_address not in group["ip_addresses"]:
+                group["ip_addresses"].append(ip_address)
+            if entry.get("vlan_id") is not None and entry["vlan_id"] not in group["vlans"]:
+                group["vlans"].append(entry["vlan_id"])
+        for key, group in groups.items():
+            if key in lldp_ports or str(group.get("port")) in lldp_ports:
+                group["classification"] = "UPLINK/TRUNK"
+            elif group["mac_count"] == 1:
+                group["classification"] = "ENDPOINT"
+            else:
+                group["classification"] = "UNKNOWN"
+
         return CollectorResponse.ok(
             self.name,
             {
                 "entries":      entries,
                 "entry_count":  len(entries),
                 "vlan_aware":   any(e["vlan_id"] is not None for e in entries),
+                "port_groups":  list(groups.values()),
             },
             missing,
             warnings,

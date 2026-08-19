@@ -60,6 +60,8 @@ _STANDARD_TABLE_WALKS: dict[str, str] = {
     "vlan_fdb_q":     "1.3.6.1.2.1.17.7.1.2.2.1",
     "routing":        "1.3.6.1.2.1.4.21.1",
     "arp":            "1.3.6.1.2.1.4.22.1",
+    # Modern IP-MIB replacement for ipNetToMediaTable (common on Linux/NVRs).
+    "arp_physical":   "1.3.6.1.2.1.4.35.1",
 }
 
 # Vendor-specific table roots (derived dynamically from oid_catalog)
@@ -338,6 +340,7 @@ class SNMPService:
 
 # Per-domain minimal walks for polling
 _DOMAIN_WALKS: dict[str, dict[str, str]] = {
+    "system":     {},
     "cpu":        {"hr_proc":    "1.3.6.1.2.1.25.3.3.1"},
     "memory":     {"hr_storage": "1.3.6.1.2.1.25.2.3.1"},
     "storage":    {"hr_storage": "1.3.6.1.2.1.25.2.3.1"},
@@ -350,10 +353,20 @@ _DOMAIN_WALKS: dict[str, dict[str, str]] = {
     "cdp":        {"cdp":        "1.3.6.1.4.1.9.9.23.1.2.1.1"},
     "routing":    {"routing":    "1.3.6.1.2.1.4.21.1"},
     "arp":        {"arp":        "1.3.6.1.2.1.4.22.1"},
-    "mac_table":  {"mac":        "1.3.6.1.2.1.17.4.3.1"},
+    # Include the Q-BRIDGE FDB as well as the legacy Bridge-MIB FDB. The
+    # Q-BRIDGE row index contains <vlan_id>.<mac>, which is the only reliable
+    # VLAN source for a MAC-table entry on VLAN-aware switches.
+    "mac_table":  {"mac":        "1.3.6.1.2.1.17.4.3.1",
+                   "mac_qbridge": "1.3.6.1.2.1.17.7.1.2.2.1",
+                   "bridge_ports": "1.3.6.1.2.1.17.1.4.1"},
     "inventory":  {"entity":     "1.3.6.1.2.1.47.1.1.1.1"},
+    "health":     {},
     "topology":   {"lldp":       "1.0.8802.1.1.2.1.4",
-                   "arp":        "1.3.6.1.2.1.4.22.1"},
+                   "arp":        "1.3.6.1.2.1.4.22.1",
+                   "mac":        "1.3.6.1.2.1.17.4.3.1",
+                   "interfaces": "1.3.6.1.2.1.2.2.1",
+                   "if_ext":     "1.3.6.1.2.1.31.1.1.1",
+                   "routing":    "1.3.6.1.2.1.4.21.1"},
 }
 
 

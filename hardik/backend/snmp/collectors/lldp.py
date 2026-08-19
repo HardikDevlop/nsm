@@ -215,6 +215,21 @@ class LLDPCollector(BaseCollector):
                 "rem_index":                  rem_idx,
             })
 
+        # A device with VLAN/sub-interface links can advertise the same
+        # chassis MAC more than once. Keep the first complete row per
+        # normalized MAC so the UI shows one physical neighbor device.
+        unique_neighbors: list[dict[str, Any]] = []
+        seen_macs: set[str] = set()
+        for neighbor in neighbors:
+            normalized_mac = self.mac(neighbor.get("remote_chassis_id"))
+            if normalized_mac:
+                neighbor["remote_chassis_id"] = normalized_mac
+                if normalized_mac in seen_macs:
+                    continue
+                seen_macs.add(normalized_mac)
+            unique_neighbors.append(neighbor)
+        neighbors = unique_neighbors
+
         if not neighbors:
             return CollectorResponse.unsupported(
                 self.name,

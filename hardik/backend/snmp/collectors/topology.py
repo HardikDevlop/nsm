@@ -79,6 +79,8 @@ class TopologyCollector(BaseCollector):
         nodes: dict[str, dict[str, Any]] = {}
         links: list[dict[str, Any]] = []
         sources_used: list[str] = []
+        verification_mismatches: list[dict[str, Any]] = []
+        interfaces = self._extract_interfaces(raw_flat)
 
         # Local node (this device)
         local_hostname = device.hostname or "local-device"
@@ -96,11 +98,33 @@ class TopologyCollector(BaseCollector):
         # ---------------------------------------------------------------
         # 1. LLDP neighbors
         # ---------------------------------------------------------------
-        lldp_neighbors = self._extract_lldp(raw_flat)
+        lldp_neighbors = self._unique_lldp(self._extract_lldp(raw_flat))
         if lldp_neighbors:
             sources_used.append("lldp")
+            mac_table = self._extract_mac(raw_flat)
             for nb in lldp_neighbors:
-                nb_id = nb.get("remote_chassis_id") or nb.get("remote_sys_name") or nb.get("mgmt_address", "")
+                nb_mac = self.mac(nb.get("remote_chassis_id"))
+                learned = [e for e in mac_table if e.get("mac") == nb_mac]
+                local_port = nb.get("local_port_desc") or nb.get("local_port_num")
+                matching = [e for e in learned if self._port_matches(
+                    local_port, nb.get("local_port_num"), e
+                )]
+                if not nb_mac:
+                    verification_mismatches.append({
+                        "mac": nb_mac or nb.get("remote_chassis_id"),
+                        "local_port": local_port,
+                        "mac_table_ports": [e.get("port_name") or e.get("port") for e in learned],
+                        "reason": "MAC not found on local port" if learned else "MAC not found in MAC table",
+                    })
+                    continue
+                if not matching:
+                    verification_mismatches.append({
+                        "mac": nb_mac,
+                        "local_port": local_port,
+                        "mac_table_ports": [e.get("port_name") or e.get("port") for e in learned],
+                        "reason": "LLDP neighbor not present in MAC table on this port",
+                    })
+                nb_id = nb_mac
                 if not nb_id:
                     continue
                 if nb_id not in nodes:
@@ -120,12 +144,16 @@ class TopologyCollector(BaseCollector):
                     "target_port":   nb.get("remote_port_id") or nb.get("remote_port_desc"),
                     "protocol":      "lldp",
                     "bidirectional": True,
+                    "verified": True,
+                    "vlan_id": matching[0].get("vlan_id") if matching else None,
+                    "interface": interfaces.get(str(nb.get("local_port_num")), {}),
+                    "confidence": "CONFIRMED",
                 })
 
         # ---------------------------------------------------------------
         # 2. CDP neighbors  (Cisco only)
         # ---------------------------------------------------------------
-        cdp_neighbors = self._extract_cdp(raw_flat, device.vendor)
+        cdp_neighbors = []
         if cdp_neighbors:
             sources_used.append("cdp")
             for nb in cdp_neighbors:
@@ -155,6 +183,7 @@ class TopologyCollector(BaseCollector):
         # 3. ARP table — Layer-3 adjacency
         # ---------------------------------------------------------------
         arp_entries = self._extract_arp(raw_flat)
+        arp_by_mac = {entry["mac"]: entry["ip_address"] for entry in arp_entries if entry.get("mac")}
         if arp_entries and not lldp_neighbors and not cdp_neighbors:
             sources_used.append("arp")
             for entry in arp_entries:
@@ -185,38 +214,53 @@ class TopologyCollector(BaseCollector):
         # ---------------------------------------------------------------
         # 4. MAC table — L2 adjacency (only when nothing else found)
         # ---------------------------------------------------------------
-        if not links:
-            mac_entries = self._extract_mac(raw_flat)
-            if mac_entries:
-                sources_used.append("mac_table")
-                for entry in mac_entries:
-                    mac = entry.get("mac", "")
-                    if not mac or entry.get("status") == "self":
-                        continue
-                    nb_id = mac
-                    if nb_id not in nodes:
-                        nodes[nb_id] = {
-                            "id":         nb_id,
-                            "hostname":   None,
-                            "ip":         None,
-                            "mac":        mac,
-                            "vendor":     None,
-                            "device_type": None,
-                            "interfaces": [],
-                        }
-                    links.append({
-                        "source_node":   local_id,
-                        "target_node":   nb_id,
-                        "source_port":   str(entry.get("if_index") or entry.get("port") or ""),
-                        "target_port":   None,
-                        "protocol":      "mac_table",
-                        "bidirectional": False,
-                    })
+        mac_entries = self._extract_mac(raw_flat)
+        if mac_entries:
+            sources_used.append("mac_table")
+            confirmed_ports = {
+                str(nb.get("local_port_desc") or nb.get("local_port_num") or "").strip().lower()
+                for nb in lldp_neighbors
+            }
+            for entry in mac_entries:
+                entry_port = str(entry.get("port_name") or entry.get("if_index") or entry.get("port") or "").strip().lower()
+                # LLDP/CDP owns a confirmed device-to-device port. MAC table
+                # entries on all other ports are endpoint candidates.
+                if entry_port in confirmed_ports:
+                    continue
+                mac = entry.get("mac", "")
+                if not mac or entry.get("status") == "self":
+                    continue
+                nb_id = mac
+                if nb_id not in nodes:
+                    nodes[nb_id] = {
+                        "id":         nb_id,
+                        "hostname":   None,
+                        "ip":         arp_by_mac.get(mac),
+                        "mac":        mac,
+                        "vendor":     None,
+                        "device_type": None,
+                        "interfaces": [],
+                    }
+                links.append({
+                    "source_node":   local_id,
+                    "target_node":   nb_id,
+                    "source_port":   str(entry.get("if_index") or entry.get("port") or ""),
+                    "target_port":   None,
+                    "protocol":      "mac_table",
+                    "bidirectional": False,
+                    "vlan_id": entry.get("vlan_id"),
+                    "interface": interfaces.get(str(entry.get("if_index") or entry.get("port")), {}),
+                    "confidence": "INFERRED",
+                    "verified":      True,
+                })
 
         # ---------------------------------------------------------------
         # 5. Routing next-hops
         # ---------------------------------------------------------------
-        route_gws = self._extract_route_gws(raw_flat)
+        route_gws = []
+        for route in self._extract_routes(raw_flat):
+            if route.get("next_hop") and (route.get("destination") == "0.0.0.0" or route.get("prefix_length") == 0):
+                route_gws.append(route["next_hop"])
         if route_gws:
             if "routing" not in sources_used:
                 sources_used.append("routing")
@@ -238,6 +282,10 @@ class TopologyCollector(BaseCollector):
                         "target_port":   None,
                         "protocol":      "routing",
                         "bidirectional": False,
+                        "protocol": "routing",
+                        "confidence": "INFERRED",
+                        "gateway_path": True,
+                        "verified":      True,
                     })
 
         if len(nodes) <= 1 and not links:
@@ -270,6 +318,7 @@ class TopologyCollector(BaseCollector):
                 "link_count":   len(unique_links),
                 "source":       source_label,
                 "sources_used": sources_used,
+                "verification_mismatches": verification_mismatches,
             },
             missing,
             warnings,
@@ -334,6 +383,40 @@ class TopologyCollector(BaseCollector):
             })
         return results
 
+    def _unique_lldp(self, neighbors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep one LLDP row per normalized remote chassis MAC."""
+        unique: dict[str, dict[str, Any]] = {}
+        for nb in neighbors:
+            mac = self.mac(nb.get("remote_chassis_id"))
+            if not mac:
+                continue
+            nb = {**nb, "remote_chassis_id": mac}
+            unique.setdefault(mac, nb)
+        return list(unique.values())
+
+    @staticmethod
+    def _port_matches(local_port: Any, local_port_num: Any, entry: dict[str, Any]) -> bool:
+        wanted_values = {
+            str(value).strip().lower()
+            for value in (local_port, local_port_num)
+            if value not in (None, "")
+        }
+        candidates = {
+            str(entry.get(k) or "").strip().lower()
+            for k in ("port_name", "if_index", "port")
+        }
+        # Accept common names such as GE15/GigabitEthernet15 when the
+        # bridge table exposes only numeric port 15.
+        numeric_wanted = {
+            value.removeprefix("ge").removeprefix("gi")
+            for value in wanted_values
+        }
+        numeric_candidates = {
+            value.removeprefix("ge").removeprefix("gi")
+            for value in candidates
+        }
+        return bool(wanted_values & candidates or numeric_wanted & numeric_candidates)
+
     def _extract_cdp(
         self, raw: dict[str, Any], vendor: str | None
     ) -> list[dict[str, Any]]:
@@ -377,9 +460,48 @@ class TopologyCollector(BaseCollector):
         return entries
 
     def _extract_mac(self, raw: dict[str, Any]) -> list[dict[str, Any]]:
+        # Prefer VLAN-aware Q-BRIDGE entries and retain the learned port.
+        q_port = "1.3.6.1.2.1.17.7.1.2.2.1.2."
+        q_status = "1.3.6.1.2.1.17.7.1.2.2.1.3."
+        if_names = {
+            str(k)[len("1.3.6.1.2.1.31.1.1.1.1."):]: self.text(v)
+            for k, v in raw.items()
+            if str(k).startswith("1.3.6.1.2.1.31.1.1.1.1.")
+        }
+        bridge_to_if = {
+            int(str(k)[len("1.3.6.1.2.1.17.1.4.1.2."):]): int(self.num(v))
+            for k, v in raw.items()
+            if str(k).startswith("1.3.6.1.2.1.17.1.4.1.2.") and self.num(v) is not None
+        }
         _FDB_PORT   = "1.3.6.1.2.1.17.4.3.1.2."
         _FDB_STATUS = "1.3.6.1.2.1.17.4.3.1.3."
         entries: list[dict[str, Any]] = []
+        for k, v in raw.items():
+            sk = str(k)
+            if not sk.startswith(q_port):
+                continue
+            suffix = sk[len(q_port):]
+            parts = suffix.split(".")
+            if len(parts) != 7:
+                continue
+            try:
+                vlan, octets = int(parts[0]), [int(x) for x in parts[1:]]
+                if not all(0 <= x <= 255 for x in octets):
+                    continue
+                mac = ":".join(f"{x:02X}" for x in octets)
+                status = str(raw.get(q_status + suffix, "3")).strip()
+                if status == "2":
+                    continue
+                port = self.num(v)
+                if_index = bridge_to_if.get(int(port)) if port is not None else None
+                entries.append({"mac": mac, "port": port, "if_index": if_index,
+                                "port_name": if_names.get(str(if_index)) if if_index is not None else None,
+                                "vlan_id": vlan,
+                                "status": {"3": "learned", "4": "self", "5": "mgmt"}.get(status, "other")})
+            except (ValueError, TypeError):
+                continue
+        if entries:
+            return entries
         for k, v in raw.items():
             sk = str(k)
             if sk.startswith(_FDB_PORT):
@@ -392,11 +514,44 @@ class TopologyCollector(BaseCollector):
                         if status_code != "2":  # skip invalid
                             entries.append({
                                 "mac": mac, "port": self.num(v), "if_index": None,
+                                "port_name": None, "vlan_id": None,
                                 "status": {"3": "learned", "4": "self", "5": "mgmt"}.get(status_code, "other"),
                             })
                     except (ValueError, TypeError):
                         pass
         return entries[:500]    # cap at 500 for large L2 devices
+
+    def _extract_interfaces(self, raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Small indexed interface map used to annotate topology links."""
+        rows: dict[str, dict[str, Any]] = {}
+        fields = {
+            "1.3.6.1.2.1.2.2.1.2.": "description",
+            "1.3.6.1.2.1.2.2.1.5.": "speed_bps",
+            "1.3.6.1.2.1.2.2.1.8.": "status",
+            "1.3.6.1.2.1.31.1.1.1.1.": "name",
+            "1.3.6.1.2.1.31.1.1.1.18.": "alias",
+        }
+        for oid, field in fields.items():
+            for key, value in raw.items():
+                if str(key).startswith(oid):
+                    index = str(key)[len(oid):]
+                    rows.setdefault(index, {})[field] = self.num(value) if field == "speed_bps" else self.text(value)
+        return rows
+
+    def _extract_routes(self, raw: dict[str, Any]) -> list[dict[str, Any]]:
+        root = "1.3.6.1.2.1.4.21.1."
+        columns = {"1": "destination", "4": "next_hop", "5": "interface", "11": "mask"}
+        rows: dict[str, dict[str, Any]] = {}
+        for key, value in raw.items():
+            text_key = str(key)
+            if not text_key.startswith(root):
+                continue
+            suffix = text_key[len(root):].split(".")
+            if len(suffix) < 5 or suffix[0] not in columns:
+                continue
+            row = ".".join(suffix[1:])
+            rows.setdefault(row, {})[columns[suffix[0]]] = self.text(value)
+        return [row for row in rows.values() if row.get("next_hop")]
 
     def _extract_route_gws(self, raw: dict[str, Any]) -> list[str]:
         _FWD_NEXTHOP = "1.3.6.1.2.1.4.21.1.4."
