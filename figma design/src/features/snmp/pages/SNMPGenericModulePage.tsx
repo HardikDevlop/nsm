@@ -3,7 +3,7 @@ import GlassCard from '../../../components/GlassCard'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
 import { getModuleConfig } from '../modules/snmpModuleRegistry'
-import { useMonitoringData, useModuleData } from '../modules/useSNMPModules'
+import { useMonitoringData } from '../modules/useSNMPModules'
 
 const TITLE: Record<string, string> = {
   mac_table: 'MAC Table',
@@ -32,24 +32,11 @@ export default function SNMPGenericModulePage() {
   const config = getModuleConfig(moduleName)
 
   const { data: monitoringData } = useMonitoringData(id)
-  const { data: directData, isLoading: directLoading, error: directError } = useModuleData(id, config ? moduleName : null)
-  const { data: arpData } = useModuleData(id, moduleName === 'mac_table' ? 'arp' : null)
+  const dbModule = monitoringData?.modules?.[moduleName]
   const arpEntries = moduleName === 'mac_table'
-    ? ((arpData as any)?.data?.entries || (arpData as any)?.entries || [])
+    ? ((monitoringData?.modules?.arp?.data?.entries) || [])
     : []
 
-  const dbModule = monitoringData?.modules?.[moduleName]
-  const directCollector = directData
-    ? {
-        collector: moduleName,
-        supported: (directData as any)?.supported ?? true,
-        timestamp: (directData as any)?.timestamp,
-        data: (directData as any)?.data ?? directData,
-        reason: (directData as any)?.reason,
-        missing: (directData as any)?.missing,
-        warnings: (directData as any)?.warnings,
-      }
-    : null
   const dbCollector = dbModule
     ? {
         collector: moduleName,
@@ -60,10 +47,8 @@ export default function SNMPGenericModulePage() {
       }
     : null
 
-  const collectors = [directCollector, dbCollector].filter(Boolean)
-  const collector =
-    (moduleName === 'mac_table' && directCollector?.supported === true ? directCollector : null) ||
-    collectors.find(c => c.supported === true && hasCollectorData(c)) ||
+  const collectors = [dbCollector].filter(Boolean)
+  const collector = collectors.find(c => c.supported === true && hasCollectorData(c)) ||
     collectors.find(hasCollectorData) ||
     collectors.find(c => c.supported === true) ||
     collectors[0]
@@ -78,17 +63,6 @@ export default function SNMPGenericModulePage() {
       unsupportedMessage={`${title} is not supported by this device.`}
       allowUnsupportedContent
     >
-      {(directLoading || directError) && (
-        <GlassCard className="p-3">
-          <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
-            <span style={{ color: directLoading ? '#ffaa00' : directError ? '#ff3366' : '#00ff88' }}>
-              {directLoading ? 'Loading SNMP data...' : directError ? 'SNMP data unavailable' : supported ? 'Data loaded' : 'Not supported'}
-            </span>
-            {directError && <span className="truncate" style={{ color: '#ffaa00' }}>Module: {directError.message}</span>}
-          </div>
-        </GlassCard>
-      )}
-
       {collector ? (
         <SNMPCollectorDataCard name={moduleName} collector={collector} arpEntries={arpEntries} />
       ) : (

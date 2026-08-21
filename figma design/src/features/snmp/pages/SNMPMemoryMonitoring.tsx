@@ -4,7 +4,7 @@ import { getModuleConfig, getHealthColor, getStatusColor, formatBytes } from '..
 import GlassCard from '../../../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
-import { useModuleData, useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
+import { useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
 import { useLatestMemory } from '../hooks/useSnmpQueries'
 
 function memoryHealth(util: number | undefined): 'healthy' | 'warning' | 'critical' | 'unknown' {
@@ -20,21 +20,16 @@ export default function SNMPMemoryMonitoring() {
   const moduleConfig = getModuleConfig('memory')!
 
   const { data: caps } = useDeviceCapabilities(id)
-  const { data, isLoading, error } = useModuleData(id, 'memory')
   const { data: latestMemory } = useLatestMemory(id)
-
-  // NEW: Use our working monitoring API
   const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
   
-  // Extract Memory data from all available APIs. Prefer DB/cache plus direct/live fallback.
   const memoryModuleData = monitoringData?.modules?.memory
-  const stats = data as any
-  const memoryData = memoryModuleData?.data || stats?.data || latestMemory || {}
+  const stats = memoryModuleData as any
+  const memoryData = memoryModuleData?.data || latestMemory || {}
   const hasMemoryData = Object.keys(memoryData || {}).length > 0
   const supported =
     monitoringData?.capabilities?.memory === true ||
     caps?.memory === true ||
-    stats?.supported === true ||
     memoryModuleData?.supported === true ||
     hasMemoryData
 
@@ -47,26 +42,25 @@ export default function SNMPMemoryMonitoring() {
   }
 
   const history = stats?.history || []
-  const utilization = memoryData?.utilization_percent ?? latestMemory?.utilization_percent ?? stats?.data?.utilization_percent ?? stats?.utilization_percent
-  const totalBytes = memoryData?.total_bytes ?? stats?.data?.total_bytes ?? stats?.total_bytes
-  const usedBytes = memoryData?.used_bytes ?? stats?.data?.used_bytes ?? stats?.used_bytes
-  const freeBytes = memoryData?.free_bytes ?? stats?.data?.free_bytes ?? stats?.free_bytes
-  const cachedBytes = memoryData?.cached_bytes ?? stats?.data?.cached_bytes ?? stats?.cached_bytes
-  const bufferBytes = memoryData?.buffer_bytes ?? stats?.data?.buffer_bytes ?? stats?.buffer_bytes
+  const utilization = memoryData?.utilization_percent ?? latestMemory?.utilization_percent
+  const totalBytes = memoryData?.total_bytes ?? latestMemory?.total_bytes
+  const usedBytes = memoryData?.used_bytes ?? latestMemory?.used_bytes
+  const freeBytes = memoryData?.free_bytes ?? latestMemory?.free_bytes
+  const cachedBytes = memoryData?.cached_bytes ?? latestMemory?.cached_bytes
+  const bufferBytes = memoryData?.buffer_bytes ?? latestMemory?.buffer_bytes
   
   const health = memoryHealth(utilization)
   const memoryCollector = {
     collector: 'memory',
     supported: true,
-    timestamp: stats?.timestamp || memoryModuleData?.timestamp || memoryData?.polled_at,
+    timestamp: memoryModuleData?.timestamp || memoryData?.polled_at,
     data: memoryData,
-    missing: stats?.missing || [],
-    warnings: stats?.warnings || [],
+    missing: memoryModuleData?.missing || [],
+    warnings: memoryModuleData?.warnings || [],
   }
 
   // Debug logging
   console.log('Memory Stats Data:', { 
-    data, 
     stats, 
     utilization, 
     latestMemory,
@@ -86,7 +80,7 @@ export default function SNMPMemoryMonitoring() {
           { label: 'Used', value: usedBytes ? formatBytes(usedBytes) : '—', color: utilization && utilization >= 90 ? '#ff3366' : utilization && utilization >= 75 ? '#ffaa00' : '#00ff88' },
           { label: 'Free', value: freeBytes ? formatBytes(freeBytes) : '—', color: '#7c3aed' },
           { label: 'Utilization', value: utilization !== undefined ? `${utilization.toFixed(1)}%` : '—', color: utilization && utilization >= 90 ? '#ff3366' : utilization && utilization >= 75 ? '#ffaa00' : '#00ff88' },
-          { label: 'Source', value: memoryData ? 'DB Latest' : stats?.data?.source ?? '—', color: '#ffaa00' },
+          { label: 'Source', value: memoryData ? 'DB Latest' : '—', color: '#ffaa00' },
         ].map(tile => (
           <GlassCard key={tile.label} className="p-4 text-center">
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
@@ -105,29 +99,29 @@ export default function SNMPMemoryMonitoring() {
           title={`Health: ${health}`}
         />
         <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
-        {(memoryData?.polled_at || stats?.data?.last_poll) && (
+        {memoryData?.polled_at && (
           <span className="font-mono text-xs" style={{ color: '#667799' }}>
-            Last Poll: {new Date(memoryData?.polled_at || stats.data.last_poll).toLocaleString()}
+            Last Poll: {new Date(memoryData.polled_at).toLocaleString()}
           </span>
         )}
       </div>
 
       {/* Swap */}
-      {((stats?.data?.swap_total ?? stats?.swap_total) !== undefined && (stats?.data?.swap_total ?? stats?.swap_total) > 0) && (
+      {((memoryData?.swap_total ?? latestMemory?.swap_total) !== undefined && (memoryData?.swap_total ?? latestMemory?.swap_total) > 0) && (
         <GlassCard className="p-4 mb-4">
           <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-4">SWAP</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3 rounded" style={{ background: 'rgba(0,212,255,0.05)', border: '1px solid rgba(0,212,255,0.1)' }}>
               <div className="font-mono text-[10px]" style={{ color: '#667799' }}>TOTAL</div>
-              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(stats?.data?.swap_total ?? stats?.swap_total)}</div>
+              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.swap_total ?? latestMemory?.swap_total)}</div>
             </div>
             <div className="p-3 rounded" style={{ background: 'rgba(0,255,136,0.05)', border: '1px solid rgba(0,255,136,0.1)' }}>
               <div className="font-mono text-[10px]" style={{ color: '#667799' }}>FREE</div>
-              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(stats?.data?.swap_free ?? stats?.swap_free)}</div>
+              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.swap_free ?? latestMemory?.swap_free)}</div>
             </div>
             <div className="p-3 rounded" style={{ background: 'rgba(124,58,237,0.05)', border: '1px solid rgba(124,58,237,0.1)' }}>
               <div className="font-mono text-[10px]" style={{ color: '#667799' }}>USED</div>
-              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(((stats?.data?.swap_total ?? stats?.swap_total) || 0) - ((stats?.data?.swap_free ?? stats?.swap_free) || 0))}</div>
+              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(((memoryData?.swap_total ?? latestMemory?.swap_total) || 0) - ((memoryData?.swap_free ?? latestMemory?.swap_free) || 0))}</div>
             </div>
           </div>
         </GlassCard>
@@ -139,11 +133,11 @@ export default function SNMPMemoryMonitoring() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="p-3 rounded" style={{ background: 'rgba(0,212,255,0.05)', border: '1px solid rgba(0,212,255,0.1)' }}>
             <div className="font-mono text-[10px]" style={{ color: '#667799' }}>BUFFERS</div>
-            <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(stats?.data?.buffer_bytes ?? stats?.buffer_bytes)}</div>
+            <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.buffer_bytes ?? latestMemory?.buffer_bytes)}</div>
           </div>
           <div className="p-3 rounded" style={{ background: 'rgba(0,255,136,0.05)', border: '1px solid rgba(0,255,136,0.1)' }}>
             <div className="font-mono text-[10px]" style={{ color: '#667799' }}>CACHED</div>
-            <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(stats?.data?.cached_bytes ?? stats?.cached_bytes)}</div>
+            <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.cached_bytes ?? latestMemory?.cached_bytes)}</div>
           </div>
         </div>
       </GlassCard>
@@ -176,10 +170,10 @@ export default function SNMPMemoryMonitoring() {
                         {new Date(row.timestamp).toLocaleString()}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>
-                        {formatBytes(stats.history[i]?.used ?? 0)}
+                        {formatBytes(history[i]?.used ?? 0)}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>
-                        {formatBytes(stats.history[i]?.free ?? 0)}
+                        {formatBytes(history[i]?.free ?? 0)}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: '#00d4ff' }}>
                         {row.utilization.toFixed(1)}%

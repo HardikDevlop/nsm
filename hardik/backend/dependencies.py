@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, selectinload
 
 from backend.auth.security import decode_access_token
 from backend.database.session import get_db
@@ -28,7 +28,7 @@ def get_current_user(
         )
     user = (
         db.query(User)
-        .options(joinedload(User.role).joinedload(Role.permissions))
+        .options(selectinload(User.role).selectinload(Role.permissions))
         .filter(User.email == email)
         .first()
     )

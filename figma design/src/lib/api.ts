@@ -1,8 +1,12 @@
 const DEFAULT_API_BASE = '/api/v1'
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE).replace(/\/$/, '')
+const GET_CACHE_TTL_MS = 15_000
+const GET_CACHE_PREFIX = 'nms.api.cache.v1:'
 
 let authToken: string | null = null
 let authPromise: Promise<string> | null = null
+const getCache = new Map<string, { expiresAt: number; value: unknown }>()
+const inflightRequests = new Map<string, Promise<unknown>>()
 
 function buildUrl(path: string) {
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`
@@ -20,6 +24,55 @@ async function ensureAuth(): Promise<string> {
   }
 
   throw new Error('Not authenticated')
+}
+
+function cacheKey(path: string, token: string) {
+  return `${token}::${path}`
+}
+
+function readCached<T>(key: string): T | null {
+  const now = Date.now()
+  const cached = getCache.get(key)
+  if (cached && cached.expiresAt > now) return cached.value as T
+  if (cached) getCache.delete(key)
+  try {
+    const persisted = window.sessionStorage.getItem(`${GET_CACHE_PREFIX}${key}`)
+    if (!persisted) return null
+    const parsed = JSON.parse(persisted) as { expiresAt?: number; value?: T }
+    if (!parsed?.expiresAt || parsed.expiresAt <= now) {
+      window.sessionStorage.removeItem(`${GET_CACHE_PREFIX}${key}`)
+      return null
+    }
+    getCache.set(key, { expiresAt: parsed.expiresAt, value: parsed.value as unknown })
+    return parsed.value ?? null
+  } catch {
+    return null
+  }
+}
+
+function writeCached<T>(key: string, value: T) {
+  const record = { expiresAt: Date.now() + GET_CACHE_TTL_MS, value }
+  getCache.set(key, record)
+  try {
+    window.sessionStorage.setItem(`${GET_CACHE_PREFIX}${key}`, JSON.stringify(record))
+  } catch {
+    // Optional cache only.
+  }
+}
+
+function clearRequestCache() {
+  getCache.clear()
+  inflightRequests.clear()
+  try {
+    const keys: string[] = []
+    for (let index = 0; index < window.sessionStorage.length; index++) {
+      const key = window.sessionStorage.key(index)
+      if (key?.startsWith(GET_CACHE_PREFIX)) keys.push(key)
+    }
+    keys.forEach(key => window.sessionStorage.removeItem(key))
+  } catch {
+    // ignore storage failures
+  }
 }
 
 /** Explicit login — stores token in memory + localStorage. */
@@ -44,35 +97,57 @@ export function logout() {
   authToken = null
   authPromise = null
   window.localStorage.removeItem('nms_access_token')
+  clearRequestCache()
 }
 
 export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await ensureAuth()
-  const response = await fetch(buildUrl(path), {
+  const method = (init.method ?? 'GET').toUpperCase()
+  const canCache = method === 'GET' && !init.signal && !init.body
+  const key = canCache ? cacheKey(path, token) : ''
+
+  if (canCache) {
+    const cached = readCached<T>(key)
+    if (cached !== null) return cached
+    const existing = inflightRequests.get(key)
+    if (existing) return existing as Promise<T>
+  }
+
+  const request = fetch(buildUrl(path), {
     ...init,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
       ...(init.headers ?? {}),
     },
+  }).then(async response => {
+    if (response.status === 401) {
+      authToken = null
+      window.localStorage.removeItem('nms_access_token')
+      clearRequestCache()
+      return requestJson<T>(path, init)
+    }
+
+    if (!response.ok) {
+      let detail = ''
+      try {
+        const body = await response.json() as { detail?: string | { message?: string } }
+        detail = typeof body.detail === 'string' ? body.detail : body.detail?.message ?? ''
+      } catch { /* non-JSON error */ }
+      throw new Error(detail ? `Request failed: ${response.status} — ${detail}` : `Request failed: ${response.status}`)
+    }
+
+    return response.json() as Promise<T>
   })
 
-  if (response.status === 401) {
-    authToken = null
-    window.localStorage.removeItem('nms_access_token')
-    return requestJson<T>(path, init)
+  if (canCache) inflightRequests.set(key, request as Promise<unknown>)
+  try {
+    const result = await request
+    if (canCache) writeCached(key, result)
+    return result
+  } finally {
+    if (canCache) inflightRequests.delete(key)
   }
-
-  if (!response.ok) {
-    let detail = ''
-    try {
-      const body = await response.json() as { detail?: string | { message?: string } }
-      detail = typeof body.detail === 'string' ? body.detail : body.detail?.message ?? ''
-    } catch { /* non-JSON error */ }
-    throw new Error(detail ? `Request failed: ${response.status} — ${detail}` : `Request failed: ${response.status}`)
-  }
-
-  return response.json() as Promise<T>
 }
 
 export interface DashboardSummary {
@@ -88,6 +163,7 @@ export interface DeviceRecord {
   id: number
   hostname: string
   ip_address: string
+  snmp_version?: string | null
   mac_address?: string | null
   status: string
   monitoring_status: boolean

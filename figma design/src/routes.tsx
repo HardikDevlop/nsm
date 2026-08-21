@@ -1,51 +1,57 @@
+import { lazy } from 'react'
 import { createBrowserRouter } from 'react-router'
 import Layout from './components/Layout'
 import ProtectedLayout from './components/ProtectedLayout'
 import { withPermission } from './components/ProtectedLayout'
-import Login from './pages/Login'
-import Unauthorized from './pages/Unauthorized'
-import Dashboard from './pages/Dashboard'
-import Topology from './pages/Topology'
-import ISPMonitoring from './pages/ISPMonitoring'
-import Incidents from './pages/Incidents'
-import PacketAnalysis from './pages/PacketAnalysis'
-import NginxMonitoring from './pages/NginxMonitoring'
-import Firewall from './pages/Firewall'
-import ServerMonitoring from './pages/ServerMonitoring'
-import Forensics from './pages/Forensics'
-import Compliance from './pages/Compliance'
-import DeviceMonitoring from './pages/DeviceMonitoring'
-import DeviceMonitoringList from './pages/DeviceMonitoringList'
-import RoleManagement from './pages/RoleManagement'
-import UserManagement from './pages/UserManagement'
-import Organizations from './pages/Organizations'
-import Vendors from './pages/Vendors'
-import Sites from './pages/Sites'
-import DailyReport from './pages/DailyReport'
 import ErrorPage from './pages/ErrorPage'
-
 import { snmpRoutes } from './features/snmp/routes'
 
-// New CRUD Pages
-import AlertsManagement from './pages/AlertsManagement'
-import Events from './pages/Events'
-import Notifications from './pages/Notifications'
-import AuditLogs from './pages/AuditLogs'
-import Thresholds from './pages/Thresholds'
-import MonitoringJobs from './pages/MonitoringJobs'
-import DeviceCredentials from './pages/DeviceCredentials'
-import DeviceTypes from './pages/DeviceTypes'
-import InterfacesList from './pages/InterfacesList'
+function lazyRetry<T extends { default: React.ComponentType<any> }>(loader: () => Promise<T>) {
+  return lazy(async () => {
+    try {
+      return await loader()
+    } catch (error) {
+      // A transient dev-server/module-resolution failure can leave the route
+      // tree unusable. Retry once before falling back to the page error UI.
+      await new Promise(resolve => setTimeout(resolve, 120))
+      return loader()
+    }
+  })
+}
+
+const Login = lazyRetry(() => import('./pages/Login'))
+const Unauthorized = lazyRetry(() => import('./pages/Unauthorized'))
+const Dashboard = lazyRetry(() => import('./pages/Dashboard'))
+const Topology = lazyRetry(() => import('./pages/Topology'))
+const ISPMonitoring = lazyRetry(() => import('./pages/ISPMonitoring'))
+const Incidents = lazyRetry(() => import('./pages/Incidents'))
+const PacketAnalysis = lazyRetry(() => import('./pages/PacketAnalysis'))
+// const NginxMonitoring = lazyRetry(() => import('./pages/NginxMonitoring'))
+const Firewall = lazyRetry(() => import('./pages/Firewall'))
+const ServerMonitoring = lazyRetry(() => import('./pages/ServerMonitoring'))
+const Forensics = lazyRetry(() => import('./pages/Forensics'))
+const Compliance = lazyRetry(() => import('./pages/Compliance'))
+const DeviceMonitoring = lazyRetry(() => import('./pages/DeviceMonitoring'))
+const DeviceMonitoringList = lazyRetry(() => import('./pages/DeviceMonitoringList'))
+const RoleManagement = lazyRetry(() => import('./pages/RoleManagement'))
+const UserManagement = lazyRetry(() => import('./pages/UserManagement'))
+const Organizations = lazyRetry(() => import('./pages/Organizations'))
+const Vendors = lazyRetry(() => import('./pages/Vendors'))
+const Sites = lazyRetry(() => import('./pages/Sites'))
+const DailyReport = lazyRetry(() => import('./pages/DailyReport'))
+const AlertsManagement = lazyRetry(() => import('./pages/AlertsManagement'))
+const Events = lazyRetry(() => import('./pages/Events'))
+const Notifications = lazyRetry(() => import('./pages/Notifications'))
+const AuditLogs = lazyRetry(() => import('./pages/AuditLogs'))
+const Thresholds = lazyRetry(() => import('./pages/Thresholds'))
+const MonitoringJobs = lazyRetry(() => import('./pages/MonitoringJobs'))
+const DeviceCredentials = lazyRetry(() => import('./pages/DeviceCredentials'))
+const DeviceTypes = lazyRetry(() => import('./pages/DeviceTypes'))
+const InterfacesList = lazyRetry(() => import('./pages/InterfacesList'))
 
 export const router = createBrowserRouter([
-  {
-    path: '/login',
-    Component: Login,
-  },
-  {
-    path: '/unauthorized',
-    Component: Unauthorized,
-  },
+  { path: '/login', Component: Login },
+  { path: '/unauthorized', Component: Unauthorized },
   {
     Component: ProtectedLayout,
     errorElement: <ErrorPage />,
@@ -61,13 +67,12 @@ export const router = createBrowserRouter([
           { path: 'incidents', Component: withPermission(Incidents, 'incidents:read') },
           { path: 'alerts', Component: withPermission(AlertsManagement, 'alerts:read') },
           { path: 'packet-analysis', Component: withPermission(PacketAnalysis, 'packet_analysis:read') },
-          { path: 'nginx', Component: withPermission(NginxMonitoring, 'nginx:read') },
-          { path: 'firewall', Component: withPermission(Firewall, 'firewall:read') },
+          // { path: 'nginx', Component: withPermission(NginxMonitoring, 'nginx:read') },
+          // { path: 'firewall', Component: withPermission(Firewall, 'firewall:read') },
           ...snmpRoutes,
-          
           { path: 'servers', Component: withPermission(ServerMonitoring, 'server_monitoring:read') },
-          { path: 'forensics', Component: withPermission(Forensics, 'forensics:read') },
-          { path: 'compliance', Component: withPermission(Compliance, 'compliance:read') },
+          // { path: 'forensics', Component: withPermission(Forensics, 'forensics:read') },
+          // { path: 'compliance', Component: withPermission(Compliance, 'compliance:read') },
           { path: 'device-monitoring', Component: withPermission(DeviceMonitoringList, 'device_monitoring:read') },
           { path: 'device-monitoring/:deviceId', Component: withPermission(DeviceMonitoring, 'device_monitoring:read') },
           { path: 'roles', Component: withPermission(RoleManagement, 'roles:read') },
@@ -76,25 +81,19 @@ export const router = createBrowserRouter([
           { path: 'vendors', Component: withPermission(Vendors, 'vendors:read') },
           { path: 'reports/daily', Component: withPermission(DailyReport, 'reports:read') },
           { path: 'sites', Component: withPermission(Sites, 'sites:read') },
-          
-          // New CRUD Management Pages
           { path: 'alerts-management', Component: withPermission(AlertsManagement, 'alerts:read') },
           { path: 'events', Component: withPermission(Events, 'events:read') },
           { path: 'notifications', Component: withPermission(Notifications, 'notifications:read') },
           { path: 'audit-logs', Component: withPermission(AuditLogs, 'audit_logs:read') },
-          { path: 'thresholds', Component: withPermission(Thresholds, 'thresholds:read') },
+          // { path: 'thresholds', Component: withPermission(Thresholds, 'thresholds:read') },
           { path: 'monitoring-jobs', Component: withPermission(MonitoringJobs, 'monitoring_jobs:read') },
           { path: 'device-credentials', Component: withPermission(DeviceCredentials, 'device_credentials:read') },
           { path: 'device-types', Component: withPermission(DeviceTypes, 'device_types:read') },
           { path: 'interfaces', Component: withPermission(InterfacesList, 'interfaces:read') },
-          
           { path: '*', Component: ErrorPage },
         ],
       },
     ],
   },
-  {
-    path: '*',
-    Component: ErrorPage,
-  },
+  { path: '*', Component: ErrorPage },
 ])

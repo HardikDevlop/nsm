@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["Discovery / Monitoring (modules)"])
 logger = logging.getLogger(__name__)
+_monitor_start_lock = Lock()
+_monitoring_start_inflight: set[str] = set()
 
 
 # ----------------------------- Request schemas ----------------------------- #
@@ -1093,16 +1096,34 @@ def monitoring_start_device(payload: MonitorDeviceRequest):
     """Start monitoring a single device (ping every 5s)."""
     from backend.services.realtime_monitor import get_engine
 
+    ip = payload.ip.strip()
+    if not ip:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ip is required")
+
     engine = get_engine()
-    dev = engine.start_device(
-        ip=payload.ip,
-        hostname=payload.hostname or "",
-        vendor=payload.vendor or "",
-        mac_address=payload.mac_address,
-        site_id=payload.site_id,
-        device_id=payload.device_id,
-    )
-    return dev.to_dict()
+    with _monitor_start_lock:
+        if engine.get_device(ip) is not None or ip in _monitoring_start_inflight:
+            existing = engine.get_device(ip)
+            return (existing.to_dict() if existing else {"ip": ip, "status": "starting", "message": "Monitoring already starting"})
+        _monitoring_start_inflight.add(ip)
+
+    def _start() -> None:
+        try:
+            engine.start_device(
+                ip=ip,
+                hostname=payload.hostname or "",
+                vendor=payload.vendor or "",
+                mac_address=payload.mac_address,
+                site_id=payload.site_id,
+                device_id=payload.device_id,
+            )
+        finally:
+            with _monitor_start_lock:
+                _monitoring_start_inflight.discard(ip)
+
+    import threading
+    threading.Thread(target=_start, daemon=True, name=f"monitor-start-{ip}").start()
+    return {"ip": ip, "status": "starting", "message": "Monitoring start accepted"}
 
 
 @router.post("/discovery/monitoring/stop")
@@ -1122,7 +1143,7 @@ def monitoring_start_all(payload: MonitorAllRequest):
 
     engine = get_engine()
     added = engine.start_all(payload.devices)
-    return {"added": added, "total_monitored": len(engine.get_all())}
+    return {"added": added, "total_monitored": len(engine.get_all()), "message": "Monitoring start accepted"}
 
 
 @router.post("/discovery/monitoring/stop-all")

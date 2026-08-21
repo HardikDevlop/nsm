@@ -4,7 +4,7 @@ import { getModuleConfig, getHealthColor } from '../modules/snmpModuleRegistry'
 import GlassCard from '../../../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
-import { useModuleData, useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
+import { useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
 import { useLatestCPU } from '../hooks/useSnmpQueries'
 
 function normalizePerCore(value: any): Array<{ id: string; percent: number }> {
@@ -31,24 +31,19 @@ export default function SNMPCPUMonitoring() {
   const moduleConfig = getModuleConfig('cpu')!
 
   const { data: caps } = useDeviceCapabilities(id)
-  const { data, isLoading, error } = useModuleData(id, 'cpu')
   const { data: latestCPU } = useLatestCPU(id)
-  
-  // NEW: Use our working monitoring API
   const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
   
-  // Extract CPU data from all available APIs. Prefer direct/live data, then DB/cache fallbacks.
   const cpuModuleData = monitoringData?.modules?.cpu
-  const stats = data as any
+  const stats = cpuModuleData as any
   const history = stats?.history || []
-  const cpuData = stats?.data || cpuModuleData?.data || latestCPU || {}
+  const cpuData = stats?.data || latestCPU || {}
   const currentUsage = cpuData?.overall_percent ?? cpuData?.utilization_percent ?? latestCPU?.current_usage ?? stats?.overall_percent
   const perCore = normalizePerCore(cpuData?.per_core ?? latestCPU?.per_core)
   const hasCpuData = Object.keys(cpuData || {}).length > 0 || perCore.length > 0 || currentUsage !== undefined
   const supported =
     monitoringData?.capabilities?.cpu === true ||
     caps?.cpu === true ||
-    stats?.supported === true ||
     cpuModuleData?.supported === true ||
     hasCpuData
 
@@ -57,12 +52,9 @@ export default function SNMPCPUMonitoring() {
     id,
     caps,
     supported,
-    rawData: data,
     latestCPU,
     monitoringData,
     cpuModuleData,
-    isLoading,
-    error,
     monitoringLoading,
     monitoringError
   })
@@ -79,15 +71,14 @@ export default function SNMPCPUMonitoring() {
   const cpuCollector = {
     collector: 'cpu',
     supported: true,
-    timestamp: stats?.timestamp || cpuModuleData?.timestamp || cpuData?.polled_at,
+    timestamp: cpuModuleData?.timestamp || cpuData?.polled_at,
     data: cpuData,
-    missing: stats?.missing || [],
-    warnings: stats?.warnings || [],
+    missing: cpuModuleData?.missing || [],
+    warnings: cpuModuleData?.warnings || [],
   }
 
   // Debug logging
   console.log('CPU Stats Data:', { 
-    data, 
     stats, 
     currentUsage, 
     latestCPU, 
@@ -104,7 +95,7 @@ export default function SNMPCPUMonitoring() {
           { label: 'Average', value: cpuData?.average_percent !== undefined ? `${cpuData.average_percent.toFixed(1)}%` : '—', color: '#00d4ff' },
           { label: 'Cores', value: String(cpuData?.core_count ?? (perCore.length || '—')), color: '#34d399' },
           { label: 'Load 1m', value: cpuData?.load_avg?.['1min'] !== undefined ? `${Number(cpuData.load_avg['1min']).toFixed(2)}` : '—', color: '#ffaa00' },
-          { label: 'Source', value: cpuData?.source ?? (cpuModuleData?.data ? 'DB Cache' : latestCPU ? 'DB Latest' : '—'), color: '#00d4ff' },
+          { label: 'Source', value: cpuData?.source ?? (latestCPU ? 'DB Latest' : '—'), color: '#00d4ff' },
         ].map(tile => (
           <GlassCard key={tile.label} className="p-4 text-center">
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
@@ -123,9 +114,9 @@ export default function SNMPCPUMonitoring() {
           title={`Health: ${health}`}
         />
         <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
-        {(cpuData?.polled_at || stats?.timestamp) && (
+        {cpuData?.polled_at && (
           <span className="font-mono text-xs" style={{ color: '#667799' }}>
-            Last Poll: {new Date(cpuData?.polled_at || stats.timestamp).toLocaleString()}
+            Last Poll: {new Date(cpuData.polled_at).toLocaleString()}
           </span>
         )}
         {cpuData?.display && (

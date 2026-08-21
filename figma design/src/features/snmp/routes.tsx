@@ -1,23 +1,25 @@
+import { lazy } from 'react'
 import { withPermission } from '../../components/ProtectedLayout'
-import AddSNMPDevice from './pages/AddSNMPDevice'
-import SNMPCapabilities from './pages/SNMPCapabilities'
-import SNMPCPUMonitoring from './pages/SNMPCPUMonitoring'
-import SNMPDashboard from './pages/SNMPDashboard'
-import SNMPDeviceDetails from './pages/SNMPDeviceDetails'
-import SNMPDevices from './pages/SNMPDevices'
-import SNMPEnvironmentMonitoring from './pages/SNMPEnvironmentMonitoring'
-import SNMPGenericModulePage from './pages/SNMPGenericModulePage'
-import SNMPInterfaceDetails from './pages/SNMPInterfaceDetails'
-import SNMPInterfaceMonitoring from './pages/SNMPInterfaceMonitoring'
-import SNMPLLDPMonitoring from './pages/SNMPLLDPMonitoring'
-import SNMPMemoryMonitoring from './pages/SNMPMemoryMonitoring'
-import SNMPMonitoring from './pages/SNMPMonitoring'
-import SNMPMonitoringConfig from './pages/SNMPMonitoringConfig'
-import SNMPOIDExplorer from './pages/SNMPOIDExplorer'
-import SNMPPollingMonitoring from './pages/SNMPPollingMonitoring'
-import SNMPRoutingMonitoring from './pages/SNMPRoutingMonitoring'
-import SNMPStorageMonitoring from './pages/SNMPStorageMonitoring'
-import SNMPVLANMonitoring from './pages/SNMPVLANMonitoring'
+
+const AddSNMPDevice = lazy(() => import('./pages/AddSNMPDevice'))
+const SNMPCapabilities = lazy(() => import('./pages/SNMPCapabilities'))
+const SNMPCPUMonitoring = lazy(() => import('./pages/SNMPCPUMonitoring'))
+const SNMPDashboard = lazy(() => import('./pages/SNMPDashboard'))
+const SNMPDeviceDetails = lazy(() => import('./pages/SNMPDeviceDetails'))
+const SNMPDevices = lazy(() => import('./pages/SNMPDevices'))
+const SNMPEnvironmentMonitoring = lazy(() => import('./pages/SNMPEnvironmentMonitoring'))
+const SNMPGenericModulePage = lazy(() => import('./pages/SNMPGenericModulePage'))
+const SNMPInterfaceDetails = lazy(() => import('./pages/SNMPInterfaceDetails'))
+const SNMPInterfaceMonitoring = lazy(() => import('./pages/SNMPInterfaceMonitoring'))
+const SNMPLLDPMonitoring = lazy(() => import('./pages/SNMPLLDPMonitoring'))
+const SNMPMemoryMonitoring = lazy(() => import('./pages/SNMPMemoryMonitoring'))
+const SNMPMonitoring = lazy(() => import('./pages/SNMPMonitoring'))
+const SNMPMonitoringConfig = lazy(() => import('./pages/SNMPMonitoringConfig'))
+const SNMPOIDExplorer = lazy(() => import('./pages/SNMPOIDExplorer'))
+const SNMPPollingMonitoring = lazy(() => import('./pages/SNMPPollingMonitoring'))
+const SNMPRoutingMonitoring = lazy(() => import('./pages/SNMPRoutingMonitoring'))
+const SNMPStorageMonitoring = lazy(() => import('./pages/SNMPStorageMonitoring'))
+const SNMPVLANMonitoring = lazy(() => import('./pages/SNMPVLANMonitoring'))
 
 /** All SNMP URLs live under this feature route table. */
 export const snmpRoutes = [

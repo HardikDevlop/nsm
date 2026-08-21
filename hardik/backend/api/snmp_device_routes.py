@@ -50,7 +50,7 @@ from sqlalchemy.orm import Session
 from backend.database.session import get_db
 from backend.dependencies import get_current_user, require_permission
 from backend.models import Device, DeviceCredential, Event, Interface, Vendor, DeviceType
-from backend.models.identity import DeviceCapabilities
+from backend.models.identity import DeviceCapabilities, DeviceIdentity
 from backend.models.snmp import LatestInterface, MonitoringStatus
 
 logger = logging.getLogger(__name__)
@@ -121,7 +121,7 @@ def _live_collect(device: Device, cred: DeviceCredential | None, domain: str | N
         privacy_password=priv_pass,
         security_level=cred.security_level,
     )
-    service = SNMPService(credentials=credentials, timeout=10.0, retries=3)
+    service = SNMPService(credentials=credentials, timeout=3.0, retries=1)
     if not domain:
         return service.collect(device.ip_address)
 
@@ -151,6 +151,208 @@ def _collector_data(result: dict[str, Any], name: str) -> dict[str, Any]:
         "collector": name, "supported": False,
         "reason": "Collector not present in poll result", "missing": [],
     }
+
+
+def _infer_topology_type(device: Device | None, node: dict[str, Any]) -> str | None:
+    text = " ".join(
+        part.lower()
+        for part in [
+            str(node.get("hostname") or ""),
+            str(node.get("name") or ""),
+            str(node.get("vendor") or ""),
+            str(node.get("model") or ""),
+            str(node.get("device_type") or ""),
+            str(device.device_type.name if device and device.device_type else ""),
+        ]
+        if part
+    )
+    if any(token in text for token in ("nvr", "dvr", "cctv", "camera")):
+        return "server"
+    if any(token in text for token in ("firewall", "fortigate")):
+        return "firewall"
+    if any(token in text for token in ("router", "gateway")):
+        return "router"
+    if any(token in text for token in ("access point", "wireless")):
+        return "access-point"
+    if "switch" in text:
+        return "switch"
+    if any(token in text for token in ("server", "linux")):
+        return "server"
+    return node.get("device_type") or (device.device_type.name if device and device.device_type else None)
+
+
+def _normalize_mac(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _first_non_empty(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _load_device_identity_maps(db: Session, devices: list[Device]) -> dict[str, dict[str, Any]]:
+    identities = db.query(DeviceIdentity).filter(DeviceIdentity.device_id.in_([device.id for device in devices])).all()
+    by_device_id: dict[str, dict[str, Any]] = {}
+    by_mac: dict[str, dict[str, Any]] = {}
+    by_hostname: dict[str, dict[str, Any]] = {}
+    by_sys_name: dict[str, dict[str, Any]] = {}
+
+    device_by_id = {str(device.id): device for device in devices}
+
+    for identity in identities:
+        device = device_by_id.get(str(identity.device_id))
+        payload = {
+            "device": device,
+            "identity": identity,
+            "hostname": _first_non_empty(identity.hostname, identity.sys_name, device.hostname if device else None),
+            "ip_address": device.ip_address if device else None,
+            "vendor": _first_non_empty(identity.vendor, device.vendor.vendor_name if device and device.vendor else None),
+            "model": _first_non_empty(identity.model, device.model),
+            "device_type": _first_non_empty(identity.device_type, device.device_type.name if device and device.device_type else None),
+            "sys_name": identity.sys_name,
+            "sys_descr": identity.sys_descr,
+            "mac_addresses": identity.mac_addresses or [],
+        }
+        by_device_id[str(identity.device_id)] = payload
+        if payload["hostname"]:
+            by_hostname[payload["hostname"].lower()] = payload
+        if identity.sys_name:
+            by_sys_name[identity.sys_name.lower()] = payload
+        for mac in identity.mac_addresses or []:
+            norm = _normalize_mac(mac)
+            if norm:
+                by_mac[norm] = payload
+
+    return {
+        "by_device_id": by_device_id,
+        "by_mac": by_mac,
+        "by_hostname": by_hostname,
+        "by_sys_name": by_sys_name,
+    }
+
+
+def _enrich_lldp_neighbors(db: Session, device: Device, neighbors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    devices = db.query(Device).filter(Device.deleted_at.is_(None)).limit(500).all()
+    identity_maps = _load_device_identity_maps(db, devices)
+    by_ip = {d.ip_address: d for d in devices}
+    by_mac = {_normalize_mac(d.mac_address): d for d in devices if d.mac_address}
+    enriched_neighbors: list[dict[str, Any]] = []
+
+    for neighbor in neighbors:
+        row = dict(neighbor)
+        remote_mac = row.get("remote_chassis_id") or row.get("remote_mac")
+        remote_ip = row.get("mgmt_address") or row.get("remote_mgmt_ip")
+        remote_name = row.get("remote_sys_name") or row.get("remote_system_name") or row.get("remote_device")
+        identity = None
+        matching_device = None
+
+        norm_mac = _normalize_mac(remote_mac)
+        if norm_mac:
+          matching_device = by_mac.get(norm_mac)
+        if not matching_device and remote_ip:
+          matching_device = by_ip.get(str(remote_ip))
+        if matching_device:
+            identity = identity_maps["by_device_id"].get(str(matching_device.id))
+        if not identity and norm_mac:
+            identity = identity_maps["by_mac"].get(norm_mac)
+        if not identity and remote_name:
+            identity = identity_maps["by_hostname"].get(str(remote_name).lower()) or identity_maps["by_sys_name"].get(str(remote_name).lower())
+
+        row["remote_device"] = _first_non_empty(
+            row.get("remote_device"),
+            row.get("remote_system_name"),
+            row.get("remote_sys_name"),
+            identity.get("hostname") if identity else None,
+            matching_device.hostname if matching_device else None,
+            remote_name,
+            remote_ip,
+            remote_mac,
+        )
+        row["remote_system_name"] = _first_non_empty(
+            row.get("remote_system_name"),
+            row.get("remote_sys_name"),
+            identity.get("sys_name") if identity else None,
+            matching_device.hostname if matching_device else None,
+            remote_name,
+        )
+        row["remote_sys_name"] = _first_non_empty(
+            row.get("remote_sys_name"),
+            row.get("remote_system_name"),
+            identity.get("sys_name") if identity else None,
+            matching_device.hostname if matching_device else None,
+            remote_name,
+        )
+        row["remote_mgmt_ip"] = _first_non_empty(
+            row.get("remote_mgmt_ip"),
+            row.get("mgmt_address"),
+            identity.get("ip_address") if identity else None,
+            matching_device.ip_address if matching_device else None,
+            remote_ip,
+        )
+        row["mgmt_address"] = _first_non_empty(
+            row.get("mgmt_address"),
+            row.get("remote_mgmt_ip"),
+            identity.get("ip_address") if identity else None,
+            matching_device.ip_address if matching_device else None,
+            remote_ip,
+        )
+        row["capabilities"] = row.get("capabilities") or row.get("capabilities_supported") or row.get("capabilities_enabled") or []
+        row["remote_chassis_id"] = displayMac(remote_mac) if remote_mac else row.get("remote_chassis_id")
+        enriched_neighbors.append(row)
+
+    return enriched_neighbors
+
+
+def _enrich_topology_node(
+    node: dict[str, Any],
+    matching_device: Device | None,
+    identity_maps: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    node_mac = node.get("mac_address") or node.get("mac")
+    node_hostname = _first_non_empty(node.get("hostname"), node.get("name"), node.get("sys_name"), node.get("sysName"))
+    node_ip = _first_non_empty(node.get("ip_address"), node.get("ip"), node.get("management_ip"))
+    identity = None
+    if matching_device:
+        identity = identity_maps["by_device_id"].get(str(matching_device.id))
+    if not identity:
+        norm_mac = _normalize_mac(node_mac)
+        if norm_mac:
+            identity = identity_maps["by_mac"].get(norm_mac)
+    if not identity and node_hostname:
+        identity = identity_maps["by_hostname"].get(node_hostname.lower()) or identity_maps["by_sys_name"].get(node_hostname.lower())
+
+    merged = dict(node)
+    if identity:
+        merged["hostname"] = _first_non_empty(identity.get("hostname"), merged.get("hostname"), merged.get("name"))
+        merged["ip_address"] = _first_non_empty(merged.get("ip_address"), merged.get("ip"), identity.get("ip_address"))
+        merged["vendor"] = _first_non_empty(merged.get("vendor"), identity.get("vendor"))
+        merged["model"] = _first_non_empty(merged.get("model"), identity.get("model"))
+        merged["sys_name"] = identity.get("sys_name")
+        merged["sys_descr"] = identity.get("sys_descr")
+        merged["device_type"] = _first_non_empty(merged.get("device_type"), identity.get("device_type"))
+        if identity.get("mac_addresses") and not merged.get("mac_addresses"):
+            merged["mac_addresses"] = identity.get("mac_addresses")
+    if matching_device:
+        merged["hostname"] = _first_non_empty(merged.get("hostname"), matching_device.hostname)
+        merged["ip_address"] = _first_non_empty(merged.get("ip_address"), matching_device.ip_address)
+        merged["vendor"] = _first_non_empty(merged.get("vendor"), matching_device.vendor.vendor_name if matching_device.vendor else None)
+        merged["model"] = _first_non_empty(merged.get("model"), matching_device.model)
+        merged["device_type"] = _first_non_empty(merged.get("device_type"), matching_device.device_type.name if matching_device.device_type else None)
+        if matching_device.mac_address and not merged.get("mac_address"):
+            merged["mac_address"] = matching_device.mac_address
+    merged["hostname"] = _first_non_empty(merged.get("hostname"), node_hostname, node_ip, node_mac, "UNKNOWN")
+    merged["ip_address"] = _first_non_empty(merged.get("ip_address"), node_ip)
+    merged["mac_address"] = _first_non_empty(merged.get("mac_address"), node_mac)
+    merged["display_name"] = _first_non_empty(merged.get("hostname"), merged.get("model"), merged.get("mac_address"), merged.get("ip_address"))
+    merged["device_type"] = _infer_topology_type(matching_device, merged) or merged.get("device_type")
+    if merged["device_type"] in {"nvr", "dvr", "camera"}:
+        merged["device_type"] = "server"
+    return merged
 
 
 def _persist_collect_result(device_id: int, result: dict[str, Any], db: Session) -> None:
@@ -994,6 +1196,7 @@ def get_snmp_lldp(device_id: int, db: Session = Depends(get_db), _: Any = Depend
     result = _live_collect(device, _get_credentials(device_id, db))
     col      = _collector_data(result, "lldp")
     col_data = col.get("data") or {}
+    neighbors = _enrich_lldp_neighbors(db, device, col_data.get("neighbors", []))
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -1011,8 +1214,8 @@ def get_snmp_lldp(device_id: int, db: Session = Depends(get_db), _: Any = Depend
         "warnings":      col.get("warnings", []),
         "reason":        col.get("reason"),
         "data": {
-            "neighbor_count": col_data.get("neighbor_count", 0),
-            "neighbors":      col_data.get("neighbors", []),
+            "neighbor_count": len(neighbors),
+            "neighbors":      neighbors,
             "local_ports":    col_data.get("local_ports", {}),
         },
     }
@@ -1419,11 +1622,20 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
     if device_id:
         devices_q = devices_q.filter(Device.id == device_id)
     all_devices = devices_q.limit(200).all()
-    # The network topology is rooted at the core switch. Poll only that
-    # SNMP device; polling every inventory device mixes unrelated ICMP/
-    # inventory nodes into the graph and makes the page unnecessarily slow.
+    # Root from the default gateway first when one is known, otherwise fall
+    # back to core/network infrastructure devices.
+    identity_maps = _load_device_identity_maps(db, all_devices)
+    gateway_devices = [
+        d for d in all_devices
+        if any(token in " ".join([
+            d.hostname or "",
+            d.model or "",
+            d.vendor.vendor_name if d.vendor else "",
+        ]).lower() for token in ("gateway", "gw", "default gateway", "router"))
+    ]
     core_devices = [d for d in all_devices if any(token in (d.hostname or '').lower() for token in ('core', 'switch', 'sw-'))]
-    d_list = core_devices[:1] or all_devices[:1]
+    exact_gateway = next((d for d in all_devices if d.ip_address in ("192.168.1.0", "192.168.100.1")), None)
+    d_list = [exact_gateway] if exact_gateway else gateway_devices[:1] or core_devices[:1] or all_devices[:1]
     if not refresh and d_list:
         cached_cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d_list[0].id).first()
         cached_topology = ((cached_cap.capability_detail or {}).get("topology") or {}) if cached_cap else {}
@@ -1436,12 +1648,26 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                 "cached": True,
                 "timestamp": cached_topology.get("timestamp"),
             }
-    nodes: dict[str, dict[str, Any]] = {
-        str(d.id): {"id": str(d.id), "hostname": d.hostname, "ip_address": d.ip_address,
-                    "status": d.status, "type": d.device_type.name if d.device_type else None,
-                    "vendor": d.vendor.vendor_name if d.vendor else None}
-        for d in d_list
-    }
+    nodes: dict[str, dict[str, Any]] = {}
+    for d in d_list:
+        enriched = _enrich_topology_node(
+            {"id": str(d.id), "hostname": d.hostname, "ip_address": d.ip_address, "status": d.status},
+            d,
+            identity_maps,
+        )
+        nodes[str(d.id)] = {
+            "id": str(d.id),
+            "hostname": enriched.get("hostname"),
+            "ip_address": enriched.get("ip_address"),
+            "status": d.status,
+            "type": enriched.get("device_type"),
+            "vendor": enriched.get("vendor"),
+            "model": enriched.get("model"),
+            "sys_name": enriched.get("sys_name"),
+            "sys_descr": enriched.get("sys_descr"),
+            "mac_address": enriched.get("mac_address"),
+            "display_name": enriched.get("display_name"),
+        }
     links: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
     # Topology used to poll every device serially. A slow/unreachable device
@@ -1490,10 +1716,20 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                         (normalized_node_mac and str(getattr(known, "mac_address", "") or '').replace(':', '').replace('-', '').replace('.', '').lower() == normalized_node_mac)), None)
                     canonical_id = str(matching_device.id) if matching_device else node_id
                     node_alias[node_id] = canonical_id
-                    nodes[canonical_id] = {"id": canonical_id, "hostname": node.get("hostname") or (matching_device.hostname if matching_device else None),
-                                       "ip_address": node_ip or (matching_device.ip_address if matching_device else None), "status": "online",
-                                       "type": node.get("device_type") or (matching_device.device_type.name if matching_device and matching_device.device_type else None), "vendor": node.get("vendor"),
-                                       "mac_address": node_mac or (getattr(matching_device, "mac_address", None) if matching_device else None)}
+                    enriched = _enrich_topology_node(node, matching_device, identity_maps)
+                    nodes[canonical_id] = {
+                        "id": canonical_id,
+                        "hostname": enriched.get("hostname"),
+                        "ip_address": enriched.get("ip_address"),
+                        "status": "online",
+                        "type": enriched.get("device_type"),
+                        "vendor": enriched.get("vendor"),
+                        "model": enriched.get("model"),
+                        "sys_name": enriched.get("sys_name"),
+                        "sys_descr": enriched.get("sys_descr"),
+                        "mac_address": enriched.get("mac_address"),
+                        "display_name": enriched.get("display_name"),
+                    }
             for link in data.get("links", []):
                 link = {**link,
                         "source_node": node_alias.get(str(link.get("source_node")), str(link.get("source_node"))),
@@ -1509,10 +1745,20 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
             for node in data.get("nodes", []):
                 node_id = str(node.get("id") or "")
                 if node_id and node_id not in nodes:
-                    nodes[node_id] = {"id": node_id, "hostname": node.get("hostname"),
-                                      "ip_address": node.get("ip") or node.get("ip_address"),
-                                      "status": "online", "type": node.get("device_type"),
-                                      "vendor": node.get("vendor"), "mac_address": node.get("mac")}
+                    enriched = _enrich_topology_node(node, None, identity_maps)
+                    nodes[node_id] = {
+                        "id": node_id,
+                        "hostname": enriched.get("hostname"),
+                        "ip_address": enriched.get("ip_address"),
+                        "status": "online",
+                        "type": enriched.get("device_type"),
+                        "vendor": enriched.get("vendor"),
+                        "model": enriched.get("model"),
+                        "sys_name": enriched.get("sys_name"),
+                        "sys_descr": enriched.get("sys_descr"),
+                        "mac_address": enriched.get("mac_address"),
+                        "display_name": enriched.get("display_name"),
+                    }
             for link in data.get("links", []):
                 if link.get("verified"):
                     links.append({**link, "verified": True})

@@ -90,7 +90,7 @@ export default function DeviceMonitoring() {
   // Load full device history (monitoring summary + metrics timeseries)
   const loadHistory = useCallback(async (ip: string) => {
     try {
-      const data = await getDeviceHistory(ip, 168) // 7 days
+      const data = await getDeviceHistory(ip, 24)
       setHistory(data)
     } catch { /* silent */ }
   }, [])

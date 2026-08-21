@@ -67,9 +67,11 @@ export function SNMPModuleShell({
 
   const device = data.device;
   const capabilities = data.capabilities || {};
+  const monitoringList = Array.isArray(data.monitoring) ? data.monitoring : [];
   const supported = module === 'overview' || module === 'monitoring' || Boolean(capabilities[module]);
-  const isRunning = monitoringConfig?.status === 'running';
-  const interval = monitoringConfig?.interval_seconds ?? 60;
+  const safeMonitoringConfig = monitoringConfig || monitoringList.find(item => item.module_name === module) || null;
+  const isRunning = safeMonitoringConfig?.status === 'running';
+  const interval = safeMonitoringConfig?.interval_seconds ?? 60;
   const moduleRoutes = supportedModules.map(m => m.route).filter(Boolean);
 
   const handleStartMonitoring = async (intervalSeconds: number) => {

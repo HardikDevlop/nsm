@@ -1,10 +1,13 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router'
 import Sidebar from './Sidebar'
-import NotificationPanel from './NotificationPanel'
-import ThemePicker from './ThemePicker'
 import { useTheme } from './ThemeContext'
 import { listAlerts, recordPageView, type AlertRecord } from '../lib/api'
+
+const PAGE_VIEW_THROTTLE_MS = 30_000
+
+const NotificationPanel = lazy(() => import('./NotificationPanel'))
+const ThemePicker = lazy(() => import('./ThemePicker'))
 
 export default function Layout() {
   const [notifOpen, setNotifOpen] = useState(false)
@@ -20,14 +23,38 @@ export default function Layout() {
   const showBack = location.pathname !== '/'
 
   useEffect(() => {
+    const key = `nms.pageview.${location.pathname}`
+    const lastSeen = Number(window.sessionStorage.getItem(key) || '0')
+    const now = Date.now()
+    if (now - lastSeen < PAGE_VIEW_THROTTLE_MS) return
+    window.sessionStorage.setItem(key, String(now))
     void recordPageView(location.pathname).catch(() => {})
   }, [location.pathname])
 
   useEffect(() => {
-    const loadAlerts = () => { void listAlerts().then(setAlerts).catch(() => setAlerts([])) }
-    loadAlerts()
-    const timer = setInterval(loadAlerts, 15000)
-    return () => clearInterval(timer)
+    let mounted = true
+    let inFlight = false
+    const loadAlerts = async () => {
+      if (!mounted || inFlight || document.visibilityState !== 'visible') return
+      inFlight = true
+      try {
+        const nextAlerts = await listAlerts()
+        if (mounted) setAlerts(nextAlerts)
+      } catch {
+        if (mounted) setAlerts([])
+      } finally {
+        inFlight = false
+      }
+    }
+    void loadAlerts()
+    const timer = window.setInterval(() => { void loadAlerts() }, 30000)
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') void loadAlerts() }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      mounted = false
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [])
 
   const panelAlerts = alerts.slice(0, 8).map(alert => ({
@@ -39,7 +66,11 @@ export default function Layout() {
   const openAlertCount = alerts.filter(alert => alert.status !== 'resolved').length
 
   useEffect(() => {
-    const t = setInterval(() => setTime(new Date()), 1000)
+    const tick = () => setTime(new Date())
+    tick()
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible') tick()
+    }, 1000)
     return () => clearInterval(t)
   }, [])
 
@@ -170,11 +201,15 @@ export default function Layout() {
 
       {/* Notification panel */}
       {notifOpen && (
-        <NotificationPanel alerts={panelAlerts} onClose={() => setNotifOpen(false)} onViewAll={() => { setNotifOpen(false); navigate('/alerts') }} />
+        <Suspense fallback={null}>
+          <NotificationPanel alerts={panelAlerts} onClose={() => setNotifOpen(false)} onViewAll={() => { setNotifOpen(false); navigate('/alerts') }} />
+        </Suspense>
       )}
 
       {/* Theme picker */}
-      <ThemePicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
+      <Suspense fallback={null}>
+        <ThemePicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
+      </Suspense>
     </div>
   )
 }

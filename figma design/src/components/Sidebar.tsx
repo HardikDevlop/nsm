@@ -1,8 +1,7 @@
 import { NavLink } from 'react-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTheme } from './ThemeContext'
 import { useAuth } from './AuthContext'
-import { getDashboardSummary, listDevices, type DeviceRecord } from '../lib/api'
 
 type Props = { 
   collapsed: boolean
@@ -19,18 +18,18 @@ const nav = [
   // { to: '/incidents', label: 'Incidents', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', permission: 'incidents:read' },
   // { to: '/attack-path', label: 'Attack Path', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7', permission: 'attack_path:read' },
   { to: '/packet-analysis', label: 'Packet Analysis', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', permission: 'packet_analysis:read' },
-  { to: '/nginx', label: 'Nginx Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01', permission: 'nginx:read' },
-  { to: '/firewall', label: 'Firewall', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', permission: 'firewall:read' },
+  // { to: '/nginx', label: 'Nginx Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01', permission: 'nginx:read' },
+  // { to: '/firewall', label: 'Firewall', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', permission: 'firewall:read' },
   { to: '/snmp/devices', label: 'SNMP Devices', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z', permission: 'devices:read' },
   { to: '/servers', label: 'Server Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2', permission: 'server_monitoring:read' },
-  { to: '/forensics', label: 'Forensics', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z', permission: 'forensics:read' },
-  { to: '/compliance', label: 'Compliance', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4', permission: 'compliance:read' },
+  // { to: '/forensics', label: 'Forensics', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z', permission: 'forensics:read' },
+  // { to: '/compliance', label: 'Compliance', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4', permission: 'compliance:read' },
   
   // Management section
   { to: '/alerts-management', label: 'Alert Management', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', permission: 'alerts:read', management: true },
   { to: '/events', label: 'Events', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', permission: 'events:read', management: true },
   { to: '/notifications', label: 'Notifications', icon: 'M15 17h5l-5 5v-5zM4.868 19.504L8.094 12l-3.226-7.504L3 5.496z', permission: 'notifications:read', management: true },
-  { to: '/thresholds', label: 'Thresholds', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', permission: 'thresholds:read', management: true },
+  // { to: '/thresholds', label: 'Thresholds', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', permission: 'thresholds:read', management: true },
   { to: '/monitoring-jobs', label: 'Monitoring Jobs', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', permission: 'monitoring_jobs:read', management: true },
   { to: '/interfaces', label: 'Network Interfaces', icon: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0', permission: 'interfaces:read', management: true },
   
@@ -55,39 +54,21 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
   const [totalDevices, setTotalDevices] = useState(0)
 
   // Filter nav items by permission
-  const visibleNav = nav.filter(item => hasPermission(item.permission))
+  const visibleNav = useMemo(() => nav.filter(item => hasPermission(item.permission)), [hasPermission])
 
   useEffect(() => {
-    let ignore = false
-    async function load() {
-      try {
-        const [summary, devices] = await Promise.all([getDashboardSummary(), listDevices()])
-        if (!ignore) {
-          setTotalDevices(summary.total_devices)
-          setOnlineCount(summary.online_devices)
-          setHealthScore(summary.total_devices > 0
-            ? Math.round((summary.online_devices / summary.total_devices) * 100)
-            : 0)
-        }
-      } catch { /* silent */ }
+    const summary = window.sessionStorage.getItem('nms.dashboard.summary.v1')
+    if (!summary) return
+    try {
+      const parsed = JSON.parse(summary) as { total_devices?: number; online_devices?: number }
+      const total = parsed.total_devices ?? 0
+      const online = parsed.online_devices ?? 0
+      setTotalDevices(total)
+      setOnlineCount(online)
+      setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
+    } catch {
+      // ignore bad cache
     }
-    void load()
-    return () => { ignore = true }
-  }, [])
-
-  // Auto-refresh every 30s
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const [summary] = await Promise.all([getDashboardSummary()])
-        setTotalDevices(summary.total_devices)
-        setOnlineCount(summary.online_devices)
-        setHealthScore(summary.total_devices > 0
-          ? Math.round((summary.online_devices / summary.total_devices) * 100)
-          : 0)
-      } catch { /* silent */ }
-    }, 30000)
-    return () => clearInterval(interval)
   }, [])
 
   // On mobile, use mobileOpen to control visibility
@@ -101,6 +82,40 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
   const mainNav = visibleNav.filter(item => !item.admin && !item.management)
   const managementNav = visibleNav.filter(item => item.management)
   const adminNav = visibleNav.filter(item => item.admin)
+
+  const prefetchers = useMemo(() => ({
+    '/': () => import('../pages/Dashboard'),
+    '/topology': () => import('../pages/Topology'),
+    '/isp': () => import('../pages/ISPMonitoring'),
+    '/device-monitoring': () => import('../pages/DeviceMonitoringList'),
+    '/packet-analysis': () => import('../pages/PacketAnalysis'),
+    '/nginx': () => import('../pages/NginxMonitoring'),
+    '/firewall': () => import('../pages/Firewall'),
+    '/servers': () => import('../pages/ServerMonitoring'),
+    '/forensics': () => import('../pages/Forensics'),
+    '/compliance': () => import('../pages/Compliance'),
+    '/alerts-management': () => import('../pages/AlertsManagement'),
+    '/events': () => import('../pages/Events'),
+    '/notifications': () => import('../pages/Notifications'),
+    '/thresholds': () => import('../pages/Thresholds'),
+    '/monitoring-jobs': () => import('../pages/MonitoringJobs'),
+    '/interfaces': () => import('../pages/InterfacesList'),
+    '/roles': () => import('../pages/RoleManagement'),
+    '/users': () => import('../pages/UserManagement'),
+    '/organizations': () => import('../pages/Organizations'),
+    '/sites': () => import('../pages/Sites'),
+    '/vendors': () => import('../pages/Vendors'),
+    '/reports/daily': () => import('../pages/DailyReport'),
+    '/audit-logs': () => import('../pages/AuditLogs'),
+    '/device-credentials': () => import('../pages/DeviceCredentials'),
+    '/device-types': () => import('../pages/DeviceTypes'),
+    '/snmp/devices': () => import('../pages/DeviceMonitoringList'),
+  }), [])
+
+  const prefetchRoute = (to: string) => {
+    const fn = prefetchers[to as keyof typeof prefetchers]
+    if (fn) void fn().catch(() => undefined)
+  }
 
   return (
     <aside className={`${isDark ? 'glass' : 'glass-light'} flex flex-col shrink-0 transition-all duration-300 z-30 fixed md:relative h-full`}
@@ -145,6 +160,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
           {mainNav.map(item => (
             <NavLink key={item.to} to={item.to} end={item.to === '/'}
               onClick={() => { if (window.innerWidth < 768 && onClose) onClose() }}
+              onMouseEnter={() => prefetchRoute(item.to)}
+              onFocus={() => prefetchRoute(item.to)}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-2 py-2 rounded transition-all duration-150 group relative ${
                   isActive ? '' : ''
@@ -192,6 +209,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
               {managementNav.map(item => (
                 <NavLink key={item.to} to={item.to}
                   onClick={() => { if (window.innerWidth < 768 && onClose) onClose() }}
+                  onMouseEnter={() => prefetchRoute(item.to)}
+                  onFocus={() => prefetchRoute(item.to)}
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-2 py-2 rounded transition-all duration-150 group relative ${
                       isActive ? '' : ''
@@ -241,6 +260,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
               {adminNav.map(item => (
                 <NavLink key={item.to} to={item.to}
                   onClick={() => { if (window.innerWidth < 768 && onClose) onClose() }}
+                  onMouseEnter={() => prefetchRoute(item.to)}
+                  onFocus={() => prefetchRoute(item.to)}
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-2 py-2 rounded transition-all duration-150 group relative ${
                       isActive ? '' : ''

@@ -105,7 +105,7 @@ export default function SNMPMonitoring() {
   /* service controls */
   const [pingOn,    setPingOn]    = useState(true)
   const [pollOn,    setPollOn]    = useState(true)
-  const [autoOn,    setAutoOn]    = useState(true)
+  const [autoOn,    setAutoOn]    = useState(false)
   const [pingBusy,  setPingBusy]  = useState(false)
   const abortRef = useRef<AbortController|null>(null)
 
@@ -130,11 +130,6 @@ export default function SNMPMonitoring() {
   }, [selectedId])
 
   useEffect(() => { void loadData() }, [])        // eslint-disable-line
-  useEffect(() => {
-    if (!autoOn) return
-    const id = setInterval(() => { void loadData() }, 15_000)
-    return () => clearInterval(id)
-  }, [autoOn, loadData])
   useEffect(() => () => { abortRef.current?.abort() }, [])
 
   /* ── service toggle handlers ──────────────────────────────────────────── */

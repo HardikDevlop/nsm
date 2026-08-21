@@ -176,8 +176,10 @@ class SNMPPoller:
         if not credentials:
             return {"success": False, "error": "No SNMP credentials"}
 
-        # Check capability
-        if not self._is_module_supported(job.device_id, job.module_name):
+        # Do not hold a DB connection during the network round-trip.
+        supported = self._is_module_supported(job.device_id, job.module_name)
+        self.db.close()
+        if not supported:
             return {"success": False, "error": "Module not supported", "not_supported": True}
 
         collector_name = MODULE_COLLECTOR_MAP.get(job.module_name, job.module_name)
@@ -192,6 +194,7 @@ class SNMPPoller:
             data = result.get("data", {})
 
             # Persist latest values and history
+            self.db = SessionLocal()
             await self._persist_results(job, data, supported)
 
             return {
@@ -217,6 +220,8 @@ class SNMPPoller:
         now = now_ist()
 
         try:
+            if self.db is None:
+                self.db = SessionLocal()
             cap = self.db.query(DeviceCapabilities).filter(
                 DeviceCapabilities.device_id == device_id
             ).first()

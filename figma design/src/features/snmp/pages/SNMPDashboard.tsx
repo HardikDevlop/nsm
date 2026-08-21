@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router'
 import GlassCard from '../../../components/GlassCard'
-import SNMPModuleCard from '../components/SNMPModuleCard'
 import SNMPHealthIndicator from '../components/SNMPHealthIndicator'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
-import { useMonitoringData } from '../modules/useSNMPModules'
 import {
-  getSNMPDeviceOverview,
-  getSNMPSystemInfo,
   listSNMPDevices,
-  type SNMPDeviceOverview,
-  type SNMPSystemInfo,
   type DeviceRecord,
 } from '../../../lib/api'
 
@@ -48,16 +42,8 @@ export default function SNMPDashboard() {
   
   const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null)
-  const [overview, setOverview] = useState<SNMPDeviceOverview | null>(null)
-  const [systemInfo, setSystemInfo] = useState<SNMPSystemInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  // NEW: Get monitoring data for all devices
-  const [allDevicesData, setAllDevicesData] = useState<any[]>([])
-
-  // Use our working monitoring API for selected device
-  const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(selectedDeviceId)
 
   // Load device list and their monitoring data
   useEffect(() => {
@@ -67,31 +53,7 @@ export default function SNMPDashboard() {
         const devs = await listSNMPDevices()
         if (!ignore) {
           setDevices(devs)
-          
-          // Load monitoring data for all devices
-          const monitoringPromises = devs.slice(0, 10).map(async (dev) => {
-            try {
-              const response = await fetch('/api/v1/monitoring/data', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  device_id: dev.id,
-                  modules: ['cpu', 'memory', 'storage', 'interfaces', 'system'],
-                  include_history: false
-                })
-              })
-              if (response.ok) {
-                return await response.json()
-              }
-              return null
-            } catch (err) {
-              console.log(`Failed to load monitoring data for device ${dev.id}:`, err)
-              return null
-            }
-          })
-          
-          const monitoringResults = await Promise.all(monitoringPromises)
-          setAllDevicesData(monitoringResults.filter(Boolean))
+          setLoading(false)
           
           // Auto-select first device or from URL
           if (deviceId) {
@@ -109,32 +71,9 @@ export default function SNMPDashboard() {
     void loadDevices()
     return () => { ignore = true }
   }, [deviceId])
-  // Load device overview and system info
   useEffect(() => {
     if (!selectedDeviceId) return
-    let ignore = false
-    const loadData = async () => {
-      setLoading(true)
-      setError(null)
-      try {
-        const [overviewData, sysData] = await Promise.all([
-          getSNMPDeviceOverview(selectedDeviceId),
-          getSNMPSystemInfo(selectedDeviceId),
-        ])
-        if (!ignore) {
-          setOverview(overviewData)
-          setSystemInfo(sysData)
-        }
-      } catch (err) {
-        if (!ignore) {
-          setError(err instanceof Error ? err.message : 'Failed to load device data')
-        }
-      } finally {
-        if (!ignore) setLoading(false)
-      }
-    }
-    void loadData()
-    return () => { ignore = true }
+    setLoading(false)
   }, [selectedDeviceId])
 
   const handleDeviceChange = (devId: number) => {
@@ -205,7 +144,7 @@ export default function SNMPDashboard() {
         </div>
       )}
 
-      {!loading && overview && currentDevice && (
+      {!loading && currentDevice && (
         <>
           {/* Device Summary Card */}
           <GlassCard className="p-4">
@@ -213,28 +152,28 @@ export default function SNMPDashboard() {
               <div className="flex-1 min-w-[250px]">
                 <div className="flex items-center gap-3 mb-3">
                   <h2 className="font-display font-bold text-lg tracking-wider neon-cyan">
-                    {overview.hostname || currentDevice.ip_address}
+                    {currentDevice.hostname || currentDevice.ip_address}
                   </h2>
-                  <SNMPHealthIndicator health={overview.health} showLabel size="md" />
+                  <SNMPHealthIndicator health={currentDevice.status === 'online' ? 'healthy' : 'unknown'} showLabel size="md" />
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>IP Address</div>
-                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{overview.ip_address}</div>
+                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{currentDevice.ip_address}</div>
                   </div>
                   <div>
                     <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>Vendor</div>
-                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{overview.vendor || 'Unknown'}</div>
+                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{currentDevice.model || 'Unknown'}</div>
                   </div>
                   <div>
                     <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>Model</div>
-                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{overview.model || 'Unknown'}</div>
+                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{currentDevice.model || 'Unknown'}</div>
                   </div>
                   <div>
                     <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>Uptime</div>
                     <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>
-                      {systemInfo?.uptime_display || formatUptime(overview.uptime_seconds)}
+                      {formatUptime(currentDevice.uptime_seconds)}
                     </div>
                   </div>
                 </div>
@@ -243,21 +182,21 @@ export default function SNMPDashboard() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[10px]" style={{ color: '#667799' }}>Polling:</span>
-                  <SNMPStatusBadge status={overview.polling_enabled ? 'active' : 'inactive'} />
+                  <SNMPStatusBadge status={currentDevice.monitoring_status ? 'active' : 'inactive'} />
                 </div>
-                {overview.last_poll && (
+                {currentDevice.last_seen && (
                   <div className="font-mono text-[10px]" style={{ color: '#667799' }}>
-                    Last: {new Date(overview.last_poll).toLocaleString()}
+                    Last: {new Date(currentDevice.last_seen).toLocaleString()}
                   </div>
                 )}
               </div>
             </div>
 
             {/* System Description */}
-            {systemInfo?.supported && systemInfo.description && (
+            {currentDevice.model && (
               <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(0,212,255,0.1)' }}>
                 <div className="font-mono text-[10px] mb-1" style={{ color: '#667799' }}>System Description</div>
-                <div className="font-mono text-xs" style={{ color: '#8899bb' }}>{systemInfo.description}</div>
+                <div className="font-mono text-xs" style={{ color: '#8899bb' }}>{currentDevice.model}</div>
               </div>
             )}
           </GlassCard>

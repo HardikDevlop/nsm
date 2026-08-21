@@ -1,8 +1,9 @@
-import { useRouteError, isRouteErrorResponse, Link } from 'react-router'
+import { useRouteError, isRouteErrorResponse, Link, useRevalidator } from 'react-router'
 import GlassCard from '../components/GlassCard'
 
 export default function ErrorPage() {
   const error = useRouteError()
+  const revalidator = useRevalidator()
   
   let errorMessage: string
   let errorStatus: string | number = 'Error'
@@ -51,11 +52,11 @@ export default function ErrorPage() {
           </Link>
           
           <button 
-            onClick={() => window.location.reload()}
+            onClick={() => revalidator.revalidate()}
             className="w-full px-4 py-2 rounded font-mono text-sm transition-all"
             style={{ background: 'rgba(255,170,0,0.15)', color: '#ffaa00', border: '1px solid rgba(255,170,0,0.4)' }}
           >
-            Refresh Page
+            {revalidator.state === 'loading' ? 'Refreshing…' : 'Retry Route'}
           </button>
         </div>
         

@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+from threading import Lock
+from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -100,6 +102,12 @@ from backend.utils.crypto import encrypt_secret
 
 
 router = APIRouter(prefix="/api/v1")
+_DASHBOARD_SUMMARY_TTL_SECONDS = 10
+_dashboard_summary_cache: dict[str, object] = {}
+_dashboard_summary_lock = Lock()
+_PAGE_VIEW_TTL_SECONDS = 30
+_page_view_cache: dict[tuple[int, str], datetime] = {}
+_page_view_cache_lock = Lock()
 
 
 def audit(db: Session, user_id: int | None, action: str, resource_name: str) -> None:
@@ -1245,10 +1253,25 @@ def delete_report(item_id: int, db: Session = Depends(get_db), current_user: Use
 # ---------------------------------------------------------------- Audit logs (read-only)
 @router.post("/audit-logs/page-view", response_model=AuditLogRead)
 def record_page_view(page: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    entry = AuditLog(user_id=current_user.id, action="VIEW_PAGE", resource_name=page[:160])
+    normalized_page = page[:160]
+    cache_key = (current_user.id, normalized_page)
+    now = datetime.utcnow()
+    with _page_view_cache_lock:
+        last_seen = _page_view_cache.get(cache_key)
+        if last_seen and (now - last_seen).total_seconds() < _PAGE_VIEW_TTL_SECONDS:
+            return AuditLog(
+                id=0,
+                user_id=current_user.id,
+                action="VIEW_PAGE",
+                resource_name=normalized_page,
+                timestamp=last_seen,
+            )
+        _page_view_cache[cache_key] = now
+
+    entry = AuditLog(user_id=current_user.id, action="VIEW_PAGE", resource_name=normalized_page)
     db.add(entry)
+    db.flush()
     db.commit()
-    db.refresh(entry)
     return entry
 
 
@@ -1277,6 +1300,14 @@ def get_audit_log(item_id: int, db: Session = Depends(get_db), _: User = Depends
 # ---------------------------------------------------------------- Dashboard
 @router.get("/dashboard/summary", response_model=DashboardSummary)
 def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:read"))):
+    now = datetime.utcnow()
+    with _dashboard_summary_lock:
+        cached_at = _dashboard_summary_cache.get("cached_at")
+        cached_value = _dashboard_summary_cache.get("value")
+        if isinstance(cached_at, datetime) and isinstance(cached_value, DashboardSummary):
+            if (now - cached_at).total_seconds() < _DASHBOARD_SUMMARY_TTL_SECONDS:
+                return cached_value
+
     total_devices = db.query(Device).filter(Device.deleted_at.is_(None)).count()
     online_devices = db.query(Device).filter(Device.deleted_at.is_(None), Device.status == "online").count()
     offline_devices = db.query(Device).filter(Device.deleted_at.is_(None), Device.status == "offline").count()
@@ -1284,7 +1315,7 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_p
     critical_alerts = db.query(Alert).filter(Alert.severity == "critical", Alert.status != "resolved").count()
     since = datetime.utcnow() - timedelta(hours=24)
     recent_events = db.query(Event).filter(Event.timestamp >= since).count()
-    return DashboardSummary(
+    summary = DashboardSummary(
         total_devices=total_devices,
         online_devices=online_devices,
         offline_devices=offline_devices,
@@ -1292,6 +1323,10 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_p
         critical_alerts=critical_alerts,
         recent_events=recent_events,
     )
+    with _dashboard_summary_lock:
+        _dashboard_summary_cache["cached_at"] = now
+        _dashboard_summary_cache["value"] = summary
+    return summary
 
 
 # ---------------------------------------------------------------- Discovery / Monitoring

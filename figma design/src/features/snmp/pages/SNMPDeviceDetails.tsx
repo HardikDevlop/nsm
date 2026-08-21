@@ -11,7 +11,6 @@ import {
   formatBytes,
   formatSpeed,
 } from '../modules';
-import { useLiveSNMPPoll, useMonitoringData } from '../modules/useSNMPModules'
 
 function formatUptimeLocal(seconds: number | undefined): string {
   if (!seconds || seconds <= 0) return '—'
@@ -157,11 +156,10 @@ export default function SNMPDeviceDetails() {
   const updateMonitoring = useUpdateModuleMonitoring()
 
   const { data, isLoading, error, refetch } = useSNMPDeviceDetails(id)
-  const { data: monitoringData, error: monitoringError, refetch: refetchMonitoring } = useMonitoringData(id)
-  const { data: livePoll, isFetching: livePolling, error: livePollError, refetch: refetchLivePoll } = useLiveSNMPPoll(id)
-  const liveCollectors = livePoll?.collectors || {}
-  const liveCaps = Object.fromEntries(Object.entries(liveCollectors).map(([key, value]: [string, any]) => [key, value?.supported === true]))
-  const mergedCaps = { ...(data?.capabilities || {}), ...(monitoringData?.capabilities || {}), ...liveCaps }
+
+  const monitoringList = Array.isArray(data?.monitoring) ? data.monitoring : []
+  const latestMetrics = data?.latest_metrics ?? data?.latestMetrics ?? null
+  const mergedCaps = { ...(data?.capabilities || {}) }
   const supportedModules = useMemo(() => getSupportedModuleConfigs(mergedCaps), [mergedCaps])
   const allModuleConfigs = useMemo(() => MODULE_ORDER.map(moduleId => getModuleConfig(moduleId)).filter(Boolean), [])
 
@@ -208,8 +206,6 @@ export default function SNMPDeviceDetails() {
 
   const handleRefresh = () => {
     refetch()
-    refetchMonitoring()
-    refetchLivePoll()
   }
 
   if (isLoading) {
@@ -251,14 +247,21 @@ export default function SNMPDeviceDetails() {
     )
   }
 
-  const { device, snmp, capabilities, monitoring, latest_metrics, polling_history } = data
+  const { device, snmp, polling_history } = data
+  const latest_metrics = latestMetrics || data.latest_metrics || data.latestMetrics || {}
   const caps = mergedCaps
-  const collectorEntries = Object.entries(liveCollectors)
+  const collectorEntries = Object.entries(latest_metrics?.interfaces ? {
+    cpu: { supported: !!latest_metrics?.cpu },
+    memory: { supported: !!latest_metrics?.memory },
+    storage: { supported: (latest_metrics?.storage || []).length > 0 },
+    interfaces: { supported: (latest_metrics?.interfaces || []).length > 0 },
+    environment: { supported: (latest_metrics?.environment || []).length > 0 },
+  } : {})
   const supportedCollectorEntries = collectorEntries.filter(([, collector]: [string, any]) => collector?.supported === true)
   const unsupportedCollectorEntries = collectorEntries.filter(([, collector]: [string, any]) => collector?.supported !== true)
 
   const modulesWithConfig = allModuleConfigs.map(moduleConfig => {
-    const config = monitoring.find(m => m.module_name === moduleConfig!.id)
+    const config = monitoringList.find(m => m.module_name === moduleConfig!.id)
     const supported = !!caps[moduleConfig!.id]
     return {
       module: moduleConfig!,
@@ -319,16 +322,14 @@ export default function SNMPDeviceDetails() {
         </div>
       )}
 
-      {(livePolling || livePollError || monitoringError || livePoll?.timestamp || livePoll?.collection_ms) && (
+      {(latestMetrics?.timestamp || latestMetrics?.cpu || latestMetrics?.memory) && (
         <GlassCard className="p-3">
           <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
-            <span style={{ color: livePolling ? '#ffaa00' : livePollError ? '#ff3366' : '#00ff88' }}>
-              {livePolling ? 'Polling live SNMP...' : livePollError ? 'Live poll unavailable' : 'Live SNMP data active'}
+            <span style={{ color: '#00ff88' }}>
+              Stored SNMP data active
             </span>
-            {livePoll?.collection_ms != null && <span style={{ color: '#8899bb' }}>{livePoll.collection_ms} ms</span>}
-            {livePoll?.timestamp && <span style={{ color: '#8899bb' }}>Updated {new Date(livePoll.timestamp).toLocaleString()}</span>}
-            {livePollError && <span className="truncate" style={{ color: '#ff6688' }}>{livePollError.message}</span>}
-            {!livePollError && monitoringError && <span className="truncate" style={{ color: '#ffaa00' }}>DB latest fallback: {monitoringError.message}</span>}
+            {latestMetrics?.cpu?.polled_at && <span style={{ color: '#8899bb' }}>CPU {new Date(latestMetrics.cpu.polled_at).toLocaleString()}</span>}
+            {latestMetrics?.memory?.polled_at && <span style={{ color: '#8899bb' }}>Memory {new Date(latestMetrics.memory.polled_at).toLocaleString()}</span>}
           </div>
         </GlassCard>
       )}
@@ -425,19 +426,34 @@ export default function SNMPDeviceDetails() {
             </div>
           </GlassCard>
 
-          {/* Capabilities */}
+          {/* Capabilities + quick open */}
           <GlassCard className="p-4">
-            <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-3">SNMP CAPABILITIES</div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <div className="font-display font-bold text-sm tracking-wider neon-cyan">SNMP CAPABILITIES</div>
+              <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>
+                Green = available, red = unavailable. Click a green tile to open the module.
+              </div>
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
               {allModuleConfigs.map(moduleConfig => {
                 if (!moduleConfig) return null
                 const supported = !!caps[moduleConfig.id]
+                const canOpen = supported && Boolean(moduleConfig.route)
+                const Tile = canOpen ? 'button' : 'div'
                 return (
-                  <div key={moduleConfig.id} className="flex items-center gap-2 p-2 rounded"
+                  <Tile
+                    key={moduleConfig.id}
+                    type={canOpen ? 'button' : undefined}
+                    onClick={canOpen ? () => navigate(`/snmp/devices/${id}/${moduleConfig.route}`) : undefined}
+                    className="flex items-center gap-2 p-2 rounded text-left transition-all"
                     style={{
                       background: supported ? 'rgba(0,255,136,0.05)' : 'rgba(255,51,102,0.05)',
                       border: `1px solid ${supported ? 'rgba(0,255,136,0.15)' : 'rgba(255,51,102,0.15)'}`,
-                    }}>
+                      cursor: canOpen ? 'pointer' : 'default',
+                    }}
+                    aria-label={canOpen ? `Open ${moduleConfig.label}` : `${moduleConfig.label} not available`}
+                    title={canOpen ? `Open ${moduleConfig.label}` : `${moduleConfig.label} not available`}
+                  >
                     <div className="w-6 h-6 rounded flex items-center justify-center shrink-0"
                       style={{ background: supported ? 'rgba(0,255,136,0.1)' : 'rgba(255,51,102,0.1)' }}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
@@ -445,50 +461,19 @@ export default function SNMPDeviceDetails() {
                         <path d={moduleConfig.icon} />
                       </svg>
                     </div>
-                    <div className="font-mono text-xs" style={{ color: supported ? '#00ff88' : '#ff3366' }}>
-                      {moduleConfig.label.toUpperCase()}
+                    <div className="min-w-0">
+                      <div className="font-mono text-xs truncate" style={{ color: supported ? '#00ff88' : '#ff3366' }}>
+                        {moduleConfig.label.toUpperCase()}
+                      </div>
+                      <div className="font-mono text-[9px] mt-0.5" style={{ color: supported ? '#00ff88aa' : '#ff3366aa' }}>
+                        {supported ? 'AVAILABLE' : 'UNAVAILABLE'}
+                      </div>
                     </div>
-                  </div>
+                  </Tile>
                 )
               })}
             </div>
           </GlassCard>
-
-          {/* Quick Navigation to Module Pages */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            {supportedModules.map(moduleConfig => (
-              <button key={moduleConfig.id} onClick={() => navigate(`/snmp/devices/${id}/${moduleConfig.route}`)}
-                className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
-                style={{ border: `1px solid ${moduleConfig.color}33`, background: `${moduleConfig.color}0d`, color: moduleConfig.color }}>
-                <div className="font-semibold">{moduleConfig.label}</div>
-              </button>
-            ))}
-            <button key="monitoring" onClick={() => navigate(`/snmp/devices/${id}/monitoring`)}
-              className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
-              style={{ border: `1px solid #7c3aed33`, background: `#7c3aed0d`, color: '#7c3aed' }}>
-              <div className="font-semibold">MONITORING</div>
-            </button>
-            <button key="oids" onClick={() => navigate(`/snmp/devices/${id}/oids`)}
-              className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
-              style={{ border: `1px solid #14b8a633`, background: `#14b8a60d`, color: '#14b8a6' }}>
-              <div className="font-semibold">OID EXPLORER</div>
-            </button>
-            <button key="polling" onClick={() => navigate(`/snmp/devices/${id}/polling`)}
-              className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
-              style={{ border: `1px solid #f9731633`, background: `#f973160d`, color: '#f97316' }}>
-              <div className="font-semibold">POLLING</div>
-            </button>
-            <button key="topology" onClick={() => navigate(`/snmp/devices/${id}/topology`)}
-              className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
-              style={{ border: `1px solid #6366f133`, background: `#6366f10d`, color: '#6366f1' }}>
-              <div className="font-semibold">TOPOLOGY</div>
-            </button>
-            <button key="back" onClick={() => navigate('/snmp/devices')}
-              className="p-3 rounded-lg font-mono text-xs text-left transition-all hover:scale-[1.02]"
-              style={{ border: `1px solid #8899bb33`, background: `#8899bb0d`, color: '#8899bb' }}>
-              <div className="font-semibold">↑ DEVICES</div>
-            </button>
-          </div>
 
           {collectorEntries.length > 0 && (
             <div className="space-y-4">
@@ -669,14 +654,6 @@ export default function SNMPDeviceDetails() {
       {/* METRICS TAB */}
       {activeTab === 'metrics' && (
         <>
-          {collectorEntries.length > 0 && (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              {supportedCollectorEntries.map(([name, collector]) => (
-                <CollectorDataCard key={name} name={name} collector={collector} />
-              ))}
-            </div>
-          )}
-
           {/* CPU */}
           {latest_metrics.cpu && (
             <GlassCard className="p-4">

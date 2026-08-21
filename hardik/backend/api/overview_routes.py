@@ -90,15 +90,8 @@ def get_overview(
     metric_by_device: dict[int, DeviceMetric] = {m.device_id: m for m in latest_metrics_raw}
 
     # ── interface counts per device ────────────────────────────────────────
-    iface_counts_raw = (
-        db.query(Interface.device_id, func.count(Interface.id).label("total"),
-                 func.sum(
-                     func.cast(Interface.status == "up", db.bind.dialect.name == "postgresql" and "int" or "integer")
-                 ).label("up"))
-        .group_by(Interface.device_id)
-        .all()
-    )
-    # Simpler approach — just count total; up-count via Python
+    # Keep this query simple and portable. The previous cast-based aggregate
+    # broke on SQLite/PostgreSQL type handling and was unused anyway.
     iface_raw2 = db.query(Interface.device_id, Interface.status).all()
     iface_total: dict[int, int] = {}
     iface_up: dict[int, int] = {}

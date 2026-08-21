@@ -19,8 +19,8 @@ export default function AuditLogs() {
   const [logs, setLogs] = useState<AuditLogRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [userFilter, setUserFilter] = useState(() => window.localStorage.getItem('audit_log_user_filter') ?? '')
-  const [pendingUserFilter, setPendingUserFilter] = useState(() => window.localStorage.getItem('audit_log_user_filter') ?? '')
+  const [userFilter, setUserFilter] = useState('')
+  const [pendingUserFilter, setPendingUserFilter] = useState('')
   const [users, setUsers] = useState<AuditLogUser[]>([])
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
@@ -71,8 +71,8 @@ export default function AuditLogs() {
             <option value="">All users</option>
             {users.map(user => <option key={user.id} value={user.id}>{user.name} ({user.email})</option>)}
           </select>
-          <button onClick={() => { setUserFilter(pendingUserFilter); window.localStorage.setItem('audit_log_user_filter', pendingUserFilter); setPage(1) }} className="rounded-lg px-3 py-2 font-mono text-xs" style={{ ...inputStyle, color: 'var(--t-accent)' }}>FILTER</button>
-          <button onClick={() => { setPendingUserFilter(''); setUserFilter(''); window.localStorage.removeItem('audit_log_user_filter'); setPage(1) }} className="rounded-lg px-3 py-2 font-mono text-xs" style={inputStyle}>CLEAR</button>
+          <button onClick={() => { setUserFilter(pendingUserFilter); setPage(1) }} className="rounded-lg px-3 py-2 font-mono text-xs" style={{ ...inputStyle, color: 'var(--t-accent)' }}>FILTER</button>
+          <button onClick={() => { setPendingUserFilter(''); setUserFilter(''); setPage(1) }} className="rounded-lg px-3 py-2 font-mono text-xs" style={inputStyle}>CLEAR</button>
           <input
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1) }}

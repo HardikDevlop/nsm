@@ -4,7 +4,7 @@ import { getModuleConfig, getHealthColor, getStatusColor, formatBytes } from '..
 import GlassCard from '../../../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
-import { useModuleData, useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
+import { useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
 
 function storageHealth(util: number | undefined): 'healthy' | 'warning' | 'critical' | 'unknown' {
   if (util === undefined || util === null) return 'unknown'
@@ -18,22 +18,18 @@ export default function SNMPStorageMonitoring() {
   const id = Number(deviceId)
   const moduleConfig = getModuleConfig('storage')!
 
-  const { data: caps } = useDeviceCapabilities(id)
-  const { data, isLoading, error } = useModuleData(id, 'storage')
-  
-  // NEW: Use our working monitoring API
   const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
   
   // Extract Storage data from all available APIs. Prefer DB/cache plus direct/live fallback.
+  const { data: caps } = useDeviceCapabilities(id)
   const storageModuleData = monitoringData?.modules?.storage
-  const stats = data as any
-  const storageData = storageModuleData?.data || stats?.data || {}
-  const volumes = storageData?.volumes || stats?.data?.volumes || []
+  const stats = storageModuleData as any
+  const storageData = storageModuleData?.data || {}
+  const volumes = storageData?.volumes || []
   const hasStorageData = Object.keys(storageData || {}).length > 0 || volumes.length > 0
   const supported =
     monitoringData?.capabilities?.storage === true ||
     caps?.storage === true ||
-    stats?.supported === true ||
     storageModuleData?.supported === true ||
     hasStorageData
 
@@ -42,11 +38,8 @@ export default function SNMPStorageMonitoring() {
     id,
     caps,
     supported,
-    rawData: data,
     monitoringData,
     storageModuleData,
-    isLoading,
-    error,
     monitoringLoading,
     monitoringError
   })
@@ -64,10 +57,10 @@ export default function SNMPStorageMonitoring() {
   const storageCollector = {
     collector: 'storage',
     supported: true,
-    timestamp: stats?.timestamp || storageModuleData?.timestamp || storageData?.polled_at,
+    timestamp: storageModuleData?.timestamp || storageData?.polled_at,
     data: storageData,
-    missing: stats?.missing || [],
-    warnings: stats?.warnings || [],
+    missing: storageModuleData?.missing || [],
+    warnings: storageModuleData?.warnings || [],
   }
 
   // Calculate overall storage health
@@ -103,9 +96,9 @@ export default function SNMPStorageMonitoring() {
           title={`Health: ${health}`}
         />
         <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
-        {(storageData?.polled_at || stats?.data?.last_poll) && (
+        {(storageData?.polled_at) && (
           <span className="font-mono text-xs" style={{ color: '#667799' }}>
-            Last Poll: {new Date(storageData?.polled_at || stats.data.last_poll).toLocaleString()}
+            Last Poll: {new Date(storageData?.polled_at).toLocaleString()}
           </span>
         )}
         {monitoringData && (
@@ -198,7 +191,7 @@ export default function SNMPStorageMonitoring() {
             {overallUtilization.toFixed(1)}% avg
           </div>
         </div>
-        <SNMPMetricChart
+          <SNMPMetricChart
           data={history.map(p => ({ timestamp: p.timestamp, value: p.utilization || overallUtilization }))}
           height={200}
           color="#ffaa00"

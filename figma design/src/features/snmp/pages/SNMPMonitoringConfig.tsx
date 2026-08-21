@@ -106,8 +106,9 @@ export default function SNMPMonitoringConfig() {
     )
   }
 
-  const { device, capabilities, monitoring } = data
+  const { device, capabilities } = data
   const caps = capabilities || {}
+  const monitoring = Array.isArray(data.monitoring) ? data.monitoring : []
 
   const supportedModules = getSupportedModuleConfigs(caps)
   const allModuleConfigs = MODULE_ORDER.map(id => getModuleConfig(id)).filter(Boolean) as any[]

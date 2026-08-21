@@ -23,6 +23,8 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
 })
 
+const USER_CACHE_KEY = 'nms.user.cache.v1'
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserRecord | null>(null)
   const [loading, setLoading] = useState(true)
@@ -42,35 +44,80 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [permissions],
   )
 
-  // On mount: if token exists in localStorage, fetch user
-  useEffect(() => {
-    let ignore = false
+  const hydrateUser = useCallback(async (ignoreMissingToken = false, forceRefresh = true) => {
     const token = window.localStorage.getItem('nms_access_token')
     if (!token) {
-      setLoading(false)
-      return
+      if (!ignoreMissingToken) setLoading(false)
+      return null
     }
-    getMe()
-      .then(u => { if (!ignore) setUser(u) })
-      .catch(() => {
-        if (!ignore) {
-          window.localStorage.removeItem('nms_access_token')
-          setUser(null)
+    try {
+      const cached = JSON.parse(window.sessionStorage.getItem(USER_CACHE_KEY) || 'null') as UserRecord | null
+      if (cached) {
+        setUser(cached)
+        setLoading(false)
+        if (!forceRefresh) return cached
+      }
+    } catch {
+      // Ignore malformed cache and fall back to a network check.
+    }
+    try {
+      const u = await getMe()
+      setUser(u)
+      try {
+        window.sessionStorage.setItem(USER_CACHE_KEY, JSON.stringify(u))
+      } catch {
+        // optional cache only
+      }
+      return u
+    } catch {
+      try {
+        const cached = JSON.parse(window.sessionStorage.getItem(USER_CACHE_KEY) || 'null') as UserRecord | null
+        if (cached) {
+          setUser(cached)
+          return cached
         }
-      })
-      .finally(() => { if (!ignore) setLoading(false) })
-    return () => { ignore = true }
+      } catch {
+        // fall through to clear auth
+      }
+      window.localStorage.removeItem('nms_access_token')
+      window.sessionStorage.removeItem(USER_CACHE_KEY)
+      setUser(null)
+      return null
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  // On mount: if token exists in localStorage, fetch user in the background.
+  useEffect(() => {
+    let ignore = false
+    void (async () => {
+      const token = window.localStorage.getItem('nms_access_token')
+      if (!token) {
+        setLoading(false)
+        return
+      }
+      if (ignore) return
+      await hydrateUser(true, false)
+    })()
+    return () => { ignore = true }
+  }, [hydrateUser])
 
   const login = useCallback(async (email: string, password: string) => {
     await apiLogin(email, password)
-    const me = await getMe()
-    setUser(me)
-  }, [])
+    setLoading(false)
+    void hydrateUser(true, false)
+  }, [hydrateUser])
 
   const logout = useCallback(() => {
     apiLogout()
     setUser(null)
+    try {
+      window.sessionStorage.removeItem(USER_CACHE_KEY)
+    } catch {
+      // ignore storage failures
+    }
+    setLoading(false)
   }, [])
 
   return (

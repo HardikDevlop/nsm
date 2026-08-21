@@ -7,8 +7,10 @@ import { useAuth } from './AuthContext'
  */
 export function withPermission(Component: React.ComponentType, permission: string) {
   return function Guarded() {
-    const { hasPermission, loading } = useAuth()
+    const { hasPermission, loading, user } = useAuth()
+    const hasToken = typeof window !== 'undefined' && !!window.localStorage.getItem('nms_access_token')
     if (loading) return <LoadingSpinner />
+    if (!user && hasToken) return <LoadingSpinner />
     if (!hasPermission(permission)) return <NoAccess />
     return <Component />
   }
@@ -51,12 +53,13 @@ function NoAccess() {
 export default function ProtectedLayout() {
   const { user, loading } = useAuth()
   const location = useLocation()
+  const hasToken = typeof window !== 'undefined' && !!window.localStorage.getItem('nms_access_token')
 
   if (loading) {
     return <LoadingSpinner />
   }
 
-  if (!user) {
+  if (!user && !hasToken) {
     return <Navigate to="/login" state={{ from: location }} replace />
   }
 

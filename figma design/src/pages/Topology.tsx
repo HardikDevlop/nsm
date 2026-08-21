@@ -99,7 +99,7 @@ function statusOf(raw: any): DeviceStatus {
 function makeNode(raw: any, fallbackId: string, forcedType?: DeviceType): GraphNode {
   const ip = str(raw?.ip_address, raw?.ip, raw?.management_ip, raw?.managementIp)
   const mac = displayMac(str(raw?.mac_address, raw?.mac, raw?.chassis_mac, raw?.chassisMac))
-  const hostname = str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, ip, mac, 'UNKNOWN')
+  const hostname = str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, raw?.display_name, ip, mac, 'UNKNOWN')
   return {
     id: str(raw?.id, raw?.device_id, raw?.node_id, fallbackId),
     hostname,
@@ -109,6 +109,11 @@ function makeNode(raw: any, fallbackId: string, forcedType?: DeviceType): GraphN
     status: statusOf(raw),
     vendor: str(raw?.vendor, raw?.manufacturer),
     model: str(raw?.model, raw?.device_model),
+    port: str(raw?.port, raw?.interface_name, raw?.if_name),
+    macCount: raw?.macCount,
+    macs: raw?.macs,
+    ips: raw?.ips,
+    vlans: raw?.vlans,
   }
 }
 
@@ -584,7 +589,14 @@ export default function Topology() {
     const selected = selectedNode?.id === node.id
     const detail = node.macCount && node.macCount > 1 ? `${node.macCount} MACs · ${(node.ips || []).length} IPs` : node.mac || 'UNKNOWN'
     return (
-      <g key={node.id} onClick={() => { setSelectedNode(node); setSelectedLink(null) }} style={{ cursor: 'pointer' }}>
+      <g
+        key={node.id}
+        onClick={() => {
+          setSelectedNode(prev => prev?.id === node.id ? null : node)
+          setSelectedLink(null)
+        }}
+        style={{ cursor: 'pointer' }}
+      >
         <rect x={x} y={y} width={width} height={height} rx="12" fill="#071321" stroke={color} strokeWidth={selected ? 3 : 1.5} />
         <circle cx={x + width - 13} cy={y + 13} r="4" fill={node.status === 'online' ? '#34d399' : node.status === 'warning' ? '#fbbf24' : '#fb7185'} />
         <text x={x + 14} y={y + 23} className="font-mono" style={{ fill: color, fontSize: 10, fontWeight: 700 }}>{node.type.toUpperCase()}</text>
@@ -628,7 +640,15 @@ export default function Topology() {
         <Metric label="INFERRED" value={counts.inferred} color="#fbbf24" />
         <Metric label="MACs ON PORTS" value={counts.mac} color="#34d399" />
         <Metric label="PORT GROUPS" value={counts.endpoints} color="#34d399" />
-        <div className="ml-auto font-mono text-[10px]" style={{ color: '#64748b' }}>Auto refresh {REFRESH_INTERVAL / 1000}s</div>
+        <div className="ml-auto flex items-center gap-2 font-mono text-[10px]" style={{ color: '#64748b' }}>
+          <span>Auto refresh {REFRESH_INTERVAL / 1000}s</span>
+          <button type="button" onClick={() => setZoom(1)} className="rounded px-2 py-1" style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.2)' }}>
+            Reset Zoom
+          </button>
+          <button type="button" onClick={() => { setSelectedNode(null); setSelectedLink(null) }} className="rounded px-2 py-1" style={{ color: '#c084fc', border: '1px solid rgba(192,132,252,.2)' }}>
+            Clear Selection
+          </button>
+        </div>
       </GlassCard>
 
       <GlassCard className="flex-1 min-h-[650px] overflow-hidden relative p-0">
@@ -657,7 +677,14 @@ export default function Topology() {
                 const endY = from.y < to.y ? to.y - 45 : to.y + 45
                 const midY = (startY + endY) / 2
                 return (
-                  <g key={link.id} onClick={() => { setSelectedLink(link); setSelectedNode(null) }} style={{ cursor: 'pointer' }}>
+                  <g
+                    key={link.id}
+                    onClick={() => {
+                      setSelectedLink(prev => prev?.id === link.id ? null : link)
+                      setSelectedNode(null)
+                    }}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke="transparent" strokeWidth="22" />
                     <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke={color} strokeWidth={selected ? 4 : link.gatewayPath ? 3 : 2} strokeDasharray={link.confidence === 'INFERRED' ? '8 6' : undefined} filter={selected ? 'url(#topologyGlow)' : undefined}>
                       <animate attributeName="stroke-opacity" values=".35;1;.35" dur={link.gatewayPath ? '1.5s' : '2.4s'} repeatCount="indefinite" />

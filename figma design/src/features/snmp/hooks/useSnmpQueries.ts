@@ -112,8 +112,6 @@ export function useSNMPDeviceDetails(deviceId: number | null) {
     queryFn: () => getSNMPDeviceDetails(deviceId!),
     enabled: !!deviceId,
     staleTime: 10000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
   });
 }
 
@@ -143,9 +141,7 @@ export function useLatestMetrics(deviceId: number | null) {
     queryKey: snmpKeys.latestMetrics(deviceId!),
     queryFn: () => getLatestMetrics(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 
@@ -154,9 +150,7 @@ export function useLatestCPU(deviceId: number | null) {
     queryKey: snmpKeys.latestCPU(deviceId!),
     queryFn: () => getLatestCPU(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 
@@ -165,9 +159,7 @@ export function useLatestMemory(deviceId: number | null) {
     queryKey: snmpKeys.latestMemory(deviceId!),
     queryFn: () => getLatestMemory(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 
@@ -176,9 +168,7 @@ export function useLatestInterfaces(deviceId: number | null) {
     queryKey: snmpKeys.latestInterfaces(deviceId!),
     queryFn: () => getLatestInterfaces(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 
@@ -206,9 +196,7 @@ export function useSNMPMemoryStats(deviceId: number | null) {
     queryKey: snmpKeys.memoryStats(deviceId!),
     queryFn: () => getSNMPMemoryStats(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 
@@ -218,9 +206,7 @@ export function useSNMPInterfaces(deviceId: number | null) {
     queryKey: snmpKeys.interfaces(deviceId!),
     queryFn: () => getSNMPInterfaces(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 
@@ -239,9 +225,7 @@ export function useSNMPStorageStats(deviceId: number | null) {
     queryKey: snmpKeys.storageStats(deviceId!),
     queryFn: () => getSNMPStorageStats(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 
@@ -251,9 +235,7 @@ export function useSNMPEnvironmentStats(deviceId: number | null) {
     queryKey: snmpKeys.environmentStats(deviceId!),
     queryFn: () => getSNMPEnvironmentStats(deviceId!),
     enabled: !!deviceId,
-    staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    staleTime: 30000,
   });
 }
 

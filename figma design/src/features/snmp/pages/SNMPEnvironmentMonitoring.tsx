@@ -5,7 +5,7 @@ import GlassCard from '../../../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
-import { useModuleData, useDeviceCapabilities } from '../modules/useSNMPModules'
+import { useDeviceCapabilities } from '../modules/useSNMPModules'
 import { useLatestEnvironment } from '../hooks/useSnmpQueries'
 
 const SENSOR_TYPE_CONFIG: Record<
@@ -68,20 +68,11 @@ export default function SNMPEnvironmentMonitoring() {
   const id = Number(deviceId)
   const moduleConfig = getModuleConfig('environment')!
 
-  const { data: caps } = useDeviceCapabilities(id)
-  const { data, isLoading, error } = useModuleData(id, 'environment')
   const { data: latestEnv } = useLatestEnvironment(id)
+  const { data: caps } = useDeviceCapabilities(id)
 
-  const payload = data as any
-  const envData = payload?.data || {}
-  const sensors = Array.isArray(envData?.sensors)
-    ? envData.sensors
-    : Array.isArray(payload)
-      ? payload
-      : Array.isArray(latestEnv)
-        ? latestEnv
-        : []
-  const supported = caps?.environment === true || payload?.supported === true || sensors.length > 0
+  const sensors = Array.isArray(latestEnv) ? latestEnv : []
+  const supported = caps?.environment === true || sensors.length > 0
 
   if (!supported) {
     return (
@@ -99,16 +90,6 @@ export default function SNMPEnvironmentMonitoring() {
     acc[type] = sensors.filter(s => s.sensor_type === type)
     return acc
   }, {})
-  const environmentCollector = {
-    collector: 'environment',
-    supported: true,
-    timestamp: payload?.timestamp || sensors.find(s => s.last_updated)?.last_updated,
-    data: Object.keys(envData || {}).length > 0 ? envData : { sensors },
-    reason: payload?.reason,
-    missing: payload?.missing || [],
-    warnings: payload?.warnings || [],
-  }
-
   return (
     <SNMPModuleShell module="environment" title="Environment Monitoring" showMonitoringControls={true}>
       {/* Summary tiles */}

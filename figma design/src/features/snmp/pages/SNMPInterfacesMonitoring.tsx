@@ -4,7 +4,7 @@ import { getModuleConfig, getHealthColor, getStatusColor, formatBytes, formatSpe
 import GlassCard from '../../../components/GlassCard'
 import SNMPDynamicTable from '../components/SNMPDynamicTable'
 import SNMPMetricChart from '../components/SNMPMetricChart'
-import { useModuleData, useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
+import { useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
 
 export default function SNMPInterfacesMonitoring() {
   const { deviceId } = useParams<{ deviceId: string }>()
@@ -12,9 +12,6 @@ export default function SNMPInterfacesMonitoring() {
   const moduleConfig = getModuleConfig('interfaces')!
 
   const { data: caps } = useDeviceCapabilities(id)
-  const { data, isLoading, error } = useModuleData(id, 'interfaces')
-  
-  // NEW: Use our working monitoring API
   const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
   
   // Extract Interfaces data from monitoring API response
@@ -26,11 +23,8 @@ export default function SNMPInterfacesMonitoring() {
     id,
     caps,
     supported,
-    rawData: data,
     monitoringData,
     interfacesModuleData,
-    isLoading,
-    error,
     monitoringLoading,
     monitoringError
   })
@@ -43,15 +37,12 @@ export default function SNMPInterfacesMonitoring() {
     )
   }
 
-  const stats = data as any
-  const history = stats?.history || []
-  
   // Use data from our working monitoring API first
   const interfaceData = interfacesModuleData?.data
-  const interfaces = interfaceData?.interfaces || stats?.data?.interfaces || []
-  const totalCount = interfaceData?.interface_count || stats?.data?.interface_count || interfaces.length
-  const upCount = interfaceData?.up_count || stats?.data?.up_count || interfaces.filter(i => i.oper_status === 'up').length
-  const downCount = interfaceData?.down_count || stats?.data?.down_count || interfaces.filter(i => i.oper_status !== 'up').length
+  const interfaces = interfaceData?.interfaces || []
+  const totalCount = interfaceData?.interface_count || interfaces.length
+  const upCount = interfaceData?.up_count || interfaces.filter(i => i.oper_status === 'up').length
+  const downCount = interfaceData?.down_count || interfaces.filter(i => i.oper_status !== 'up').length
   
   const health = downCount > upCount ? 'critical' : downCount > 0 ? 'warning' : 'healthy'
 
@@ -103,9 +94,9 @@ export default function SNMPInterfacesMonitoring() {
           { label: 'Total', value: totalCount.toString(), color: '#00d4ff' },
           { label: 'Up', value: upCount.toString(), color: '#00ff88' },
           { label: 'Down', value: downCount.toString(), color: downCount > 0 ? '#ff3366' : '#8899bb' },
-          { label: 'Utilization', value: sampleInterfaces.length > 0 ? `${(sampleInterfaces.reduce((acc, i) => acc + (i.utilization_percent || 0), 0) / sampleInterfaces.length).toFixed(1)}%` : '—', color: '#ffaa00' },
-          { label: 'Speed Range', value: sampleInterfaces.length > 0 ? `${Math.min(...sampleInterfaces.map(i => i.speed_bps || 0)) / 1e6}M-${Math.max(...sampleInterfaces.map(i => i.speed_bps || 0)) / 1e9}G` : '—', color: '#7c3aed' },
-          { label: 'Source', value: interfaceData ? 'DB Latest' : stats?.data?.source ?? '—', color: '#00d4ff' },
+          { label: 'Utilization', value: interfaces.length > 0 ? `${(interfaces.reduce((acc, i) => acc + (i.utilization_percent || 0), 0) / interfaces.length).toFixed(1)}%` : '—', color: '#ffaa00' },
+          { label: 'Speed Range', value: interfaces.length > 0 ? `${Math.min(...interfaces.map(i => i.speed_bps || 0)) / 1e6}M-${Math.max(...interfaces.map(i => i.speed_bps || 0)) / 1e9}G` : '—', color: '#7c3aed' },
+          { label: 'Source', value: interfaceData ? 'DB Latest' : '—', color: '#00d4ff' },
         ].map(tile => (
           <GlassCard key={tile.label} className="p-4 text-center">
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
@@ -124,9 +115,9 @@ export default function SNMPInterfacesMonitoring() {
           title={`Health: ${health}`}
         />
         <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
-        {(interfaceData?.polled_at || stats?.timestamp) && (
+        {interfaceData?.polled_at && (
           <span className="font-mono text-xs" style={{ color: '#667799' }}>
-            Last Poll: {new Date(interfaceData?.polled_at || stats.timestamp).toLocaleString()}
+            Last Poll: {new Date(interfaceData.polled_at).toLocaleString()}
           </span>
         )}
         {monitoringData && (
@@ -142,7 +133,7 @@ export default function SNMPInterfacesMonitoring() {
           <div>
             <div className="font-display font-bold text-sm tracking-wider neon-cyan">INTERFACE UTILIZATION</div>
             <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
-              {sampleInterfaces.filter(i => i.oper_status === 'up').length} active interfaces
+              {interfaces.filter(i => i.oper_status === 'up').length} active interfaces
             </div>
           </div>
           <div className="font-mono text-xs px-2 py-1 rounded" style={{ color: '#00d4ff', background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)' }}>
@@ -152,7 +143,7 @@ export default function SNMPInterfacesMonitoring() {
         
         {/* Interface bars */}
         <div className="space-y-2">
-          {sampleInterfaces.slice(0, 8).map((iface, idx) => {
+              {interfaces.slice(0, 8).map((iface, idx) => {
             const utilization = iface.utilization_percent || 0
             const statusColor = iface.oper_status === 'up' ? (utilization >= 90 ? '#ff3366' : utilization >= 70 ? '#ffaa00' : '#00ff88') : '#666666'
             
@@ -205,7 +196,7 @@ export default function SNMPInterfacesMonitoring() {
               </tr>
             </thead>
             <tbody>
-              {sampleInterfaces.map((iface, i) => {
+              {interfaces.map((iface, i) => {
                 const statusColor = iface.oper_status === 'up' ? '#00ff88' : iface.oper_status === 'down' ? '#ff3366' : '#8899bb'
                 const utilization = iface.utilization_percent || 0
                 const utilizationColor = utilization >= 90 ? '#ff3366' : utilization >= 70 ? '#ffaa00' : '#00ff88'
