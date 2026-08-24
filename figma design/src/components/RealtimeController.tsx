@@ -66,7 +66,7 @@ export default function RealtimeController({
         </div>
 
         {/* Quick Stats */}
-        <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>
+        <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #8899bb)' }}>
           {currentInterval}s • {currentTimeWindow}s window
         </div>
 
@@ -112,7 +112,7 @@ export default function RealtimeController({
 
             {/* Refresh Interval */}
             <div>
-              <div className="font-mono text-xs mb-2 flex items-center gap-2" style={{ color: '#8899bb' }}>
+              <div className="font-mono text-xs mb-2 flex items-center gap-2" style={{ color: 'var(--t-muted, #8899bb)' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M23 4v6h-6M1 20v-6h6"/>
                   <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
@@ -139,7 +139,7 @@ export default function RealtimeController({
 
             {/* Time Window */}
             <div>
-              <div className="font-mono text-xs mb-2 flex items-center gap-2" style={{ color: '#8899bb' }}>
+              <div className="font-mono text-xs mb-2 flex items-center gap-2" style={{ color: 'var(--t-muted, #8899bb)' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <circle cx="12" cy="12" r="10"/>
                   <polyline points="12,6 12,12 16,14"/>

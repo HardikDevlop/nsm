@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router'
 import GlassCard from '../../../components/GlassCard'
 import SNMPDiscoveryPanel from '../components/SNMPDiscoveryPanel'
 import {
-  listAlerts, listSNMPDevices, listInterfaces, listDeviceMetrics,
+  getOverview, listDeviceMetrics,
   getMonitoringStatus, stopAllMonitoring, startAllMonitoring,
   type AlertRecord, type DeviceMetricRecord, type DeviceRecord,
   type InterfaceRecord, deleteDevice, updateDevice,
@@ -114,10 +114,25 @@ export default function SNMPMonitoring() {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
     try {
-      const [devs, alts, ifs, mets, mon] = await Promise.all([
-        listSNMPDevices(), listAlerts(), listInterfaces(),
-        listDeviceMetrics(), getMonitoringStatus(),
+      const [overview, mets, mon] = await Promise.all([
+        getOverview(24),
+        listDeviceMetrics(undefined, { limit: 200 }), getMonitoringStatus(),
       ])
+      const devs = (overview.devices as DeviceRecord[]).filter(device => Boolean(device.snmp_version))
+      const alts = overview.alerts as AlertRecord[]
+      const ifs: InterfaceRecord[] = overview.normalized.interfaces
+        .filter(item => devs.some(device => device.id === item.device_id))
+        .map((item, index) => ({
+          id: item.interface_id ?? index,
+          device_id: item.device_id,
+          interface_name: item.name || `if-${item.interface_id ?? index}`,
+          status: item.oper_status || 'unknown',
+          speed: item.speed_bps ? String(item.speed_bps) : null,
+          traffic_in: item.rx_mbps ?? 0,
+          traffic_out: item.tx_mbps ?? 0,
+          packet_errors: item.errors ?? 0,
+          last_updated: item.polled_at || overview.fetched_at,
+        }))
       setDevices(devs); setAlerts(alts); setIfaces(ifs)
       setMetrics(mets); setLive(mon.devices)
       if (devs.length > 0 && !selectedId) setSelected(devs[0].id)

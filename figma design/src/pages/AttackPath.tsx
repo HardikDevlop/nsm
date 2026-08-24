@@ -100,7 +100,7 @@ export default function AttackPath() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">ATTACK PATH VISUALIZATION</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>MITRE ATT&CK Framework Mapping · INC-2847</p>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>MITRE ATT&CK Framework Mapping · INC-2847</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <div className="glass-bright rounded px-3 py-1.5 font-mono text-xs min-h-[44px] flex items-center" style={{ color: '#ff3366', border: '1px solid rgba(255,51,102,0.3)' }}>
@@ -132,10 +132,10 @@ export default function AttackPath() {
                       className="rounded px-1.5 py-1 text-center transition-all"
                       style={{
                         background: tech.detected ? `${tactic.color}25` : 'rgba(255,255,255,0.03)',
-                        border: `1px solid ${tech.detected ? tactic.color : 'rgba(255,255,255,0.06)'}60`,
+                        border: `1px solid ${tech.detected ? tactic.color : 'var(--t-border-light, rgba(255,255,255,0.06))'}60`,
                       }}>
-                      <div className="font-mono font-semibold" style={{ fontSize: 10, color: tech.detected ? tactic.color : '#8899bb' }}>{tech.id}</div>
-                      <div className="font-mono leading-tight" style={{ fontSize: 9, color: tech.detected ? '#c8d8ee' : '#556677', marginTop: 2 }}>{tech.name}</div>
+                      <div className="font-mono font-semibold" style={{ fontSize: 10, color: tech.detected ? tactic.color : 'var(--t-muted, #8899bb)' }}>{tech.id}</div>
+                      <div className="font-mono leading-tight" style={{ fontSize: 9, color: tech.detected ? 'var(--t-text, #c8d8ee)' : 'var(--t-muted, #556677)', marginTop: 2 }}>{tech.name}</div>
                       {tech.detected && (
                         <div className="font-mono mt-1" style={{ fontSize: 9, color: tactic.color }}>{tech.ts}</div>
                       )}
@@ -149,11 +149,11 @@ export default function AttackPath() {
         <div className="flex flex-wrap gap-4 mt-3">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded" style={{ background: 'rgba(255,51,102,0.3)', border: '1px solid #ff3366' }} />
-            <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Detected/Active</span>
+            <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Detected/Active</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)' }} />
-            <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Not observed</span>
+            <div className="w-3 h-3 rounded" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid rgba(255,255,255,0.1)' }} />
+            <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Not observed</span>
           </div>
         </div>
       </GlassCard>
@@ -165,7 +165,7 @@ export default function AttackPath() {
           {attackFlow.map((step, i) => (
             <div key={step.id} className="flex items-center shrink-0">
               <div className="flex flex-col items-center" style={{ minWidth: 160 }}>
-                <div className="font-mono text-xs mb-2" style={{ color: '#8899bb' }}>{step.ts}</div>
+                <div className="font-mono text-xs mb-2" style={{ color: 'var(--t-muted, #8899bb)' }}>{step.ts}</div>
                 <div className="rounded-xl p-3 w-36 text-center transition-all hover:scale-105"
                   style={{
                     background: step.blocked ? 'rgba(0,255,136,0.08)' : 'rgba(255,51,102,0.08)',
@@ -174,10 +174,10 @@ export default function AttackPath() {
                   <div className="font-mono text-xs font-semibold" style={{ color: step.blocked ? '#00ff88' : '#ff3366' }}>
                     {step.blocked ? '🛡 BLOCKED' : '⚠ DETECTED'}
                   </div>
-                  <div className="font-mono text-xs mt-1 font-semibold" style={{ color: '#c8d8ee' }}>{step.action}</div>
+                  <div className="font-mono text-xs mt-1 font-semibold" style={{ color: 'var(--t-text, #c8d8ee)' }}>{step.action}</div>
                   <div className="mt-2">
-                    <div className="font-mono" style={{ fontSize: 9, color: '#8899bb' }}>{step.src}</div>
-                    <div className="font-mono" style={{ fontSize: 9, color: '#8899bb' }}>→ {step.dst}</div>
+                    <div className="font-mono" style={{ fontSize: 9, color: 'var(--t-muted, #8899bb)' }}>{step.src}</div>
+                    <div className="font-mono" style={{ fontSize: 9, color: 'var(--t-muted, #8899bb)' }}>→ {step.dst}</div>
                   </div>
                 </div>
               </div>
@@ -207,8 +207,8 @@ export default function AttackPath() {
             { l: 'Confidence', v: '94%' },
           ].map(m => (
             <div key={m.l} className="flex justify-between py-1.5" style={{ borderBottom: '1px solid rgba(255,51,102,0.08)' }}>
-              <span className="font-mono text-xs" style={{ color: '#8899bb' }}>{m.l}</span>
-              <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{m.v}</span>
+              <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{m.l}</span>
+              <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{m.v}</span>
             </div>
           ))}
         </GlassCard>
@@ -227,8 +227,8 @@ export default function AttackPath() {
                 style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                 <span className="font-mono text-xs px-2 py-0.5 rounded shrink-0"
                   style={{ background: 'rgba(0,212,255,0.12)', color: '#00d4ff' }}>{ioc.type}</span>
-                <span className="font-mono text-xs flex-1 truncate" style={{ color: '#c8d8ee' }}>{ioc.value}</span>
-                <span className="font-mono text-xs" style={{ color: '#8899bb' }}>{ioc.threat}</span>
+                <span className="font-mono text-xs flex-1 truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{ioc.value}</span>
+                <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{ioc.threat}</span>
                 <span className="font-mono text-xs px-2 py-0.5 rounded shrink-0"
                   style={{ background: 'rgba(255,51,102,0.12)', color: '#ff3366', fontSize: 9 }}>{ioc.conf}</span>
               </div>

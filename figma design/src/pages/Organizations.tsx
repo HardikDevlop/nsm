@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import TablePagination from '../components/TablePagination'
+import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listOrganizations, createOrganization, updateOrganization, deleteOrganization,
@@ -18,7 +20,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const inputStyle: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.04)',
+  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
   border: '1px solid var(--t-border-alpha)',
   color: 'var(--t-text)',
   outline: 'none',
@@ -87,6 +89,7 @@ export default function Organizations() {
     !search.trim() || o.name.toLowerCase().includes(search.toLowerCase()) ||
     (o.description ?? '').toLowerCase().includes(search.toLowerCase())
   )
+  const pagination = useTablePagination(filtered)
 
   if (loading) {
     return (
@@ -109,7 +112,7 @@ export default function Organizations() {
         </div>
         <div className="flex gap-2">
           <input
-            value={search} onChange={e => setSearch(e.target.value)}
+            value={search} onChange={e => { setSearch(e.target.value); pagination.setPage(1) }}
             placeholder="Search…"
             className="rounded-lg px-3 py-2 font-mono text-xs"
             style={{ ...inputStyle, minWidth: 160 }}
@@ -139,7 +142,7 @@ export default function Organizations() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(org => (
+              {pagination.paginatedItems.map(org => (
                 <tr key={org.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }}
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}>
@@ -190,6 +193,18 @@ export default function Organizations() {
             {search ? 'No organizations match your search.' : 'No organizations yet. Create the first one.'}
           </div>
         )}
+        {filtered.length > 0 && (
+          <TablePagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            startItem={pagination.startItem}
+            endItem={pagination.endItem}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={(pageSize) => { pagination.setPageSize(pageSize); pagination.setPage(1) }}
+          />
+        )}
       </GlassCard>
 
       {/* modal */}
@@ -220,7 +235,7 @@ export default function Organizations() {
             <div className="flex gap-2 justify-end mt-6">
               <button onClick={() => setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
+                style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
                 Cancel
               </button>
               <button onClick={() => void handleSubmit()} disabled={saving || !fName.trim()}

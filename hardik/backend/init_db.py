@@ -1,4 +1,4 @@
-"""One-shot helper: creates the NMS_DB database (if missing) and all tables."""
+"""One-shot helper: creates the configured PostgreSQL database (if missing) and all tables."""
 
 import psycopg
 from psycopg import sql
@@ -8,6 +8,7 @@ from backend.config.settings import get_settings
 
 
 def create_database_if_missing() -> None:
+    """Ensure the database referenced by `DATABASE_URL` exists."""
     url = make_url(get_settings().database_url)
     db_name = url.database
     with psycopg.connect(
@@ -29,13 +30,16 @@ def create_database_if_missing() -> None:
 
 
 def create_tables_and_seed() -> None:
-    from backend.database.session import Base, SessionLocal, engine, migrate_credential_columns
+    from backend.database.migrations import run_migrations
+    from backend.database.session import Base, SessionLocal, engine
     from backend.seed import seed_rbac
     import backend.models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
-    migrate_credential_columns()
+    applied = run_migrations(engine)
     print(f"Tables created: {', '.join(sorted(Base.metadata.tables))}")
+    if applied:
+        print(f"Migrations applied: {', '.join(applied)}")
     with SessionLocal() as db:
         seed_rbac(db)
     print("RBAC seed complete (roles: Admin/Operator/Viewer, user: admin@gmail.com)")

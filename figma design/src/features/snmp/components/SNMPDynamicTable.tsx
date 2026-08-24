@@ -55,6 +55,8 @@ export default function SNMPDynamicTable<T extends Record<string, any>>({
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const visible = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
+  const startItem = filtered.length === 0 ? 0 : ((safePage - 1) * pageSize) + 1
+  const endItem = filtered.length === 0 ? 0 : Math.min(safePage * pageSize, filtered.length)
 
   const toggleSort = (key: string) => {
     if (sortKey === key) setSortAsc(v => !v)
@@ -116,10 +118,22 @@ export default function SNMPDynamicTable<T extends Record<string, any>>({
             </table>
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-xs" style={{ color: '#8899bb' }}>
-            <span>{filtered.length} row{filtered.length === 1 ? '' : 's'} · Page {safePage} of {totalPages}</span>
+            <span>Showing {startItem}-{endItem} of {filtered.length}</span>
             <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={() => undefined}
+                disabled
+                className="px-3 py-1 rounded opacity-70"
+                style={{ border: '1px solid rgba(0,212,255,0.2)', background: 'rgba(8,25,55,0.7)', color: '#c8d8ee' }}
+              >
+                {[25, 50, 75, 100].map(size => (
+                  <option key={size} value={size}>{size} per page</option>
+                ))}
+              </select>
               <button type="button" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}
                 className="px-3 py-1 rounded" style={{ border: '1px solid rgba(0,212,255,0.2)', opacity: safePage <= 1 ? 0.5 : 1 }}>PREV</button>
+              <span>{safePage} / {totalPages}</span>
               <button type="button" disabled={safePage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 className="px-3 py-1 rounded" style={{ border: '1px solid rgba(0,212,255,0.2)', opacity: safePage >= totalPages ? 0.5 : 1 }}>NEXT</button>
             </div>

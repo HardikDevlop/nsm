@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { RadialBarChart, RadialBar, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { listAlerts, listDevices, listEvents, type AlertRecord, type DeviceRecord, type EventRecord } from '../lib/api'
+import { getOverview, listEvents, type AlertRecord, type DeviceRecord, type EventRecord } from '../lib/api'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 
-const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: '#c8d8ee' }
+const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--t-text, #c8d8ee)' }
 
 const sevC: Record<string, { c: string; bg: string }> = {
   critical: { c: '#ff3366', bg: 'rgba(255,51,102,0.12)' },
@@ -27,12 +27,12 @@ function CVEDetailModal({ vuln, onClose }: { vuln: VulnEntry; onClose: () => voi
       style={{ backdropFilter: 'blur(3px)', background: 'rgba(0,0,0,0.65)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="w-full max-w-lg rounded-xl overflow-hidden"
-        style={{ background: 'rgba(4,14,33,0.98)', border: `1px solid ${s.c}40`, boxShadow: `0 0 40px ${s.c}18` }}>
+        style={{ background: 'var(--t-card, rgba(4,14,33,0.98))', border: `1px solid ${s.c}40`, boxShadow: `0 0 40px ${s.c}18` }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${s.c}25` }}>
           <div>
             <div className="font-display font-bold text-base tracking-widest" style={{ color: s.c }}>{vuln.id}</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
               CVSS: <span style={{ color: vuln.cvss >= 9 ? '#ff3366' : vuln.cvss >= 7 ? '#ff6644' : '#ffaa00' }}>{vuln.cvss}</span>
             </div>
           </div>
@@ -43,8 +43,8 @@ function CVEDetailModal({ vuln, onClose }: { vuln: VulnEntry; onClose: () => voi
         <div className="p-5 space-y-4">
           {/* Title card */}
           <div className="rounded-lg p-4" style={{ background: `${s.c}0d`, border: `1px solid ${s.c}25` }}>
-            <div className="font-display font-semibold text-sm mb-1" style={{ color: '#c8d8ee' }}>{vuln.title}</div>
-            {vuln.alert.description && <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{vuln.alert.description}</div>}
+            <div className="font-display font-semibold text-sm mb-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>{vuln.title}</div>
+            {vuln.alert.description && <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{vuln.alert.description}</div>}
           </div>
 
           <div className="grid grid-cols-2 gap-3 font-mono text-xs">
@@ -59,14 +59,14 @@ function CVEDetailModal({ vuln, onClose }: { vuln: VulnEntry; onClose: () => voi
               ['Resolved', vuln.alert.resolved_at ? new Date(vuln.alert.resolved_at).toLocaleDateString('en-IN') : 'Not resolved'],
             ].map(([k, v]) => (
               <div key={k} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
-                <div style={{ color: '#8899bb' }}>{k}</div>
-                <div className="mt-1 font-semibold truncate" style={{ color: k === 'Severity' ? s.c : k === 'Status' ? (statusColors[vuln.status] ?? '#c8d8ee') : '#c8d8ee' }}>{v}</div>
+                <div style={{ color: 'var(--t-muted, #8899bb)' }}>{k}</div>
+                <div className="mt-1 font-semibold truncate" style={{ color: k === 'Severity' ? s.c : k === 'Status' ? (statusColors[vuln.status] ?? 'var(--t-text, #c8d8ee)') : 'var(--t-text, #c8d8ee)' }}>{v}</div>
               </div>
             ))}
           </div>
 
           <div className="flex items-center gap-3 pt-1">
-            <div className="flex-1 h-2 rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
+            <div className="flex-1 h-2 rounded-full" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.06))' }}>
               <div className="h-2 rounded-full transition-all" style={{ width: `${(vuln.cvss / 10) * 100}%`, background: vuln.cvss >= 9 ? '#ff3366' : vuln.cvss >= 7 ? '#ff6644' : '#ffaa00' }} />
             </div>
             <span className="font-mono text-xs font-bold" style={{ color: vuln.cvss >= 9 ? '#ff3366' : vuln.cvss >= 7 ? '#ff6644' : '#ffaa00' }}>
@@ -102,8 +102,12 @@ export default function Compliance() {
   const [selectedVuln, setSelectedVuln] = useState<VulnEntry | null>(null)
 
   const fetchAll = useCallback(async () => {
-    const [a, e, d] = await Promise.all([listAlerts(), listEvents(), listDevices()])
-    return { alerts: a, events: e, devices: d }
+    const [overview, e] = await Promise.all([getOverview(24), listEvents({ limit: 50 })])
+    return {
+      alerts: overview.alerts as AlertRecord[],
+      events: e,
+      devices: overview.devices as DeviceRecord[],
+    }
   }, [])
 
   const { loading, error, refresh } = useAutoRefresh(
@@ -175,7 +179,7 @@ export default function Compliance() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">COMPLIANCE DASHBOARD</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {devices.length} devices · {alerts.length} alerts · click a vulnerability for details
           </p>
         </div>
@@ -189,7 +193,7 @@ export default function Compliance() {
       </div>
 
       {error && <div className="font-mono text-xs" style={{ color: '#ff3366' }}>{error}</div>}
-      {loading && !devices.length && <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading compliance data…</div>}
+      {loading && !devices.length && <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading compliance data…</div>}
 
       {/* Score + frameworks */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -203,7 +207,7 @@ export default function Compliance() {
             </ResponsiveContainer>
             <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-center">
               <div className="font-display font-bold text-3xl neon-cyan">{complianceScore}</div>
-              <div className="font-mono text-xs" style={{ color: '#8899bb' }}>/ 100</div>
+              <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>/ 100</div>
             </div>
           </div>
           <div className="mt-1 font-mono text-xs" style={{ color: complianceScore >= 80 ? '#00ff88' : '#ffaa00' }}>
@@ -215,12 +219,12 @@ export default function Compliance() {
           <GlassCard key={fw.name} className="p-4">
             <div className="flex items-start justify-between mb-2">
               <div>
-                <div className="font-display font-bold text-sm" style={{ color: '#c8d8ee' }}>{fw.name}</div>
-                <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>{fw.controls} controls</div>
+                <div className="font-display font-bold text-sm" style={{ color: 'var(--t-text, #c8d8ee)' }}>{fw.name}</div>
+                <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{fw.controls} controls</div>
               </div>
               <div className="font-display font-bold text-2xl" style={{ color: fw.color }}>{fw.score}%</div>
             </div>
-            <div className="h-2 rounded-full mb-2" style={{ background: 'rgba(255,255,255,0.06)' }}>
+            <div className="h-2 rounded-full mb-2" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.06))' }}>
               <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${fw.score}%`, background: fw.color }} />
             </div>
             <div className="flex justify-between font-mono text-xs">
@@ -234,11 +238,11 @@ export default function Compliance() {
       {/* Control scores */}
       <GlassCard className="p-4 md:p-5">
         <div className="font-display font-bold text-base tracking-wider neon-cyan mb-1">CONTROL DOMAIN SCORES</div>
-        <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Per-domain compliance breakdown</div>
+        <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Per-domain compliance breakdown</div>
         <ResponsiveContainer width="100%" height={160}>
           <BarChart data={controlScore} layout="vertical">
-            <XAxis type="number" domain={[0, 100]} tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
-            <YAxis type="category" dataKey="domain" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} width={140} />
+            <XAxis type="number" domain={[0, 100]} tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+            <YAxis type="category" dataKey="domain" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} width={140} />
             <Tooltip contentStyle={ttStyle} />
             <Bar dataKey="score" fill="#00d4ff" fillOpacity={0.7} radius={[0, 4, 4, 0]} name="Score" />
           </BarChart>
@@ -250,7 +254,7 @@ export default function Compliance() {
         <div className="flex items-center justify-between p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
           <div>
             <div className="font-display font-bold text-base tracking-wider neon-cyan">VULNERABILITY OVERVIEW</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Derived from real alerts · click a row for details</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Derived from real alerts · click a row for details</div>
           </div>
           <div className="flex gap-2">
             <span className="font-mono text-xs px-2 py-0.5 rounded" style={{ color: '#ff3366', background: 'rgba(255,51,102,0.12)' }}>
@@ -262,14 +266,14 @@ export default function Compliance() {
           </div>
         </div>
         {vulns.length === 0
-          ? <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>No alerts to derive vulnerabilities from.</div>
+          ? <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No alerts to derive vulnerabilities from.</div>
           : (
             <div className="overflow-x-auto">
               <table className="w-full" style={{ minWidth: 600 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                     {['CVE ID', 'Asset', 'Title', 'Severity', 'CVSS', 'Status'].map(h => (
-                      <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: '#8899bb' }}>{h}</th>
+                      <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -282,15 +286,15 @@ export default function Compliance() {
                         style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}
                         onClick={() => setSelectedVuln(v)}>
                         <td className="px-4 py-3 font-mono text-xs neon-cyan">{v.id}</td>
-                        <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>{v.asset}</td>
-                        <td className="px-4 py-3 font-mono text-xs max-w-xs truncate" style={{ color: '#c8d8ee' }}>{v.title}</td>
+                        <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{v.asset}</td>
+                        <td className="px-4 py-3 font-mono text-xs max-w-xs truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{v.title}</td>
                         <td className="px-4 py-3">
                           <span className="font-mono text-xs px-2 py-0.5 rounded uppercase" style={{ color: s.c, background: s.bg }}>{v.sev}</span>
                         </td>
                         <td className="px-4 py-3 font-mono text-sm font-semibold"
                           style={{ color: v.cvss >= 9 ? '#ff3366' : v.cvss >= 7 ? '#ff6644' : '#ffaa00' }}>{v.cvss}</td>
                         <td className="px-4 py-3 font-mono text-xs font-semibold"
-                          style={{ color: statusColors[v.status] ?? '#8899bb' }}>{v.status.toUpperCase()}</td>
+                          style={{ color: statusColors[v.status] ?? 'var(--t-muted, #8899bb)' }}>{v.status.toUpperCase()}</td>
                       </tr>
                     )
                   })}
@@ -304,24 +308,24 @@ export default function Compliance() {
       <GlassCard className="overflow-hidden">
         <div className="p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
           <div className="font-display font-bold text-base tracking-wider neon-cyan">AUDIT LOG</div>
-          <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>System events — immutable log</div>
+          <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>System events — immutable log</div>
         </div>
         {auditLogs.length === 0
-          ? <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>No events recorded yet.</div>
+          ? <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No events recorded yet.</div>
           : (
-            <div className="font-mono text-xs overflow-x-auto max-h-[360px] overflow-y-auto" style={{ background: 'rgba(0,0,0,0.25)' }}>
+            <div className="font-mono text-xs overflow-x-auto max-h-[360px] overflow-y-auto" style={{ background: 'var(--t-card-alpha, rgba(0,0,0,0.25))' }}>
               {auditLogs.map(a => (
                 <div key={a.id} className="flex items-center gap-3 px-4 py-2.5 transition-all hover:bg-cyan-400/5"
                   style={{ borderBottom: '1px solid rgba(0,212,255,0.04)', minWidth: 700 }}>
-                  <span style={{ color: '#556677', minWidth: 140 }}>{a.ts}</span>
+                  <span style={{ color: 'var(--t-muted, #556677)', minWidth: 140 }}>{a.ts}</span>
                   <span className="neon-cyan" style={{ minWidth: 80 }}>{a.id}</span>
-                  <span style={{ color: '#c8d8ee', minWidth: 160 }}>{a.user}</span>
+                  <span style={{ color: 'var(--t-text, #c8d8ee)', minWidth: 160 }}>{a.user}</span>
                   <span className="px-2 py-0.5 rounded" style={{ color: '#00d4ff', background: 'rgba(0,212,255,0.08)', minWidth: 120, textAlign: 'center' }}>
                     {a.action}
                   </span>
-                  <span style={{ color: '#8899bb', flex: 1 }}>{a.resource}</span>
+                  <span style={{ color: 'var(--t-muted, #8899bb)', flex: 1 }}>{a.resource}</span>
                   <span style={{ color: '#00ff88', minWidth: 64 }}>{a.result}</span>
-                  <span style={{ color: '#556677', minWidth: 100 }}>{a.ip}</span>
+                  <span style={{ color: 'var(--t-muted, #556677)', minWidth: 100 }}>{a.ip}</span>
                 </div>
               ))}
             </div>

@@ -311,7 +311,7 @@ export default function RoleManagement() {
                   <button onClick={toggleAll}
                     className="rounded-lg px-3 py-1.5 font-mono text-xs transition-all"
                     style={{
-                      background: selectedIds.size === allPerms.length ? 'var(--t-accent-alpha)' : 'rgba(255,255,255,0.04)',
+                      background: selectedIds.size === allPerms.length ? 'var(--t-accent-alpha)' : 'var(--t-border-light, rgba(255,255,255,0.04))',
                       border: '1px solid var(--t-border-alpha)',
                       color: selectedIds.size === allPerms.length ? 'var(--t-accent)' : 'var(--t-muted)',
                     }}>
@@ -358,7 +358,7 @@ export default function RoleManagement() {
               <input value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search permissions…"
                 className="w-full rounded-lg px-3 py-2 font-mono text-xs outline-none mb-4"
-                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
+                style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
                 onFocus={e  => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                 onBlur={e   => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}
               />
@@ -395,7 +395,7 @@ export default function RoleManagement() {
                           <span
                             className="w-4 h-4 rounded flex items-center justify-center shrink-0 text-[9px]"
                             style={{
-                              background: allMod ? 'var(--t-accent)' : none ? 'rgba(255,255,255,0.04)' : 'rgba(255,170,0,0.15)',
+                              background: allMod ? 'var(--t-accent)' : none ? 'var(--t-border-light, rgba(255,255,255,0.04))' : 'rgba(255,170,0,0.15)',
                               border: `1px solid ${allMod ? 'var(--t-accent)' : none ? 'var(--t-border-alpha)' : 'rgba(255,170,0,0.4)'}`,
                               color: allMod ? '#fff' : '#ffaa00',
                               fontWeight: 700,
@@ -412,7 +412,7 @@ export default function RoleManagement() {
                         <span
                           className="font-mono text-[10px] px-1.5 py-0.5 rounded shrink-0"
                           style={{
-                            background: allMod ? 'rgba(0,212,255,0.15)' : none ? 'rgba(255,255,255,0.05)' : 'rgba(255,170,0,0.12)',
+                            background: allMod ? 'rgba(0,212,255,0.15)' : none ? 'var(--t-border-light, rgba(255,255,255,0.05))' : 'rgba(255,170,0,0.12)',
                             color:      allMod ? 'var(--t-accent)'  : none ? 'var(--t-muted)'  : '#ffaa00',
                           }}>
                           {sel}/{perms.length}
@@ -435,7 +435,7 @@ export default function RoleManagement() {
                               delete:  '#ff3366',
                               execute: '#a78bfa',
                             }
-                            const col = actionColor[perm.action] ?? '#8899bb'
+                            const col = actionColor[perm.action] ?? 'var(--t-muted, #8899bb)'
                             return (
                               <button
                                 key={perm.id}
@@ -450,7 +450,7 @@ export default function RoleManagement() {
                                 <span
                                   className="w-3 h-3 rounded flex items-center justify-center shrink-0"
                                   style={{
-                                    background: checked ? col : 'rgba(255,255,255,0.04)',
+                                    background: checked ? col : 'var(--t-border-light, rgba(255,255,255,0.04))',
                                     border: `1px solid ${checked ? col : 'var(--t-border-alpha)'}`,
                                   }}>
                                   {checked && <span style={{ color: '#000', fontSize: 8, lineHeight: 1, fontWeight: 700 }}>✓</span>}
@@ -518,7 +518,7 @@ export default function RoleManagement() {
               placeholder="e.g. Network Engineer"
               className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none mb-5"
               style={{
-                background: 'rgba(255,255,255,0.04)',
+                background: 'var(--t-border-light, rgba(255,255,255,0.04))',
                 border: '1px solid var(--t-border-alpha)',
                 color: 'var(--t-text)',
               }}
@@ -528,7 +528,7 @@ export default function RoleManagement() {
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs transition-all hover:opacity-80"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
+                style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
                 Cancel
               </button>
               <button onClick={() => void handleModalSubmit()}

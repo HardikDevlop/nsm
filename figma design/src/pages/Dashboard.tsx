@@ -1,265 +1,861 @@
-import { useEffect, useMemo, useState } from 'react'
-import GlassCard from '../components/GlassCard'
-import { getOverview, type DeviceRecord } from '../lib/api'
+import { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router"
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts"
+import GlassCard from "../components/GlassCard"
+import {
+  getOverview,
+  type NormalizedOverview,
+  type OverviewResponse,
+} from "../lib/api"
 
-type Point = { label: string; up: number; down: number }
-
-const COLORS = {
-  cyan: '#00d4ff',
-  green: '#00ff88',
-  red: '#ff3366',
-  muted: '#8899bb',
-  bg: 'rgba(0,212,255,0.05)',
+const C = {
+  cyan: "#00d4ff",
+  green: "#00ff88",
+  red: "#ff3366",
+  amber: "#ffaa00",
+  muted: "var(--t-muted, #8899bb)",
 }
+const fmt = (n: number | null | undefined, suffix = "") =>
+  n == null || Number.isNaN(n) ? "N/A" : `${n.toFixed(n < 10 ? 1 : 0)}${suffix}`
+const clock = (s?: string | null) =>
+  s
+    ? new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "N/A"
 
-function countStatus<T extends { status?: string }>(items: T[]) {
-  const up = items.filter(item => String(item.status ?? '').toLowerCase() === 'online' || String(item.status ?? '').toLowerCase() === 'up' || String(item.status ?? '').toLowerCase() === 'active').length
-  return { up, down: Math.max(0, items.length - up), total: items.length }
-}
-
-function Sparkline({ points, accent = COLORS.cyan }: { points: Point[]; accent?: string }) {
-  const width = 220
-  const height = 72
-  const values = points.flatMap(point => [point.up, point.down])
-  const max = Math.max(1, ...values)
-  const step = points.length > 1 ? width / (points.length - 1) : width
-  const upPath = points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${index * step} ${height - (point.up / max) * (height - 16) - 8}`)
-    .join(' ')
-  const downPath = points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${index * step} ${height - (point.down / max) * (height - 16) - 8}`)
-    .join(' ')
-
+function Badge({
+  label,
+  tone = "cyan",
+}: {
+  label: string
+  tone?: "cyan" | "green" | "red" | "amber"
+}) {
+  const color = C[tone]
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-20">
-      <defs>
-        <linearGradient id={`g-${accent.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={accent} stopOpacity="0.35" />
-          <stop offset="100%" stopColor={accent} stopOpacity="0.02" />
-        </linearGradient>
-      </defs>
-      <path d={`${upPath} L ${width} ${height - 8} L 0 ${height - 8} Z`} fill={`url(#g-${accent.replace('#', '')})`} />
-      <path d={upPath} fill="none" stroke={accent} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d={downPath} fill="none" stroke={COLORS.red} strokeWidth="1.6" strokeLinecap="round" strokeDasharray="4 4" />
-    </svg>
+    <span
+      className="font-mono text-[10px] uppercase px-2 py-1 rounded"
+      style={{
+        color,
+        background: `${color}14`,
+        border: `1px solid ${color}45`,
+      }}
+    >
+      {label}
+    </span>
   )
 }
-
-function StatusCard({
-  title,
-  subtitle,
-  total,
-  up,
-  down,
-  points,
-}: {
-  title: string
-  subtitle: string
-  total: number
-  up: number
-  down: number
-  points: Point[]
-}) {
+function Empty({ text = "No stored data available" }: { text?: string }) {
   return (
-    <GlassCard className="p-4 md:p-5">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <div className="font-display font-bold text-lg tracking-widest neon-cyan">{title}</div>
-          <div className="font-mono text-xs mt-1" style={{ color: COLORS.muted }}>{subtitle}</div>
-        </div>
-        <div className="text-right">
-          <div className="font-display text-2xl leading-none" style={{ color: COLORS.green }}>{total}</div>
-          <div className="font-mono text-[10px] mt-1" style={{ color: COLORS.muted }}>TOTAL</div>
-        </div>
+    <div
+      className="font-mono text-xs py-8 text-center"
+      style={{ color: C.muted }}
+    >
+      {text}
+    </div>
+  )
+}
+function Metric({
+  label,
+  number,
+  hint,
+  tone = "cyan",
+  onClick,
+}: {
+  label: string
+  number: string | number
+  hint: string
+  tone?: "cyan" | "green" | "red" | "amber"
+  onClick?: () => void
+}) {
+  const color = C[tone]
+  return (
+    <GlassCard
+      className="p-4"
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+    >
+      <div
+        className="flex justify-between font-mono text-[10px] uppercase tracking-widest"
+        style={{ color: C.muted }}
+      >
+        <span>{label}</span>
+        <i
+          className="status-dot"
+          style={{ background: color, boxShadow: `0 0 8px ${color}` }}
+        />
       </div>
-
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <MiniStat label="UP" value={up} color={COLORS.green} />
-        <MiniStat label="DOWN" value={down} color={COLORS.red} />
+      <div className="font-display text-3xl mt-3" style={{ color }}>
+        {number}
       </div>
-
-      <Sparkline points={points} />
+      <div className="font-mono text-[10px] mt-1" style={{ color: C.muted }}>
+        {hint}
+      </div>
     </GlassCard>
   )
 }
-
-function MiniStat({ label, value, color }: { label: string; value: number; color: string }) {
+function Panel({
+  title,
+  subtitle,
+  children,
+  onClick,
+}: {
+  title: string
+  subtitle?: string
+  children: React.ReactNode
+  onClick?: () => void
+}) {
   return (
-    <div className="rounded-lg p-3" style={{ background: COLORS.bg, border: '1px solid rgba(0,212,255,0.12)' }}>
-      <div className="font-mono text-[10px]" style={{ color: COLORS.muted }}>{label}</div>
-      <div className="font-display text-xl mt-1" style={{ color }}>{value}</div>
+    <GlassCard
+      className="p-4 md:p-5"
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+    >
+      <div className="flex justify-between gap-3 mb-4">
+        <div>
+          <h2 className="font-display font-bold text-base tracking-widest neon-cyan">
+            {title}
+          </h2>
+          {subtitle && (
+            <p
+              className="font-mono text-[10px] mt-1"
+              style={{ color: C.muted }}
+            >
+              {subtitle}
+            </p>
+          )}
+        </div>
+        {onClick && (
+          <span className="font-mono text-[10px]" style={{ color: C.cyan }}>
+            OPEN →
+          </span>
+        )}
+      </div>
+      {children}
+    </GlassCard>
+  )
+}
+function BarLine({
+  label,
+  current,
+  total,
+  tone = C.green,
+}: {
+  label: string
+  current: number
+  total: number
+  tone?: string
+}) {
+  return (
+    <div>
+      <div
+        className="flex justify-between font-mono text-xs mb-1"
+        style={{ color: C.muted }}
+      >
+        <span>{label}</span>
+        <span style={{ color: tone }}>
+          {current}/{total}
+        </span>
+      </div>
+      <div
+        className="h-2 rounded-full overflow-hidden"
+        style={{ background: "rgba(255,255,255,.07)" }}
+      >
+        <div
+          className="h-full rounded-full"
+          style={{
+            width: `${total ? Math.min(100, (current / total) * 100) : 0}%`,
+            background: tone,
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+function Mini({
+  label,
+  number,
+  tone = C.cyan,
+}: {
+  label: string
+  number: string | number
+  tone?: string
+}) {
+  return (
+    <div
+      className="rounded-lg p-3"
+      style={{ background: "rgba(0,212,255,.04)" }}
+    >
+      <div className="font-mono text-[10px]" style={{ color: C.muted }}>
+        {label}
+      </div>
+      <div className="font-display text-2xl" style={{ color: tone }}>
+        {number}
+      </div>
     </div>
   )
 }
 
 export default function Dashboard() {
-  const [icmpDevices, setIcmpDevices] = useState<DeviceRecord[]>([])
-  const [icmpHistory, setIcmpHistory] = useState<Point[]>([])
-  const [snmpHistory, setSnmpHistory] = useState<Point[]>([])
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const navigate = useNavigate()
+  const [data, setData] = useState<OverviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
+  const [range, setRange] = useState("24H")
+  const [updated, setUpdated] = useState<Date | null>(null)
   const load = async (quiet = false) => {
     if (!quiet) setLoading(true)
-    setError(null)
     try {
-      const overview = await getOverview()
-      const icmp = overview.devices.map(device => ({
-        ...device,
-        status: device.status ?? 'unknown',
-      }))
-      setIcmpDevices(icmp)
-
-      const icmpCount = countStatus(icmp)
-      const snmpCount = {
-        up: icmp.filter(device => Boolean(device.snmp_version)).length,
-        down: Math.max(0, icmp.length - icmp.filter(device => Boolean(device.snmp_version)).length),
-      }
-      const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      setIcmpHistory(prev => [...prev.slice(-11), { label: stamp, up: icmpCount.up, down: icmpCount.down }])
-      setSnmpHistory(prev => [...prev.slice(-11), { label: stamp, up: snmpCount.up, down: snmpCount.down }])
-      setUpdatedAt(new Date())
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to load dashboard')
+      setError(null)
+      const hours =
+        range === "1H" ? 1 : range === "6H" ? 6 : range === "7D" ? 168 : 24
+      setData(await getOverview(hours))
+      setUpdated(new Date())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to load dashboard data")
     } finally {
       setLoading(false)
     }
   }
-
   useEffect(() => {
     void load()
-    const timer = window.setInterval(() => void load(true), 15_000)
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load(true)
+    }, 30000)
     return () => window.clearInterval(timer)
-  }, [])
-
-  const icmp = useMemo(() => countStatus(icmpDevices), [icmpDevices])
-  const snmp = useMemo(() => {
-    const configured = icmpDevices.filter(device => Boolean(device.snmp_version)).length
-    return { up: configured, down: Math.max(0, icmpDevices.length - configured), total: icmpDevices.length }
-  }, [icmpDevices])
-
+  }, [range])
+  const n: NormalizedOverview | null = data?.normalized ?? null
+  const devices = data?.devices ?? []
+  const summary = data?.summary
+  const snmpEnabled = devices.filter((d) => Boolean(d.snmp_version)).length
+  const health = {
+    online: summary?.online_devices ?? 0,
+    offline: summary?.offline_devices ?? 0,
+    warning: summary?.warning_devices ?? 0,
+    unknown: Math.max(
+      0,
+      (summary?.total_devices ?? 0) -
+        (summary?.online_devices ?? 0) -
+        (summary?.offline_devices ?? 0) -
+        (summary?.warning_devices ?? 0),
+    ),
+  }
+  const perf = useMemo(
+    () =>
+      devices
+        .map((d) => ({
+          cpu: n?.devices[String(d.id)]?.cpu ?? d.cpu_usage,
+          memory: n?.devices[String(d.id)]?.memory ?? d.memory_usage,
+        }))
+        .filter((x) => x.cpu != null || x.memory != null),
+    [devices, n],
+  )
+  const chart =
+    n?.traffic_history.map((x) => ({ ...x, label: clock(x.timestamp) })) ?? []
   return (
-    <div className="p-4 md:p-6 space-y-5" style={{ background: 'radial-gradient(circle at top, rgba(0,212,255,0.06), transparent 40%)' }}>
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3">
+    <div
+      className="p-4 md:p-6 space-y-5"
+      style={{
+        background:
+          "radial-gradient(circle at 85% 0%, rgba(0,212,255,.08), transparent 34%)",
+      }}
+    >
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
-          <h1 className="font-display font-bold text-2xl md:text-3xl tracking-widest neon-cyan">DASHBOARD</h1>
-          <p className="font-mono text-xs mt-1" style={{ color: COLORS.muted }}>
-            ICMP and SNMP device health in one clean view
-            {updatedAt ? ` • Updated ${updatedAt.toLocaleTimeString()}` : ''}
+          <div className="flex items-center gap-3">
+            <h1 className="font-display font-bold text-2xl md:text-3xl tracking-widest neon-cyan">
+              NETWORK OPERATIONS
+            </h1>
+            <Badge label="LIVE" tone="green" />
+          </div>
+          <p className="font-mono text-xs mt-1" style={{ color: C.muted }}>
+            Real device, SNMP and database telemetry · Last updated{" "}
+            {updated?.toLocaleTimeString() ?? "N/A"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          className="font-mono text-xs px-3 py-2 rounded glass-bright"
-          style={{ border: '1px solid rgba(0,212,255,0.24)', color: COLORS.cyan, opacity: loading ? 0.6 : 1 }}
-        >
-          {loading ? 'LOADING…' : 'REFRESH'}
-        </button>
+        <div className="flex items-center gap-2">
+          <div
+            className="flex rounded-lg p-1"
+            style={{
+              background: "rgba(255,255,255,.04)",
+              border: "1px solid var(--t-border-alpha)",
+            }}
+          >
+            {["1H", "6H", "24H", "7D"].map((x) => (
+              <button
+                key={x}
+                onClick={() => setRange(x)}
+                className="font-mono text-[10px] px-3 py-2 rounded"
+                style={{
+                  color: range === x ? "#000" : C.muted,
+                  background: range === x ? C.cyan : "transparent",
+                }}
+              >
+                {x}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => void load()}
+            disabled={loading}
+            className="font-mono text-xs px-3 py-2 rounded glass-bright"
+            style={{ color: C.cyan, border: `1px solid ${C.cyan}40` }}
+          >
+            {loading ? "LOADING…" : "REFRESH"}
+          </button>
+        </div>
       </div>
-
       {error && (
-        <div className="font-mono text-xs rounded p-3" style={{ color: COLORS.red, background: 'rgba(255,51,102,0.08)', border: '1px solid rgba(255,51,102,0.2)' }}>
+        <div
+          className="font-mono text-xs rounded-lg p-3"
+          style={{
+            color: C.red,
+            background: `${C.red}12`,
+            border: `1px solid ${C.red}40`,
+          }}
+        >
           {error}
         </div>
       )}
-
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <StatusCard
-          title="ICMP"
-          subtitle="Reachability status based on live ping checks"
-          total={icmp.total}
-          up={icmp.up}
-          down={icmp.down}
-          points={icmpHistory}
-        />
-
-        <StatusCard
-          title="SNMP"
-          subtitle="Devices with SNMP visibility and monitoring enabled"
-          total={snmp.total}
-          up={snmp.up}
-          down={snmp.down}
-          points={snmpHistory}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <GlassCard className="p-4 md:p-5">
-          <div className="font-display font-bold text-base tracking-widest neon-cyan mb-3">ICMP DEVICE LIST</div>
-          <div className="space-y-2 max-h-[320px] overflow-auto pr-1">
-            {icmpDevices.slice(0, 8).map(device => (
-              <DeviceRow
-                key={device.id}
-                name={device.hostname}
-                ip={device.ip_address}
-                status={device.status}
-              />
-            ))}
-            {icmpDevices.length === 0 && <EmptyState text="No ICMP devices found" />}
+      {loading && !data ? (
+        <div
+          className="glass rounded-xl p-12 text-center font-mono text-sm"
+          style={{ color: C.cyan }}
+        >
+          Loading stored monitoring data…
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+            <Metric
+              label="Total devices"
+              number={summary?.total_devices ?? "N/A"}
+              hint="Inventory"
+              onClick={() => navigate("/device-monitoring")}
+            />
+            <Metric
+              label="Online"
+              number={summary?.online_devices ?? "N/A"}
+              hint="Reachable"
+              tone="green"
+              onClick={() => navigate("/device-monitoring")}
+            />
+            <Metric
+              label="Offline"
+              number={summary?.offline_devices ?? "N/A"}
+              hint="Unreachable"
+              tone="red"
+              onClick={() => navigate("/device-monitoring")}
+            />
+            <Metric
+              label="SNMP enabled"
+              number={snmpEnabled}
+              hint="Credentials configured"
+              tone="green"
+              onClick={() => navigate("/snmp/devices")}
+            />
+            <Metric
+              label="SNMP failed"
+              number={n?.polling.failure ?? "N/A"}
+              hint="Last 24 hours"
+              tone="red"
+              onClick={() => navigate("/monitoring-jobs")}
+            />
+            <Metric
+              label="Critical alerts"
+              number={summary?.critical_alerts ?? "N/A"}
+              hint="Open / acknowledged"
+              tone="red"
+              onClick={() => navigate("/alerts")}
+            />
+            <Metric
+              label="Warning alerts"
+              number={
+                (n?.alerts_by_severity.warning ?? 0) +
+                (n?.alerts_by_severity.medium ?? 0)
+              }
+              hint="Open / acknowledged"
+              tone="amber"
+              onClick={() => navigate("/alerts")}
+            />
+            <Metric
+              label="Interfaces down"
+              number={n?.interface_summary.down ?? "N/A"}
+              hint="Latest SNMP state"
+              tone="red"
+              onClick={() => navigate("/interfaces")}
+            />
           </div>
-        </GlassCard>
-
-        <GlassCard className="p-4 md:p-5">
-          <div className="font-display font-bold text-base tracking-widest neon-cyan mb-3">SNMP DEVICE LIST</div>
-          <div className="space-y-2 max-h-[320px] overflow-auto pr-1">
-            {icmpDevices.filter(device => String(device.snmp_version ?? '').length > 0).slice(0, 8).map(device => (
-              <DeviceRow
-                key={device.id}
-                name={device.hostname}
-                ip={device.ip_address}
-                status="online"
-              />
-            ))}
-            {icmpDevices.filter(device => String(device.snmp_version ?? '').length > 0).length === 0 && <EmptyState text="No SNMP devices found" />}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <Panel
+              title="DEVICE HEALTH"
+              subtitle="Persisted ICMP status"
+              onClick={() => navigate("/device-monitoring")}
+            >
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="text-center">
+                  <div className="font-display text-4xl neon-green">
+                    {summary?.total_devices
+                      ? `${((summary.online_devices / summary.total_devices) * 100).toFixed(1)}%`
+                      : "N/A"}
+                  </div>
+                  <div
+                    className="font-mono text-[10px]"
+                    style={{ color: C.muted }}
+                  >
+                    AVAILABILITY
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <BarLine
+                    label="Online"
+                    current={health.online}
+                    total={summary?.total_devices ?? 0}
+                  />
+                  <BarLine
+                    label="Offline"
+                    current={health.offline}
+                    total={summary?.total_devices ?? 0}
+                    tone={C.red}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {Object.entries(health).map(([key, val]) => (
+                  <div
+                    key={key}
+                    className="text-center rounded-lg p-2"
+                    style={{ background: "rgba(0,212,255,.04)" }}
+                  >
+                    <div
+                      className="font-display text-lg"
+                      style={{
+                        color:
+                          key === "offline"
+                            ? C.red
+                            : key === "warning"
+                              ? C.amber
+                              : C.green,
+                      }}
+                    >
+                      {val}
+                    </div>
+                    <div
+                      className="font-mono text-[9px] uppercase"
+                      style={{ color: C.muted }}
+                    >
+                      {key}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div
+                className="font-mono text-[10px] mt-4"
+                style={{ color: C.muted }}
+              >
+                Last successful poll: {clock(n?.polling.last_success)}
+              </div>
+            </Panel>
+            <Panel
+              title="PERFORMANCE"
+              subtitle="Latest normalized SNMP readings"
+              onClick={() => navigate("/snmp/dashboard")}
+            >
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                {([
+                  "CPU",
+                  "MEMORY",
+                  "STORAGE",
+                  "TEMPERATURE",
+                  "UPTIME",
+                  "LOAD",
+                ] as const).map((label) => {
+                  const values =
+                    label === "CPU"
+                      ? perf
+                          .map((x) => x.cpu)
+                          .filter((x): x is number => x != null)
+                      : label === "MEMORY"
+                        ? perf
+                            .map((x) => x.memory)
+                            .filter((x): x is number => x != null)
+                        : []
+                  return (
+                    <div
+                      key={label}
+                      className="rounded-lg p-3"
+                      style={{
+                        background: "rgba(0,212,255,.04)",
+                        border: "1px solid rgba(0,212,255,.09)",
+                      }}
+                    >
+                      <div
+                        className="font-mono text-[10px]"
+                        style={{ color: C.muted }}
+                      >
+                        {label}
+                      </div>
+                      <div className="font-display text-lg mt-1 neon-cyan">
+                        {values.length
+                          ? fmt(
+                              values.reduce((a, b) => a + b, 0) / values.length,
+                              "%",
+                            )
+                          : "N/A"}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="font-mono text-[10px]" style={{ color: C.muted }}>
+                N/A means the collector has not stored a supported reading.
+              </div>
+            </Panel>
+            <Panel
+              title="SNMP MONITORING"
+              subtitle="Poll outcomes and collector coverage"
+              onClick={() => navigate("/monitoring-jobs")}
+            >
+              <div className="space-y-3">
+                <BarLine
+                  label="Successful polls"
+                  current={n?.polling.success ?? 0}
+                  total={(n?.polling.success ?? 0) + (n?.polling.failure ?? 0)}
+                />
+                <BarLine
+                  label="Failed polls"
+                  current={n?.polling.failure ?? 0}
+                  total={(n?.polling.success ?? 0) + (n?.polling.failure ?? 0)}
+                  tone={C.red}
+                />
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div>
+                    <div
+                      className="font-mono text-[10px]"
+                      style={{ color: C.muted }}
+                    >
+                      ACTIVE JOBS
+                    </div>
+                    <div className="font-display text-xl neon-cyan">
+                      {n?.polling.active_jobs ?? "N/A"}
+                    </div>
+                  </div>
+                  <div>
+                    <div
+                      className="font-mono text-[10px]"
+                      style={{ color: C.muted }}
+                    >
+                      UNSUPPORTED OIDS
+                    </div>
+                    <div
+                      className="font-display text-xl"
+                      style={{ color: C.amber }}
+                    >
+                      {n?.polling.unsupported_oids ?? "N/A"}
+                    </div>
+                  </div>
+                </div>
+                <div
+                  className="font-mono text-[10px]"
+                  style={{ color: C.muted }}
+                >
+                  Last success {clock(n?.polling.last_success)} · Last failure{" "}
+                  {clock(n?.polling.last_failure)}
+                </div>
+              </div>
+            </Panel>
           </div>
-        </GlassCard>
-
-        <GlassCard className="p-4 md:p-5">
-          <div className="font-display font-bold text-base tracking-widest neon-cyan mb-3">QUICK SUMMARY</div>
-          <div className="space-y-3">
-            <SummaryLine label="ICMP Online" value={icmp.up} total={icmp.total} />
-            <SummaryLine label="ICMP Offline" value={icmp.down} total={icmp.total} accent={COLORS.red} />
-            <SummaryLine label="SNMP Configured" value={snmp.up} total={snmp.total} />
-            <SummaryLine label="SNMP Unconfigured" value={snmp.down} total={snmp.total} accent={COLORS.red} />
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <Panel
+              title="NETWORK TRAFFIC"
+              subtitle={`Stored interface samples · ${range}`}
+              onClick={() => navigate("/interfaces")}
+            >
+              <div className="flex gap-6 mb-3">
+                <div>
+                  <div
+                    className="font-mono text-[10px]"
+                    style={{ color: C.muted }}
+                  >
+                    RX Mbps
+                  </div>
+                  <div className="font-display text-2xl neon-green">
+                    {fmt(n?.traffic.rx_mbps, " Mbps")}
+                  </div>
+                </div>
+                <div>
+                  <div
+                    className="font-mono text-[10px]"
+                    style={{ color: C.muted }}
+                  >
+                    TX Mbps
+                  </div>
+                  <div className="font-display text-2xl neon-cyan">
+                    {fmt(n?.traffic.tx_mbps, " Mbps")}
+                  </div>
+                </div>
+              </div>
+              {chart.length ? (
+                <ResponsiveContainer width="100%" height={190}>
+                  <AreaChart data={chart}>
+                    <CartesianGrid
+                      stroke="rgba(255,255,255,.08)"
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: C.muted, fontSize: 10 }}
+                    />
+                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
+                    <Tooltip />
+                    <Area
+                      type="monotone"
+                      dataKey="rx_mbps"
+                      stroke={C.green}
+                      fill={`${C.green}22`}
+                      name="RX Mbps"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="tx_mbps"
+                      stroke={C.cyan}
+                      fill="transparent"
+                      name="TX Mbps"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <Empty text="No interface history stored for the selected period" />
+              )}
+            </Panel>
+            <Panel
+              title="TOP DEVICES BY TRAFFIC"
+              subtitle="Latest normalized interface totals"
+            >
+              <div className="space-y-3">
+                {n?.traffic.top_devices?.length ? (
+                  n.traffic.top_devices.map((item) => (
+                    <div
+                      key={item.device_id}
+                      className="flex justify-between font-mono text-xs"
+                    >
+                      <span style={{ color: "var(--t-text, #c8d8ee)" }}>
+                        {item.device_name || `Device ${item.device_id}`}
+                      </span>
+                      <span style={{ color: C.cyan }}>
+                        {(item.rx_mbps + item.tx_mbps).toFixed(2)} Mbps
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <Empty />
+                )}
+              </div>
+            </Panel>
           </div>
-        </GlassCard>
-      </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <Panel
+              title="INTERFACES"
+              subtitle="Latest SNMP state"
+              onClick={() => navigate("/interfaces")}
+            >
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <Mini
+                  label="TOTAL"
+                  number={n?.interface_summary.total ?? "N/A"}
+                />
+                <Mini
+                  label="UP"
+                  number={n?.interface_summary.up ?? "N/A"}
+                  tone={C.green}
+                />
+                <Mini
+                  label="DOWN"
+                  number={n?.interface_summary.down ?? "N/A"}
+                  tone={C.red}
+                />
+              </div>
+              <div
+                className="grid grid-cols-2 gap-3 font-mono text-xs"
+                style={{ color: C.muted }}
+              >
+                {" "}
+                <span>
+                  Errors{" "}
+                  <b style={{ color: C.red }}>
+                    {n?.interface_summary.errors ?? "N/A"}
+                  </b>
+                </span>
+                <span>
+                  Drops{" "}
+                  <b style={{ color: C.amber }}>
+                    {n?.interface_summary.drops ?? "N/A"}
+                  </b>
+                </span>
+              </div>
+            </Panel>
+            <Panel
+              title="ALERTS"
+              subtitle="Active alert severity"
+              onClick={() => navigate("/alerts")}
+            >
+              <div className="space-y-2">
+                {["critical", "high", "medium", "warning", "low", "info"].map(
+                  (sev) => (
+                    <div
+                      key={sev}
+                      className="flex justify-between font-mono text-xs"
+                    >
+                      <span className="capitalize" style={{ color: C.muted }}>
+                        {sev}
+                      </span>
+                      <span
+                        style={{
+                          color:
+                            sev === "critical"
+                              ? C.red
+                              : sev === "warning" || sev === "medium"
+                                ? C.amber
+                                : C.cyan,
+                        }}
+                      >
+                        {n?.alerts_by_severity[sev] ?? 0}
+                      </span>
+                    </div>
+                  ),
+                )}
+              </div>
+            </Panel>
+            <Panel
+              title="NETWORK INFORMATION"
+              subtitle="Normalized topology inventory"
+              onClick={() => navigate("/topology")}
+            >
+              <div className="grid grid-cols-2 gap-3">
+                {Object.entries({
+                  "LLDP/CDP neighbors": n?.network.lldp_neighbors,
+                  VLANs: n?.network.vlan_count,
+                  Routes: n?.network.routing_entries,
+                  ARP: n?.network.arp_entries,
+                  MAC: n?.network.mac_entries,
+                  "Topology nodes": n?.network.topology_nodes,
+                }).map(([label, metric]) => (
+                  <div key={label}>
+                    <div
+                      className="font-mono text-[10px]"
+                      style={{ color: C.muted }}
+                    >
+                      {label}
+                    </div>
+                    <div className="font-display text-lg neon-cyan">
+                      {metric == null ? "N/A" : metric}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <Panel title="DEVICE TYPES" subtitle="Inventory classification">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {Object.entries(n?.device_types ?? {}).length ? (
+                  Object.entries(n?.device_types ?? {}).map(
+                    ([label, count]) => (
+                      <div
+                        key={label}
+                        className="rounded-lg p-3"
+                        style={{ background: "rgba(0,212,255,.04)" }}
+                      >
+                        <div
+                          className="font-display text-sm"
+                          style={{ color: "var(--t-text, #c8d8ee)" }}
+                        >
+                          {label}
+                        </div>
+                        <div className="font-display text-2xl neon-cyan">
+                          {count}
+                        </div>
+                      </div>
+                    ),
+                  )
+                ) : (
+                  <Empty text="No device types classified" />
+                )}
+              </div>
+            </Panel>
+            <Panel
+              title="RECENT DEVICES / ACTIVITY"
+              subtitle="Last persisted device state"
+              onClick={() => navigate("/device-monitoring")}
+            >
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr
+                      className="font-mono text-[10px] uppercase"
+                      style={{ color: C.muted }}
+                    >
+                      {["Device", "IP", "Type", "Status", "Last poll"].map(
+                        (h) => (
+                          <th key={h} className="pb-2 pr-3">
+                            {h}
+                          </th>
+                        ),
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {devices.slice(0, 8).map((d) => (
+                      <tr
+                        key={d.id}
+                        className="font-mono text-xs"
+                        style={{ borderTop: "1px solid rgba(255,255,255,.06)" }}
+                      >
+                        <td className="py-2 pr-3" style={{ color: "var(--t-text, #c8d8ee)" }}>
+                          {d.hostname}
+                        </td>
+                        <td className="py-2 pr-3" style={{ color: C.muted }}>
+                          {d.ip_address}
+                        </td>
+                        <td className="py-2 pr-3" style={{ color: C.muted }}>
+                          {d.device_type || "N/A"}
+                        </td>
+                        <td className="py-2 pr-3">
+                          <Badge
+                            label={d.status}
+                            tone={
+                              d.status === "online"
+                                ? "green"
+                                : d.status === "offline"
+                                  ? "red"
+                                  : "amber"
+                            }
+                          />
+                        </td>
+                        <td className="py-2" style={{ color: C.muted }}>
+                          {clock(
+                            n?.devices[String(d.id)]?.last_poll?.timestamp ??
+                              d.last_seen,
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!devices.length && <Empty text="No devices in inventory" />}
+              </div>
+            </Panel>
+          </div>
+        </>
+      )}
     </div>
   )
-}
-
-function DeviceRow({ name, ip, status }: { name: string; ip: string; status: string }) {
-  const online = String(status).toLowerCase() === 'online' || String(status).toLowerCase() === 'up' || String(status).toLowerCase() === 'active'
-  return (
-    <div className="rounded-lg px-3 py-2 flex items-center justify-between gap-3" style={{ background: 'rgba(0,212,255,0.03)', border: '1px solid rgba(0,212,255,0.08)' }}>
-      <div className="min-w-0">
-        <div className="font-display text-sm tracking-wide truncate" style={{ color: '#dbeafe' }}>{name}</div>
-        <div className="font-mono text-[11px] truncate" style={{ color: COLORS.muted }}>{ip}</div>
-      </div>
-      <span className="font-mono text-[10px] px-2 py-0.5 rounded" style={{ color: online ? COLORS.green : COLORS.red, background: online ? 'rgba(0,255,136,0.08)' : 'rgba(255,51,102,0.08)', border: `1px solid ${online ? 'rgba(0,255,136,0.18)' : 'rgba(255,51,102,0.18)'}` }}>
-        {String(status).toUpperCase()}
-      </span>
-    </div>
-  )
-}
-
-function SummaryLine({ label, value, total, accent = COLORS.green }: { label: string; value: number; total: number; accent?: string }) {
-  return (
-    <div>
-      <div className="flex items-center justify-between font-mono text-xs mb-1" style={{ color: COLORS.muted }}>
-        <span>{label}</span>
-        <span style={{ color: accent }}>{value}/{total}</span>
-      </div>
-      <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-        <div className="h-full rounded-full" style={{ width: `${total ? (value / total) * 100 : 0}%`, background: accent }} />
-      </div>
-    </div>
-  )
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div className="font-mono text-xs py-6 text-center" style={{ color: COLORS.muted }}>{text}</div>
 }

@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { listAlerts, listDevices, listEvents, type AlertRecord, type DeviceRecord, type EventRecord } from '../lib/api'
+import { getOverview, listEvents, type AlertRecord, type DeviceRecord, type EventRecord } from '../lib/api'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 
-const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: '#c8d8ee' }
+const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--t-text, #c8d8ee)' }
 
 const levelC: Record<string, { c: string; bg: string }> = {
   CRITICAL: { c: '#ff3366', bg: 'rgba(255,51,102,0.1)' },
@@ -16,7 +16,7 @@ const levelC: Record<string, { c: string; bg: string }> = {
 
 const tagC: Record<string, string> = {
   DDoS: '#ff3366', BRUTE: '#ff6644', SQLi: '#7c3aed', EXFIL: '#ff3366',
-  SNMP: '#00d4ff', XSS: '#ffaa00', SCAN: '#00d4ff', EVENT: '#8899bb', OTHER: '#8899bb',
+  SNMP: '#00d4ff', XSS: '#ffaa00', SCAN: '#00d4ff', EVENT: 'var(--t-muted, #8899bb)', OTHER: 'var(--t-muted, #8899bb)',
 }
 
 interface LogEntry {
@@ -36,11 +36,11 @@ function LogDetailDrawer({ log, device, onClose }: { log: LogEntry; device?: Dev
     <div className="fixed inset-0 z-50 flex" style={{ backdropFilter: 'blur(2px)', background: 'rgba(0,0,0,0.55)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="ml-auto h-full overflow-y-auto w-full max-w-lg"
-        style={{ background: 'rgba(4,14,33,0.98)', border: '1px solid rgba(0,212,255,0.2)', boxShadow: '-8px 0 40px rgba(0,212,255,0.08)' }}>
+        style={{ background: 'var(--t-card, rgba(4,14,33,0.98))', border: '1px solid rgba(0,212,255,0.2)', boxShadow: '-8px 0 40px rgba(0,212,255,0.08)' }}>
         <div className="flex items-center justify-between p-5" style={{ borderBottom: '1px solid rgba(0,212,255,0.12)' }}>
           <div>
             <div className="font-display font-bold text-base tracking-widest neon-cyan">LOG ENTRY</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>{log.ts}</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{log.ts}</div>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 transition-all hover:bg-red-500/20" style={{ color: '#ff3366' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
@@ -49,11 +49,11 @@ function LogDetailDrawer({ log, device, onClose }: { log: LogEntry; device?: Dev
         <div className="p-5 space-y-4">
           <div className="flex items-center gap-3">
             <span className="font-mono text-xs px-3 py-1.5 rounded font-semibold" style={{ color: lc.c, background: lc.bg, border: `1px solid ${lc.c}40` }}>{log.level}</span>
-            <span className="font-mono text-xs px-2 py-1 rounded" style={{ color: tagC[log.tag] ?? '#8899bb', background: `${tagC[log.tag] ?? '#8899bb'}15` }}>{log.tag}</span>
+            <span className="font-mono text-xs px-2 py-1 rounded" style={{ color: tagC[log.tag] ?? 'var(--t-muted, #8899bb)', background: `${tagC[log.tag] ?? 'var(--t-muted, #8899bb)'}15` }}>{log.tag}</span>
           </div>
 
           <div className="rounded-xl p-4" style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(0,212,255,0.1)' }}>
-            <div className="font-mono text-xs leading-relaxed" style={{ color: '#c8d8ee' }}>{log.msg}</div>
+            <div className="font-mono text-xs leading-relaxed" style={{ color: 'var(--t-text, #c8d8ee)' }}>{log.msg}</div>
           </div>
 
           <div className="space-y-2 font-mono text-xs">
@@ -64,8 +64,8 @@ function LogDetailDrawer({ log, device, onClose }: { log: LogEntry; device?: Dev
               ['Device', device ? `${device.hostname} (${device.ip_address})` : 'Unknown'],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between py-2" style={{ borderBottom: '1px solid rgba(0,212,255,0.06)' }}>
-                <span style={{ color: '#8899bb' }}>{k}</span>
-                <span style={{ color: '#c8d8ee' }}>{v}</span>
+                <span style={{ color: 'var(--t-muted, #8899bb)' }}>{k}</span>
+                <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{v}</span>
               </div>
             ))}
           </div>
@@ -73,8 +73,8 @@ function LogDetailDrawer({ log, device, onClose }: { log: LogEntry; device?: Dev
           {log.raw && 'severity' in log.raw && (
             <div className="rounded-lg p-3" style={{ background: 'rgba(255,170,0,0.06)', border: '1px solid rgba(255,170,0,0.2)' }}>
               <div className="font-display text-xs tracking-wider mb-2" style={{ color: '#ffaa00' }}>ALERT STATUS</div>
-              <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
-                Status: <span style={{ color: '#c8d8ee' }}>{(log.raw as AlertRecord).status}</span>
+              <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
+                Status: <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{(log.raw as AlertRecord).status}</span>
                 {(log.raw as AlertRecord).description && (
                   <div className="mt-1">{(log.raw as AlertRecord).description}</div>
                 )}
@@ -96,8 +96,12 @@ export default function Forensics() {
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null)
 
   const fetchAll = useCallback(async () => {
-    const [a, e, d] = await Promise.all([listAlerts(), listEvents(), listDevices()])
-    return { alerts: a, events: e, devices: d }
+    const [overview, e] = await Promise.all([getOverview(24), listEvents({ limit: 50 })])
+    return {
+      alerts: overview.alerts as AlertRecord[],
+      events: e,
+      devices: overview.devices as DeviceRecord[],
+    }
   }, [])
 
   const { loading, error, refresh } = useAutoRefresh(
@@ -197,7 +201,7 @@ export default function Forensics() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">NETWORK FORENSICS</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {allLogs.length} log entries · {traces.length} traces · click a row for details
           </p>
         </div>
@@ -211,12 +215,12 @@ export default function Forensics() {
       </div>
 
       {error && <div className="font-mono text-xs" style={{ color: '#ff3366' }}>{error}</div>}
-      {loading && !allLogs.length && <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading forensics data…</div>}
+      {loading && !allLogs.length && <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading forensics data…</div>}
 
       {/* Traffic timeline */}
       <GlassCard className="p-4 md:p-5">
         <div className="font-display font-bold text-base tracking-wider neon-cyan mb-1">TRAFFIC TIMELINE — ANOMALY DETECTION</div>
-        <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Alert spikes vs normal activity · 24h window</div>
+        <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Alert spikes vs normal activity · 24h window</div>
         <ResponsiveContainer width="100%" height={180}>
           <AreaChart data={trafficTimeline}>
             <defs>
@@ -227,8 +231,8 @@ export default function Forensics() {
                 <stop offset="5%" stopColor="#ff3366" stopOpacity={0.6}/><stop offset="95%" stopColor="#ff3366" stopOpacity={0}/>
               </linearGradient>
             </defs>
-            <XAxis dataKey="t" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={5} />
-            <YAxis tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+            <XAxis dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={5} />
+            <YAxis tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
             <Tooltip contentStyle={ttStyle} />
             <Area type="monotone" dataKey="normal" stroke="#00d4ff" strokeWidth={1.5} fill="url(#gnorm)" dot={false} name="Normal (events)" />
             <Area type="monotone" dataKey="anomaly" stroke="#ff3366" strokeWidth={2} fill="url(#ganom)" dot={false} name="Anomaly (critical alerts)" />
@@ -241,16 +245,16 @@ export default function Forensics() {
         <div className="flex flex-col gap-3 p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
           <div className="flex items-center justify-between">
             <div className="font-display font-bold text-base tracking-wider neon-cyan">SECURITY LOG VIEWER</div>
-            <span className="font-mono text-xs" style={{ color: '#8899bb' }}>{filteredLogs.length} entries</span>
+            <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{filteredLogs.length} entries</span>
           </div>
           <div className="flex flex-wrap gap-2 items-center">
             <div className="relative flex-1 min-w-[120px]">
-              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8899bb" strokeWidth="2">
+              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--t-muted, #8899bb)" strokeWidth="2">
                 <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
               </svg>
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by IP, message, tag…"
                 className="glass-bright rounded pl-8 pr-3 py-1.5 font-mono text-xs outline-none w-full"
-                style={{ color: '#c8d8ee', border: '1px solid rgba(0,212,255,0.2)' }} />
+                style={{ color: 'var(--t-text, #c8d8ee)', border: '1px solid rgba(0,212,255,0.2)' }} />
             </div>
             <div className="flex flex-wrap gap-1.5">
               {['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'INFO', 'LOW'].map(l => (
@@ -258,7 +262,7 @@ export default function Forensics() {
                   className="font-mono text-xs px-2 py-1 rounded transition-all"
                   style={{
                     background: levelFilter === l ? 'rgba(0,212,255,0.15)' : 'transparent',
-                    color: levelFilter === l ? '#00d4ff' : '#8899bb',
+                    color: levelFilter === l ? '#00d4ff' : 'var(--t-muted, #8899bb)',
                     border: `1px solid ${levelFilter === l ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.1)'}`,
                   }}>{l}</button>
               ))}
@@ -267,23 +271,23 @@ export default function Forensics() {
         </div>
         <div className="font-mono text-xs overflow-x-auto max-h-[480px] overflow-y-auto" style={{ background: 'rgba(0,0,0,0.3)' }}>
           {filteredLogs.length === 0
-            ? <div className="py-10 text-center" style={{ color: '#8899bb' }}>No log entries match the filter.</div>
+            ? <div className="py-10 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No log entries match the filter.</div>
             : filteredLogs.map(log => {
               const s = levelC[log.level] ?? levelC.INFO
-              const tc = tagC[log.tag] ?? '#8899bb'
+              const tc = tagC[log.tag] ?? 'var(--t-muted, #8899bb)'
               return (
                 <div key={log.id}
                   className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 px-4 py-2.5 cursor-pointer transition-all hover:bg-cyan-400/5"
                   style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}
                   onClick={() => setSelectedLog(log)}>
                   <div className="flex items-center gap-2 flex-wrap shrink-0">
-                    <span style={{ color: '#556677', minWidth: 130 }}>{log.ts}</span>
+                    <span style={{ color: 'var(--t-muted, #556677)', minWidth: 130 }}>{log.ts}</span>
                     <span className="px-2 py-0.5 rounded font-semibold" style={{ color: s.c, background: s.bg }}>{log.level}</span>
                     <span style={{ color: '#ff3366' }}>{log.src}</span>
                     <span className="px-1.5 py-0.5 rounded" style={{ color: tc, background: `${tc}15` }}>{log.tag}</span>
                   </div>
-                  <span className="sm:ml-auto truncate max-w-xs" style={{ color: '#c8d8ee' }}>{log.msg}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8899bb" strokeWidth="2" className="shrink-0 hidden sm:block">
+                  <span className="sm:ml-auto truncate max-w-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{log.msg}</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--t-muted, #8899bb)" strokeWidth="2" className="shrink-0 hidden sm:block">
                     <path d="M9 18l6-6-6-6"/>
                   </svg>
                 </div>
@@ -296,17 +300,17 @@ export default function Forensics() {
       <GlassCard className="overflow-hidden">
         <div className="p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
           <div className="font-display font-bold text-base tracking-wider neon-cyan">PACKET TRACE</div>
-          <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Session-level tracking · click to expand</div>
+          <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Session-level tracking · click to expand</div>
         </div>
         {traces.length === 0
-          ? <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>No events available to build traces.</div>
+          ? <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No events available to build traces.</div>
           : (
             <div className="overflow-x-auto">
               <table className="w-full" style={{ minWidth: 600 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                     {['Trace ID', 'Source', 'Destination', 'Protocol', 'Duration', 'Packets', 'Bytes', 'Event Type'].map(h => (
-                      <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: '#8899bb' }}>{h}</th>
+                      <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -325,9 +329,9 @@ export default function Forensics() {
                         onClick={() => setSelectedLog(logEntry)}>
                         <td className="px-4 py-3 font-mono text-xs neon-cyan">{t.id}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: '#ff3366' }}>{t.src}</td>
-                        <td className="px-4 py-3 font-mono text-xs" style={{ color: '#c8d8ee' }}>{t.dst}</td>
+                        <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{t.dst}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: '#7c3aed' }}>{t.proto}</td>
-                        <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>{t.dur}</td>
+                        <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{t.dur}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00d4ff' }}>{t.pkts.toLocaleString()}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00ff88' }}>{t.bytes}</td>
                         <td className="px-4 py-3">

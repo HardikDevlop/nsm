@@ -102,6 +102,8 @@ export function useSNMPDevices(params: {
     queryKey: snmpKeys.devices(params),
     queryFn: () => listSNMPDevicesOptimized(params),
     placeholderData: (previousData) => previousData, // Keep previous data while fetching
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
   });
 }
 

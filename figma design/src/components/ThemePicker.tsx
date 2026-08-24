@@ -13,10 +13,10 @@ const LABELS: Record<keyof ThemeColors, string> = {
 
 const SHADES: Record<keyof ThemeColors, string[]> = {
   bg: ['#000000', '#0a0a0a', '#111111', '#1a1a1a', '#030d1e', '#0d1117', '#f0f2f5', '#ffffff', '#fafafa', '#f5f5f0'],
-  text: ['#ffffff', '#e2e8f5', '#c8d8ee', '#a0aec0', '#888888', '#666666', '#1a1a2e', '#2d3748', '#333333', '#000000'],
+  text: ['#ffffff', 'var(--t-text, #e2e8f5)', 'var(--t-text, #c8d8ee)', '#a0aec0', '#888888', '#666666', '#1a1a2e', '#2d3748', '#333333', '#000000'],
   accent: ['#FF0015', '#d72323', '#ff3366', '#e53e3e', '#dc2626', '#ff4500', '#00d4ff', '#00ff88', '#7c3aed', '#3b82f6'],
   card: ['#000000', '#0f0f0f', '#1a1a1a', '#1e1e2e', '#0d1117', '#ffffff', '#f8f9fa', '#f0f2f5', '#e8e8e8', '#fafafa'],
-  muted: ['#ffffff', '#c8d8ee', '#a0aec0', '#888888', '#666666', '#556677', '#444444', '#333333', '#222222', '#000000'],
+  muted: ['#ffffff', 'var(--t-text, #c8d8ee)', '#a0aec0', '#888888', '#666666', 'var(--t-muted, #556677)', '#444444', '#333333', '#222222', '#000000'],
   border: ['#000000', '#111111', '#1e1e1e', '#2d2d2d', '#3d3d3d', '#e0e0e0', '#d0d0d0', '#c0c0c0', '#b0b0b0', '#ffffff'],
 }
 

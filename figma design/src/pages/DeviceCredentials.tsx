@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import TablePagination from '../components/TablePagination'
+import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
-import { listDeviceCredentials, createDeviceCredential, updateDeviceCredential, deleteDeviceCredential, listDevices, type DeviceCredentialRecord, type DeviceRecord } from '../lib/api'
+import { listDeviceCredentials, createDeviceCredential, updateDeviceCredential, deleteDeviceCredential, listDeviceOptions, type DeviceCredentialRecord, type DeviceOptionRecord } from '../lib/api'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (<div><label className="font-mono text-xs block mb-1" style={{ color: 'var(--t-muted)' }}>{label}</label>{children}</div>)
 }
 
-const inputStyle: React.CSSProperties = { background: 'rgba(255,255,255,0.04)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)', outline: 'none' }
+const inputStyle: React.CSSProperties = { background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)', outline: 'none' }
 
 export default function DeviceCredentials() {
   const [items, setItems] = useState<DeviceCredentialRecord[]>([])
-  const [devices, setDevices] = useState<DeviceRecord[]>([])
+  const [devices, setDevices] = useState<DeviceOptionRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<DeviceCredentialRecord | null>(null)
@@ -26,7 +28,7 @@ export default function DeviceCredentials() {
 
   const load = useCallback(async () => {
     try {
-      const [credsData, devicesData] = await Promise.all([listDeviceCredentials(), listDevices()])
+      const [credsData, devicesData] = await Promise.all([listDeviceCredentials(), listDeviceOptions()])
       setItems(credsData)
       setDevices(devicesData)
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Failed to load') }
@@ -65,6 +67,8 @@ export default function DeviceCredentials() {
   }
 
   const filtered = items.filter(i => !search.trim() || i.credential_type.toLowerCase().includes(search.toLowerCase()))
+  const deviceMap = new Map(devices.map(device => [device.id, device]))
+  const pagination = useTablePagination(filtered)
 
   if (loading) {
     return (<div className="p-6 flex items-center justify-center min-h-[50vh]"><div className="flex flex-col items-center gap-3"><div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'var(--t-accent)', borderTopColor: 'transparent' }} /><span className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>LOADING…</span></div></div>)
@@ -75,7 +79,7 @@ export default function DeviceCredentials() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div><h1 className="font-display font-bold text-xl md:text-2xl" style={{ color: 'var(--t-text)' }}>Device Credentials</h1><p className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted)' }}>{items.length} credential{items.length !== 1 ? 's' : ''} • Encrypted Storage</p></div>
         <div className="flex gap-2">
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" className="rounded-lg px-3 py-2 font-mono text-xs" style={{ ...inputStyle, minWidth: 160 }} onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }} onBlur={e => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }} />
+          <input value={search} onChange={e => { setSearch(e.target.value); pagination.setPage(1) }} placeholder="Search…" className="rounded-lg px-3 py-2 font-mono text-xs" style={{ ...inputStyle, minWidth: 160 }} onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }} onBlur={e => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }} />
           <PermissionGuard permission="device_credentials:create"><button onClick={openCreate} className="rounded-lg px-4 py-2 font-display font-semibold text-sm flex items-center gap-2 hover:opacity-90 transition-all" style={{ background: 'var(--t-accent)', color: '#fff', border: '1px solid var(--t-accent-border)' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>New</button></PermissionGuard>
         </div>
       </div>
@@ -85,8 +89,8 @@ export default function DeviceCredentials() {
           <table className="w-full text-left" style={{ minWidth: 640 }}>
             <thead><tr style={{ borderBottom: '1px solid var(--t-border-light)' }}>{['Device', 'Type', 'Username', 'Created', 'Actions'].map(h => (<th key={h} className="px-4 py-3 font-mono text-xs uppercase tracking-wider" style={{ color: 'var(--t-muted)' }}>{h}</th>))}</tr></thead>
             <tbody>
-              {filtered.map(item => {
-                const device = devices.find(d => d.id === item.device_id)
+              {pagination.paginatedItems.map(item => {
+                const device = deviceMap.get(item.device_id)
                 return (
                   <tr key={item.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }} onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}>
                     <td className="px-4 py-3 font-display font-medium text-sm" style={{ color: 'var(--t-text)' }}>{device ? device.hostname : `Device #${item.device_id}`}</td>
@@ -106,6 +110,18 @@ export default function DeviceCredentials() {
           </table>
         </div>
         {filtered.length === 0 && (<div className="py-12 text-center font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{search ? 'No matches.' : 'No credentials yet.'}</div>)}
+        {filtered.length > 0 && (
+          <TablePagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            startItem={pagination.startItem}
+            endItem={pagination.endItem}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={(pageSize) => { pagination.setPageSize(pageSize); pagination.setPage(1) }}
+          />
+        )}
       </GlassCard>
 
       {showModal && (
@@ -120,7 +136,7 @@ export default function DeviceCredentials() {
               {fType === 'snmp_v2c' && <Field label="COMMUNITY STRING"><input value={fCommunity} onChange={e => setFCommunity(e.target.value)} placeholder="public" className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle} onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }} onBlur={e => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}/></Field>}
             </div>
             <div className="flex gap-2 justify-end mt-6">
-              <button onClick={() => setShowModal(false)} className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>Cancel</button>
+              <button onClick={() => setShowModal(false)} className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>Cancel</button>
               <button onClick={() => void handleSubmit()} disabled={saving || !fDeviceId} className="rounded-lg px-5 py-2 font-mono text-xs font-semibold transition-all disabled:opacity-50 flex items-center gap-2" style={{ background: 'var(--t-accent)', color: '#fff', border: '1px solid var(--t-accent-border)' }}>{saving ? <><span className="w-3 h-3 rounded-full border animate-spin inline-block" style={{ borderColor:'#fff',borderTopColor:'transparent' }}/> Saving…</> : editing ? '✓ Update' : '🔒 Create'}</button>
             </div>
           </div>

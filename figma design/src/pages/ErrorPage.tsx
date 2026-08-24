@@ -29,7 +29,7 @@ export default function ErrorPage() {
           <h2 className="font-display font-bold text-xl mb-4" style={{ color: '#ff6644' }}>
             Oops! Something went wrong
           </h2>
-          <p className="font-mono text-sm mb-6" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-sm mb-6" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {errorMessage}
           </p>
         </div>
@@ -61,7 +61,7 @@ export default function ErrorPage() {
         </div>
         
         <div className="mt-6 pt-4 border-t border-gray-600">
-          <p className="font-mono text-xs" style={{ color: '#667799' }}>
+          <p className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>
             If this error persists, please check the URL or contact support.
           </p>
         </div>

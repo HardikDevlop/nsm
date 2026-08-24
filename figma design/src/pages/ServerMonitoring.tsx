@@ -3,12 +3,12 @@ import { Link } from 'react-router'
 import GlassCard from '../components/GlassCard'
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import {
-  listAlerts, listDevices, listDeviceMetrics, listInterfaces,
+  getOverview, listDeviceMetrics,
   type AlertRecord, type DeviceMetricRecord, type DeviceRecord, type InterfaceRecord,
 } from '../lib/api'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 
-const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: '#c8d8ee' }
+const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--t-text, #c8d8ee)' }
 
 function getColor(v: number) {
   if (v > 85) return '#ff3366'
@@ -18,7 +18,7 @@ function getColor(v: number) {
 
 function UsageBar({ value, color }: { value: number; color: string }) {
   return (
-    <div className="h-1.5 rounded-full w-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
+    <div className="h-1.5 rounded-full w-full" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.06))' }}>
       <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, value)}%`, background: color }} />
     </div>
   )
@@ -66,12 +66,12 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
     <div className="fixed inset-0 z-50 flex" style={{ backdropFilter: 'blur(2px)', background: 'rgba(0,0,0,0.55)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="ml-auto h-full overflow-y-auto w-full max-w-xl"
-        style={{ background: 'rgba(4,14,33,0.98)', border: '1px solid rgba(0,212,255,0.2)', boxShadow: '-8px 0 40px rgba(0,212,255,0.08)' }}>
+        style={{ background: 'var(--t-card, rgba(4,14,33,0.98))', border: '1px solid rgba(0,212,255,0.2)', boxShadow: '-8px 0 40px rgba(0,212,255,0.08)' }}>
         {/* Header */}
         <div className="flex items-center justify-between p-5" style={{ borderBottom: '1px solid rgba(0,212,255,0.12)' }}>
           <div>
             <div className="font-display font-bold text-lg tracking-widest neon-cyan">{device.hostname}</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>{device.ip_address} · {device.model ?? 'Unknown model'}</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · {device.model ?? 'Unknown model'}</div>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 transition-all hover:bg-red-500/20" style={{ color: '#ff3366', border: '1px solid rgba(255,51,102,0.3)' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
@@ -87,10 +87,10 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
               {isOnline ? 'UP' : 'DN'}
             </div>
             <div className="flex-1">
-              <div className="font-display font-semibold text-sm" style={{ color: '#c8d8ee' }}>
+              <div className="font-display font-semibold text-sm" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                 {isOnline ? 'Device is Online' : 'Device is Offline'}
               </div>
-              <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+              <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
                 Uptime: {formatDuration(device.uptime_seconds)} · Last seen: {device.last_seen ? new Date(device.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
               </div>
             </div>
@@ -110,7 +110,7 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
               ].map(m => (
                 <div key={m.l}>
                   <div className="flex justify-between font-mono text-xs mb-1">
-                    <span style={{ color: '#8899bb' }}>{m.l}</span>
+                    <span style={{ color: 'var(--t-muted, #8899bb)' }}>{m.l}</span>
                     <span style={{ color: getColor(m.v) }}>{m.v.toFixed(1)}%</span>
                   </div>
                   <UsageBar value={m.v} color={getColor(m.v)} />
@@ -128,7 +128,7 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
             ].map(s => (
               <div key={s.l} className="rounded-lg p-3 text-center" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
                 <div className="font-display font-bold text-base" style={{ color: s.c }}>{s.v}</div>
-                <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>{s.l}</div>
+                <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{s.l}</div>
               </div>
             ))}
           </div>
@@ -139,8 +139,8 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
               <div className="font-display font-bold text-xs tracking-widest neon-cyan mb-3">CPU & RAM TREND</div>
               <ResponsiveContainer width="100%" height={140}>
                 <LineChart data={chartData}>
-                  <XAxis dataKey="t" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                  <YAxis domain={[0, 100]} tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis domain={[0, 100]} tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={ttStyle} />
                   <Line type="monotone" dataKey="cpu" stroke="#00d4ff" strokeWidth={1.5} dot={false} name="CPU %" />
                   <Line type="monotone" dataKey="ram" stroke="#7c3aed" strokeWidth={1.5} dot={false} name="RAM %" />
@@ -148,7 +148,7 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
               </ResponsiveContainer>
             </div>
           ) : (
-            <div className="font-mono text-xs rounded-lg p-4 text-center" style={{ color: '#8899bb', background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
+            <div className="font-mono text-xs rounded-lg p-4 text-center" style={{ color: 'var(--t-muted, #8899bb)', background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
               No metric history available. Start monitoring to collect data.
             </div>
           )}
@@ -163,9 +163,9 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
                     style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full" style={{ background: iface.status === 'up' ? '#00ff88' : '#ff3366' }} />
-                      <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{iface.interface_name}</span>
+                      <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{iface.interface_name}</span>
                     </div>
-                    <div className="flex gap-3 font-mono text-xs" style={{ color: '#8899bb' }}>
+                    <div className="flex gap-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                       <span>↓ {formatBytes(iface.traffic_in)}</span>
                       <span>↑ {formatBytes(iface.traffic_out)}</span>
                       {iface.packet_errors > 0 && <span style={{ color: '#ff3366' }}>{iface.packet_errors} err</span>}
@@ -179,14 +179,14 @@ function ServerDetailPanel({ srv, onClose }: { srv: ServerRow; onClose: () => vo
           {/* Device info */}
           <div>
             <div className="font-display font-bold text-xs tracking-widest neon-cyan mb-3">DEVICE INFO</div>
-            <div className="space-y-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>
+            <div className="space-y-2 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
               {[
                 ['Serial', device.serial_number ?? '—'], ['Firmware', device.firmware_version ?? '—'],
                 ['MAC', device.mac_address ?? '—'], ['Monitoring', device.monitoring_status ? 'Enabled' : 'Disabled'],
                 ['Created', new Date(device.created_at).toLocaleDateString('en-IN')],
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between">
-                  <span style={{ color: '#8899bb' }}>{k}</span><span>{v}</span>
+                  <span style={{ color: 'var(--t-muted, #8899bb)' }}>{k}</span><span>{v}</span>
                 </div>
               ))}
             </div>
@@ -206,8 +206,24 @@ export default function ServerMonitoring() {
   const [selected, setSelected] = useState<ServerRow | null>(null)
 
   const fetchAll = useCallback(async () => {
-    const [d, m, i, a] = await Promise.all([listDevices(), listDeviceMetrics(), listInterfaces(), listAlerts()])
-    return { devices: d, metrics: m, interfaces: i, alerts: a }
+    const [overview, m] = await Promise.all([getOverview(24), listDeviceMetrics(undefined, { limit: 200 })])
+    const interfacesData: InterfaceRecord[] = overview.normalized.interfaces.map((item, index) => ({
+      id: item.interface_id ?? index,
+      device_id: item.device_id,
+      interface_name: item.name || `if-${item.interface_id ?? index}`,
+      status: item.oper_status || 'unknown',
+      speed: item.speed_bps ? String(item.speed_bps) : null,
+      traffic_in: item.rx_mbps ?? 0,
+      traffic_out: item.tx_mbps ?? 0,
+      packet_errors: item.errors ?? 0,
+      last_updated: item.polled_at || overview.fetched_at,
+    }))
+    return {
+      devices: overview.devices as DeviceRecord[],
+      metrics: m,
+      interfaces: interfacesData,
+      alerts: overview.alerts as AlertRecord[],
+    }
   }, [])
 
   const { loading, error, refresh } = useAutoRefresh(
@@ -281,7 +297,7 @@ export default function ServerMonitoring() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">SERVER MONITORING</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {devices.length} devices · auto-refresh 15s · click a card for details
           </p>
         </div>
@@ -304,19 +320,19 @@ export default function ServerMonitoring() {
             </div>
             <div className="flex-1">
               <div className="font-display font-semibold text-sm" style={{ color: '#ff3366' }}>Unable to Load Server Data</div>
-              <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{error}</div>
+              <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{error}</div>
               {error.includes('Not authenticated') && (
                 <div className="font-mono text-xs mt-2">
-                  <span style={{ color: '#8899bb' }}>Please </span>
+                  <span style={{ color: 'var(--t-muted, #8899bb)' }}>Please </span>
                   <Link to="/login" className="underline" style={{ color: '#00d4ff' }}>log in</Link>
-                  <span style={{ color: '#8899bb' }}> to access server monitoring data.</span>
+                  <span style={{ color: 'var(--t-muted, #8899bb)' }}> to access server monitoring data.</span>
                 </div>
               )}
             </div>
           </div>
         </GlassCard>
       )}
-      {loading && !devices.length && <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading server data…</div>}
+      {loading && !devices.length && <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading server data…</div>}
 
       {/* KPI bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -328,7 +344,7 @@ export default function ServerMonitoring() {
         ].map(k => (
           <GlassCard key={k.l} className="p-4 text-center">
             <div className="font-display font-bold text-2xl transition-all" style={{ color: k.c }}>{k.v}</div>
-            <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{k.l}</div>
+            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{k.l}</div>
           </GlassCard>
         ))}
       </div>
@@ -336,7 +352,7 @@ export default function ServerMonitoring() {
       {/* Server cards grid */}
       {servers.length === 0 && !loading ? (
         <GlassCard className="p-8 text-center">
-          <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No devices found. Discover devices via ISP &amp; WAN Monitoring to populate this view.</div>
+          <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No devices found. Discover devices via ISP &amp; WAN Monitoring to populate this view.</div>
         </GlassCard>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -350,9 +366,9 @@ export default function ServerMonitoring() {
                 onClick={() => setSelected(srv)}>
                 <div className="flex items-start justify-between mb-3">
                   <div>
-                    <div className="font-display font-bold text-sm" style={{ color: isOffline ? '#ff3366' : '#c8d8ee' }}>{srv.device.hostname}</div>
-                    <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>{srv.device.ip_address}</div>
-                    {srv.device.model && <div className="font-mono text-xs mt-0.5" style={{ color: '#556677' }}>{srv.device.model}</div>}
+                    <div className="font-display font-bold text-sm" style={{ color: isOffline ? '#ff3366' : 'var(--t-text, #c8d8ee)' }}>{srv.device.hostname}</div>
+                    <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{srv.device.ip_address}</div>
+                    {srv.device.model && <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #556677)' }}>{srv.device.model}</div>}
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <span className={`status-dot ${isOffline ? 'offline' : 'online'}`} style={{ marginTop: 3 }} />
@@ -367,7 +383,7 @@ export default function ServerMonitoring() {
                   {[{ l: 'CPU', v: srv.cpu }, { l: 'RAM', v: srv.ram }, { l: 'Disk', v: srv.disk }].map(m => (
                     <div key={m.l}>
                       <div className="flex justify-between font-mono text-xs mb-1">
-                        <span style={{ color: '#8899bb' }}>{m.l}</span>
+                        <span style={{ color: 'var(--t-muted, #8899bb)' }}>{m.l}</span>
                         <span style={{ color: getColor(m.v) }}>{m.v.toFixed(1)}%</span>
                       </div>
                       <UsageBar value={m.v} color={getColor(m.v)} />
@@ -378,15 +394,15 @@ export default function ServerMonitoring() {
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   <div className="font-mono text-xs text-center rounded py-1" style={{ background: 'rgba(0,212,255,0.04)', color: '#00d4ff' }}>
                     <div className="font-bold">{srv.latency.toFixed(0)}ms</div>
-                    <div style={{ fontSize: 9, color: '#8899bb' }}>Latency</div>
+                    <div style={{ fontSize: 9, color: 'var(--t-muted, #8899bb)' }}>Latency</div>
                   </div>
                   <div className="font-mono text-xs text-center rounded py-1" style={{ background: 'rgba(0,255,136,0.04)', color: '#00ff88' }}>
                     <div className="font-bold">{srv.interfaces.filter(i => i.status === 'up').length}/{srv.interfaces.length}</div>
-                    <div style={{ fontSize: 9, color: '#8899bb' }}>Ifaces Up</div>
+                    <div style={{ fontSize: 9, color: 'var(--t-muted, #8899bb)' }}>Ifaces Up</div>
                   </div>
                   <div className="font-mono text-xs text-center rounded py-1" style={{ background: srv.errors > 0 ? 'rgba(255,51,102,0.06)' : 'rgba(0,255,136,0.04)', color: srv.errors > 0 ? '#ff3366' : '#00ff88' }}>
                     <div className="font-bold">{srv.errors}</div>
-                    <div style={{ fontSize: 9, color: '#8899bb' }}>Errors</div>
+                    <div style={{ fontSize: 9, color: 'var(--t-muted, #8899bb)' }}>Errors</div>
                   </div>
                 </div>
               </GlassCard>
@@ -403,9 +419,9 @@ export default function ServerMonitoring() {
         ].map(chart => (
           <GlassCard key={chart.title} className="p-4 md:p-5">
             <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-1">{chart.title}</div>
-            <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>All devices · 30 readings</div>
+            <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>All devices · 30 readings</div>
             {chart.data.length === 0
-              ? <div className="font-mono text-xs py-6 text-center" style={{ color: '#8899bb' }}>No data yet</div>
+              ? <div className="font-mono text-xs py-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No data yet</div>
               : (
                 <ResponsiveContainer width="100%" height={130}>
                   <AreaChart data={chart.data}>
@@ -415,8 +431,8 @@ export default function ServerMonitoring() {
                         <stop offset="95%" stopColor={chart.color} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <XAxis dataKey="t" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                    <YAxis domain={[0, 100]} tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                    <XAxis dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                    <YAxis domain={[0, 100]} tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
                     <Tooltip contentStyle={ttStyle} />
                     <Area type="monotone" dataKey={chart.key} stroke={chart.color} strokeWidth={2} fill={`url(#${chart.gradId})`} dot={false} name={chart.title} />
                   </AreaChart>
@@ -427,14 +443,14 @@ export default function ServerMonitoring() {
 
         <GlassCard className="p-4 md:p-5">
           <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-1">NETWORK I/O</div>
-          <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>Bandwidth · 30 readings</div>
+          <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>Bandwidth · 30 readings</div>
           {netHistory.length === 0
-            ? <div className="font-mono text-xs py-6 text-center" style={{ color: '#8899bb' }}>No data yet</div>
+            ? <div className="font-mono text-xs py-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No data yet</div>
             : (
               <ResponsiveContainer width="100%" height={130}>
                 <LineChart data={netHistory}>
-                  <XAxis dataKey="t" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                  <YAxis tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={ttStyle} />
                   <Line type="monotone" dataKey="tx" stroke="#00d4ff" strokeWidth={1.5} dot={false} name="BW/Latency" />
                   <Line type="monotone" dataKey="rx" stroke="#00ff88" strokeWidth={1.5} dot={false} name="Latency ms" />

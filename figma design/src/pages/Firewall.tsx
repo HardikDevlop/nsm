@@ -4,7 +4,7 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import { listAlerts, listDevices, listEvents, type AlertRecord, type DeviceRecord, type EventRecord } from '../lib/api'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 
-const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: '#c8d8ee' }
+const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--t-text, #c8d8ee)' }
 
 const sevColor = { critical: '#ff3366', high: '#ff6644', medium: '#ffaa00', low: '#00d4ff', info: '#00d4ff' } as Record<string, string>
 const actionColor: Record<string, string> = { DENY: '#ff3366', DROP: '#ff3366', 'RATE-LIMIT': '#ffaa00', ALLOW: '#00ff88' }
@@ -12,17 +12,17 @@ const actionColor: Record<string, string> = { DENY: '#ff3366', DROP: '#ff3366', 
 // ── Alert Detail Modal ─────────────────────────────────────────────────────
 function AlertDetailModal({ alert, device, onClose }: { alert: AlertRecord; device?: DeviceRecord; onClose: () => void }) {
   const sev = alert.severity as string
-  const c = sevColor[sev] ?? '#8899bb'
+  const c = sevColor[sev] ?? 'var(--t-muted, #8899bb)'
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backdropFilter: 'blur(3px)', background: 'rgba(0,0,0,0.65)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="w-full max-w-lg rounded-xl overflow-hidden"
-        style={{ background: 'rgba(4,14,33,0.98)', border: `1px solid ${c}40`, boxShadow: `0 0 40px ${c}18` }}>
+        style={{ background: 'var(--t-card, rgba(4,14,33,0.98))', border: `1px solid ${c}40`, boxShadow: `0 0 40px ${c}18` }}>
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${c}25` }}>
           <div>
             <div className="font-display font-bold text-base tracking-widest" style={{ color: c }}>ALERT #{alert.id}</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
               {new Date(alert.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
             </div>
           </div>
@@ -32,8 +32,8 @@ function AlertDetailModal({ alert, device, onClose }: { alert: AlertRecord; devi
         </div>
         <div className="p-5 space-y-4">
           <div className="rounded-lg p-4" style={{ background: `${c}0d`, border: `1px solid ${c}25` }}>
-            <div className="font-display font-semibold text-sm mb-1" style={{ color: '#c8d8ee' }}>{alert.title}</div>
-            {alert.description && <div className="font-mono text-xs" style={{ color: '#8899bb' }}>{alert.description}</div>}
+            <div className="font-display font-semibold text-sm mb-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>{alert.title}</div>
+            {alert.description && <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{alert.description}</div>}
           </div>
           <div className="grid grid-cols-2 gap-3 font-mono text-xs">
             {[
@@ -42,8 +42,8 @@ function AlertDetailModal({ alert, device, onClose }: { alert: AlertRecord; devi
               ['Resolved', alert.resolved_at ? new Date(alert.resolved_at).toLocaleDateString('en-IN') : 'Not resolved'],
             ].map(([k, v]) => (
               <div key={k} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
-                <div style={{ color: '#8899bb' }}>{k}</div>
-                <div className="mt-1 font-semibold" style={{ color: '#c8d8ee' }}>{v}</div>
+                <div style={{ color: 'var(--t-muted, #8899bb)' }}>{k}</div>
+                <div className="mt-1 font-semibold" style={{ color: 'var(--t-text, #c8d8ee)' }}>{v}</div>
               </div>
             ))}
           </div>
@@ -154,7 +154,7 @@ export default function Firewall() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">FIREWALL MONITORING</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             Policy enforcement · Threat intel · {alerts.length} alerts · click row for details
           </p>
         </div>
@@ -173,7 +173,7 @@ export default function Firewall() {
       </div>
 
       {error && <div className="font-mono text-xs" style={{ color: '#ff3366' }}>{error}</div>}
-      {loading && !alerts.length && <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading firewall data…</div>}
+      {loading && !alerts.length && <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading firewall data…</div>}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -185,8 +185,8 @@ export default function Firewall() {
         ].map(k => (
           <GlassCard key={k.l} className="p-4">
             <div className="font-display font-bold text-2xl transition-all" style={{ color: k.c }}>{k.v}</div>
-            <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{k.l}</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#556677' }}>{k.sub}</div>
+            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{k.l}</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #556677)' }}>{k.sub}</div>
           </GlassCard>
         ))}
       </div>
@@ -195,7 +195,7 @@ export default function Firewall() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <GlassCard className="p-4 md:p-5">
           <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-1">BLOCKED TRAFFIC — 24H</div>
-          <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Critical alerts vs events · hourly buckets</div>
+          <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Critical alerts vs events · hourly buckets</div>
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={trafficChart}>
               <defs>
@@ -206,8 +206,8 @@ export default function Firewall() {
                   <stop offset="5%" stopColor="#00ff88" stopOpacity={0.2}/><stop offset="95%" stopColor="#00ff88" stopOpacity={0}/>
                 </linearGradient>
               </defs>
-              <XAxis dataKey="t" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={3} />
-              <YAxis tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+              <XAxis dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={3} />
+              <YAxis tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={ttStyle} />
               <Area type="monotone" dataKey="blocked" stroke="#ff3366" strokeWidth={2} fill="url(#gbl)" dot={false} name="Blocked" />
               <Area type="monotone" dataKey="allowed" stroke="#00ff88" strokeWidth={1.5} fill="url(#gal)" dot={false} name="Allowed (est)" />
@@ -217,14 +217,14 @@ export default function Firewall() {
 
         <GlassCard className="p-4 md:p-5">
           <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-1">ATTACK TYPES — LIVE</div>
-          <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Categorized from real alerts</div>
+          <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Categorized from real alerts</div>
           {attackTypes.length === 0
-            ? <div className="font-mono text-xs py-8 text-center" style={{ color: '#8899bb' }}>No alerts recorded yet</div>
+            ? <div className="font-mono text-xs py-8 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No alerts recorded yet</div>
             : (
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={attackTypes} layout="vertical">
-                  <XAxis type="number" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
-                  <YAxis type="category" dataKey="t" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} width={90} />
+                  <XAxis type="number" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                  <YAxis type="category" dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} width={90} />
                   <Tooltip contentStyle={ttStyle} />
                   <Bar dataKey="v" fill="#ff3366" fillOpacity={0.7} radius={[0, 4, 4, 0]} name="Events" />
                 </BarChart>
@@ -237,17 +237,17 @@ export default function Firewall() {
       <GlassCard className="overflow-hidden">
         <div className="p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
           <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan">TOP ATTACKING IPs</div>
-          <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Derived from critical/high alerts · click to view</div>
+          <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Derived from critical/high alerts · click to view</div>
         </div>
         {topAttackers.length === 0
-          ? <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>No critical/high alerts recorded.</div>
+          ? <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No critical/high alerts recorded.</div>
           : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                     {['IP Address', 'Attempts', 'Type', 'Severity', 'Action'].map(h => (
-                      <th key={h} className="text-left px-3 py-2.5 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{h}</th>
+                      <th key={h} className="text-left px-3 py-2.5 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -261,10 +261,10 @@ export default function Firewall() {
                         onClick={() => alert && setSelectedAlert(alert)}>
                         <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: '#ff3366' }}>{a.ip}</td>
                         <td className="px-3 py-2 font-mono text-xs font-semibold" style={{ color: '#ffaa00' }}>{a.attempts}</td>
-                        <td className="px-3 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>{a.type}</td>
+                        <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{a.type}</td>
                         <td className="px-3 py-2">
                           <span className="font-mono text-xs px-2 py-0.5 rounded uppercase"
-                            style={{ color: sevColor[a.severity] ?? '#8899bb', background: `${sevColor[a.severity] ?? '#8899bb'}18` }}>
+                            style={{ color: sevColor[a.severity] ?? 'var(--t-muted, #8899bb)', background: `${sevColor[a.severity] ?? 'var(--t-muted, #8899bb)'}18` }}>
                             {a.severity}
                           </span>
                         </td>
@@ -284,17 +284,17 @@ export default function Firewall() {
       <GlassCard className="overflow-hidden">
         <div className="p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
           <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan">POLICY VIOLATIONS</div>
-          <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Unresolved alerts · click row for details</div>
+          <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Unresolved alerts · click row for details</div>
         </div>
         {violations.length === 0
-          ? <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>No unresolved policy violations.</div>
+          ? <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No unresolved policy violations.</div>
           : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                     {['Rule', 'Policy', 'Source', 'Action', 'Severity', 'Time'].map(h => (
-                      <th key={h} className="text-left px-3 py-2.5 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{h}</th>
+                      <th key={h} className="text-left px-3 py-2.5 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -305,21 +305,21 @@ export default function Firewall() {
                       style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}
                       onClick={() => setSelectedAlert(v.alert)}>
                       <td className="px-3 py-2 font-mono text-xs neon-cyan whitespace-nowrap">{v.id}</td>
-                      <td className="px-3 py-2 font-mono text-xs max-w-xs truncate" style={{ color: '#c8d8ee' }}>{v.rule}</td>
-                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{v.src}</td>
+                      <td className="px-3 py-2 font-mono text-xs max-w-xs truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{v.rule}</td>
+                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{v.src}</td>
                       <td className="px-3 py-2">
                         <span className="font-mono text-xs px-2 py-0.5 rounded"
-                          style={{ color: actionColor[v.action] ?? '#8899bb', background: `${actionColor[v.action] ?? '#8899bb'}18` }}>
+                          style={{ color: actionColor[v.action] ?? 'var(--t-muted, #8899bb)', background: `${actionColor[v.action] ?? 'var(--t-muted, #8899bb)'}18` }}>
                           {v.action}
                         </span>
                       </td>
                       <td className="px-3 py-2">
                         <span className="font-mono text-xs px-2 py-0.5 rounded uppercase"
-                          style={{ color: sevColor[v.alert.severity] ?? '#8899bb', background: `${sevColor[v.alert.severity] ?? '#8899bb'}18` }}>
+                          style={{ color: sevColor[v.alert.severity] ?? 'var(--t-muted, #8899bb)', background: `${sevColor[v.alert.severity] ?? 'var(--t-muted, #8899bb)'}18` }}>
                           {v.alert.severity}
                         </span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{v.time}</td>
+                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{v.time}</td>
                     </tr>
                   ))}
                 </tbody>

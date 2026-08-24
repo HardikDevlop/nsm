@@ -125,6 +125,10 @@ def seed_rbac(db: Session) -> None:
         return role
 
     admin_role = ensure_role("Admin", None)
+    # Keep Admin aligned with the full permission catalog on every seed run.
+    # Without this, older databases can miss newer module permissions even
+    # though the Admin role already exists.
+    admin_role.permissions = all_permissions
     if fresh_roles:
         ensure_role("Operator", OPERATOR_CODES)
         ensure_role("Viewer", VIEWER_CODES)

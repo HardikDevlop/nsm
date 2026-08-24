@@ -177,7 +177,7 @@ export default function SNMPDiscoveryPanel({
   const [privacyProtocol, setPrivacyProtocol] = useState('DES')
   const [privacyPassword, setPrivacyPassword] = useState('Gate@123')
   const [securityLevel,   setSecurityLevel]   = useState('authPriv')
-  const [timeout,         setTimeout]         = useState('2')
+  const [timeout,         setTimeout]         = useState('1')
   const [busy,            setBusy]            = useState(false)
   const [response,        setResponse]        = useState<SNMPDiscoveryResponse | null>(null)
   const [storedIps,       setStoredIps]       = useState<Set<string>>(new Set())
@@ -188,7 +188,7 @@ export default function SNMPDiscoveryPanel({
       const addresses = ips.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
       if (!addresses.length) { toast.warning('Enter at least one IP address'); setBusy(false); return }
       const result = await discoverSNMP({
-        ips: addresses, snmp_version: version, timeout_seconds: Number(timeout) || 2,
+        ips: addresses, snmp_version: version, timeout_seconds: Number(timeout) || 1,
         communities: version === 'v2c' ? [community] : undefined,
         username:    version === 'v3' ? username : null,
         auth_protocol:    version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol    : null,
@@ -233,40 +233,25 @@ export default function SNMPDiscoveryPanel({
       if (saved.added && saved.added.length > 0) {
         console.log(`Starting monitoring for ${saved.added.length} devices...`)
         
-        for (const addedDevice of saved.added) {
+        const token = await ensureAuth()
+        await Promise.all(saved.added.map(async addedDevice => {
           const device = addedDevice as any
           const deviceData = response.results[device.ip_address] as any
           const collectors = deviceData?.collectors || {}
-          
-          const modulesToStart = []
-          if (collectors.cpu?.supported) modulesToStart.push('cpu')
-          if (collectors.memory?.supported) modulesToStart.push('memory')
-          if (collectors.storage?.supported) modulesToStart.push('storage')
-          if (collectors.interfaces?.supported) modulesToStart.push('interfaces')
-          
-          console.log(`Device ${device.id} (${device.ip_address}): Starting ${modulesToStart.length} modules`)
-          
-          // Start monitoring for all supported modules
-          for (const module of modulesToStart) {
+          const modulesToStart = ['cpu', 'memory', 'storage', 'interfaces'].filter(module => collectors[module]?.supported)
+          await Promise.all(modulesToStart.map(async module => {
             try {
-              const response = await fetch(buildUrl(`/snmp/devices/${device.id}/monitoring/${module}/start`), {
+              const moduleResponse = await fetch(buildUrl(`/snmp/devices/${device.id}/monitoring/${module}/start`), {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${await ensureAuth()}`
-                },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ module_name: module, interval_seconds: 30 })
               })
-              if (response.ok) {
-                console.log(`✓ Started ${module} monitoring for device ${device.id}`)
-              } else {
-                console.error(`Failed to start ${module} monitoring:`, await response.text())
-              }
+              if (!moduleResponse.ok) console.error(`Failed to start ${module} monitoring:`, await moduleResponse.text())
             } catch (err) {
               console.error(`Failed to start ${module} monitoring for ${device.ip_address}:`, err)
             }
-          }
-        }
+          }))
+        }))
         toast.info(`Started monitoring for ${saved.added.length} device(s)`)
       }
       

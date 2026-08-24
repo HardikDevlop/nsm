@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import TablePagination from '../components/TablePagination'
+import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listReports, createReport, updateReport, deleteReport,
@@ -8,7 +10,7 @@ import {
 } from '../lib/api'
 
 const inputStyle: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.04)',
+  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
   border: '1px solid var(--t-border-alpha)',
   color: 'var(--t-text)',
   outline: 'none',
@@ -31,7 +33,7 @@ const TYPE_ICONS: Record<string, string> = {
   'Performance Report':'#a78bfa',
   'Bandwidth Report':  '#00d4ff',
   'Incident Report':   '#ff3366',
-  'Custom':            '#8899bb',
+  'Custom':            'var(--t-muted, #8899bb)',
 }
 
 function typeColor(t: string) { return TYPE_ICONS[t] ?? 'var(--t-accent)' }
@@ -112,6 +114,7 @@ export default function Reports() {
     r.report_name.toLowerCase().includes(search.toLowerCase()) ||
     r.report_type.toLowerCase().includes(search.toLowerCase())
   )
+  const pagination = useTablePagination(filtered)
 
   if (loading) {
     return (
@@ -133,7 +136,7 @@ export default function Reports() {
           <p className="font-mono text-xs mt-1" style={{ color:'var(--t-muted)' }}>{reports.length} report{reports.length!==1?'s':''}</p>
         </div>
         <div className="flex gap-2">
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…"
+          <input value={search} onChange={e=>{ setSearch(e.target.value); pagination.setPage(1) }} placeholder="Search…"
             className="rounded-lg px-3 py-2 font-mono text-xs" style={{...inputStyle,minWidth:160}}
             onFocus={e=>{e.currentTarget.style.borderColor='var(--t-accent)'}}
             onBlur={e =>{e.currentTarget.style.borderColor='var(--t-border-alpha)'}}/>
@@ -160,7 +163,7 @@ export default function Reports() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(r=>(
+              {pagination.paginatedItems.map(r=>(
                 <tr key={r.id} style={{ borderBottom:'1px solid var(--t-border-alpha)' }}
                   onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(0,212,255,0.03)'}}
                   onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background=''}}>
@@ -222,6 +225,18 @@ export default function Reports() {
             {search?`No reports match "${search}".`:'No reports yet. Create the first one.'}
           </div>
         )}
+        {filtered.length > 0 && (
+          <TablePagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            startItem={pagination.startItem}
+            endItem={pagination.endItem}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={(pageSize) => { pagination.setPageSize(pageSize); pagination.setPage(1) }}
+          />
+        )}
       </GlassCard>
 
       {/* modal */}
@@ -260,7 +275,7 @@ export default function Reports() {
             <div className="flex gap-2 justify-end mt-6">
               <button onClick={()=>setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all"
-                style={{ background:'rgba(255,255,255,0.05)',border:'1px solid var(--t-border-alpha)',color:'var(--t-muted)' }}>
+                style={{ background:'var(--t-border-light, rgba(255,255,255,0.05))',border:'1px solid var(--t-border-alpha)',color:'var(--t-muted)' }}>
                 Cancel
               </button>
               <button onClick={()=>void handleSubmit()} disabled={saving||!fName.trim()}

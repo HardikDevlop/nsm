@@ -32,7 +32,7 @@ export default function Unauthorized() {
             onClick={() => navigate(-1)}
             className="rounded-lg px-5 py-2.5 font-display font-medium text-sm transition-all"
             style={{
-              background: 'rgba(255,255,255,0.05)',
+              background: 'var(--t-border-light, rgba(255,255,255,0.05))',
               border: '1px solid var(--t-border-alpha)',
               color: 'var(--t-text)',
             }}

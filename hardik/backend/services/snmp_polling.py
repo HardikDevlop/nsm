@@ -186,8 +186,11 @@ class SNMPPoller:
         started = time.perf_counter()
 
         try:
-            service = SNMPService(credentials=credentials, timeout=3.0)
-            result = service.collect_domain(ip, collector_name)
+            # collect_domain is synchronous and performs network I/O. Running it
+            # directly here blocks the asyncio scheduler and serializes all jobs.
+            # Keep the event loop free so independent devices/modules poll in parallel.
+            service = SNMPService(credentials=credentials, timeout=2.0, retries=0)
+            result = await asyncio.to_thread(service.collect_domain, ip, collector_name)
             duration_ms = round((time.perf_counter() - started) * 1000, 1)
 
             supported = result.get("supported", False)
@@ -862,7 +865,7 @@ async def get_polling_scheduler() -> PollingScheduler:
     """Get or create the global polling scheduler."""
     global _scheduler
     if _scheduler is None:
-        _scheduler = PollingScheduler(worker_count=4)
+        _scheduler = PollingScheduler(worker_count=8)
         await _scheduler.start()
     return _scheduler
 

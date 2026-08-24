@@ -195,7 +195,7 @@ export default function Incidents() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">INCIDENT MANAGEMENT</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Auto + manual reporting · Severity-based triage</p>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Auto + manual reporting · Severity-based triage</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {alerts.length > 0 && (
@@ -230,7 +230,7 @@ export default function Incidents() {
             style={{ background: s.bg, border: `1px solid ${s.c}30` }}
             onClick={() => setFilter(f => f === s.l.toLowerCase() ? 'all' : s.l.toLowerCase() as Sev | Status)}>
             <div className="font-display font-bold text-xl sm:text-3xl" style={{ color: s.c }}>{s.v}</div>
-            <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{s.l}</div>
+            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{s.l}</div>
           </div>
         ))}
       </div>
@@ -239,7 +239,7 @@ export default function Incidents() {
       {sortedDeviceRows.length > 0 && (
         <GlassCard className="p-4 md:p-5">
           <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-4">DEVICE STATUS & ALERTS</div>
-          <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>
+          <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>
             Per-device alert count · live status · ping count (auto-updates via SSE)
           </div>
           <div className="space-y-1.5">
@@ -254,10 +254,10 @@ export default function Incidents() {
 
                 {/* Device info */}
                 <div className="flex-1 min-w-0 w-full sm:w-auto">
-                  <div className="font-display text-sm tracking-wider" style={{ color: '#c8d8ee' }}>
+                  <div className="font-display text-sm tracking-wider" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                     {dev.hostname}
                   </div>
-                  <div className="font-mono text-xs" style={{ color: '#667799' }}>{dev.ip}</div>
+                  <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>{dev.ip}</div>
                 </div>
 
                 <div className="flex items-center gap-3 w-full sm:w-auto flex-wrap">
@@ -269,10 +269,10 @@ export default function Incidents() {
 
                   {/* Alert count */}
                   <div className="text-center shrink-0 px-3">
-                    <div className="font-display text-xl font-bold" style={{ color: dev.alertCount > 0 ? '#ff3366' : '#8899bb' }}>
+                    <div className="font-display text-xl font-bold" style={{ color: dev.alertCount > 0 ? '#ff3366' : 'var(--t-muted, #8899bb)' }}>
                       {dev.alertCount}
                     </div>
-                    <div className="font-mono text-xs" style={{ color: '#667799' }}>ALERTS</div>
+                    <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>ALERTS</div>
                   </div>
 
                   {/* Ping count */}
@@ -280,7 +280,7 @@ export default function Incidents() {
                     <div className="font-display text-xl font-bold" style={{ color: '#00d4ff' }}>
                       {dev.totalPings}
                     </div>
-                    <div className="font-mono text-xs" style={{ color: '#667799' }}>PINGS</div>
+                    <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>PINGS</div>
                   </div>
                 </div>
               </div>
@@ -300,7 +300,7 @@ export default function Incidents() {
                   className="font-mono text-xs px-2.5 py-1.5 rounded capitalize transition-all min-h-[36px]"
                   style={{
                     background: filter === f ? 'rgba(0,212,255,0.15)' : 'transparent',
-                    color: filter === f ? '#00d4ff' : '#8899bb',
+                    color: filter === f ? '#00d4ff' : 'var(--t-muted, #8899bb)',
                     border: `1px solid ${filter === f ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.1)'}`,
                   }}>{f}</button>
               ))}
@@ -311,13 +311,13 @@ export default function Incidents() {
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                   {['ID', 'Title', 'Sev', 'Status', 'Time', 'Assigned'].map(h => (
-                    <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: '#8899bb' }}>{h}</th>
+                    <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={6} className="px-4 py-6 font-mono text-xs text-center" style={{ color: '#8899bb' }}>No incidents match the current filter.</td></tr>
+                  <tr><td colSpan={6} className="px-4 py-6 font-mono text-xs text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>No incidents match the current filter.</td></tr>
                 ) : filtered.map(inc => {
                   const s = sevColor[inc.sev]
                   const st = statusColor[inc.status]
@@ -332,9 +332,9 @@ export default function Incidents() {
                       onMouseEnter={e => { if (selected?.id !== inc.id) (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }}
                       onMouseLeave={e => { if (selected?.id !== inc.id) (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
                       <td className="px-4 py-3 font-mono text-xs neon-cyan whitespace-nowrap">{inc.id}</td>
-                      <td className="px-4 py-3 font-mono text-xs max-w-xs" style={{ color: '#c8d8ee' }}>
+                      <td className="px-4 py-3 font-mono text-xs max-w-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                         <div className="truncate">{inc.title}</div>
-                        <div className="text-[10px] mt-1 truncate" style={{ color: '#667799' }}>SOURCE: {inc.src}</div>
+                        <div className="text-[10px] mt-1 truncate" style={{ color: 'var(--t-muted, #667799)' }}>SOURCE: {inc.src}</div>
                       </td>
                       <td className="px-4 py-3">
                         <span className="font-mono text-xs px-2 py-0.5 rounded uppercase"
@@ -343,8 +343,8 @@ export default function Incidents() {
                       <td className="px-4 py-3">
                         <span className="font-mono text-xs" style={{ color: st.c }}>{st.label}</span>
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{inc.time.split(' ')[1]}</td>
-                      <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>{inc.assigned}</td>
+                      <td className="px-4 py-3 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{inc.time.split(' ')[1]}</td>
+                      <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{inc.assigned}</td>
                     </tr>
                   )
                 })}
@@ -370,13 +370,13 @@ export default function Incidents() {
                   </div>
                   <div>
                     <div className="font-mono text-xs font-semibold" style={{ color: c }}>{time}</div>
-                    <div className="font-mono text-xs mt-0.5 leading-snug" style={{ color: '#8899bb' }}>{alert.title}</div>
+                    <div className="font-mono text-xs mt-0.5 leading-snug" style={{ color: 'var(--t-muted, #8899bb)' }}>{alert.title}</div>
                   </div>
                 </div>
               )
             })}
             {alerts.length === 0 && (
-              <div className="font-mono text-xs pl-7" style={{ color: '#8899bb' }}>No incidents recorded yet.</div>
+              <div className="font-mono text-xs pl-7" style={{ color: 'var(--t-muted, #8899bb)' }}>No incidents recorded yet.</div>
             )}
           </div>
         </GlassCard>

@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import TablePagination from '../components/TablePagination'
+import { useDeferredSearch } from '../hooks/useDeferredSearch'
+import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listAlerts, createAlert, updateAlert, deleteAlert, acknowledgeAlert, resolveAlert, clearAllAlerts,
-  listDevices,
+  listDeviceOptions,
   type AlertRecord,
-  type DeviceRecord,
+  type DeviceOptionRecord,
 } from '../lib/api'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -19,7 +22,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const inputStyle: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.04)',
+  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
   border: '1px solid var(--t-border-alpha)',
   color: 'var(--t-text)',
   outline: 'none',
@@ -40,12 +43,12 @@ const statusColors: Record<string, string> = {
 
 export default function AlertsManagement() {
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
-  const [devices, setDevices] = useState<DeviceRecord[]>([])
+  const [devices, setDevices] = useState<DeviceOptionRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<AlertRecord | null>(null)
   const [saving, setSaving] = useState(false)
-  const [search, setSearch] = useState('')
+  const { search, setSearch, normalizedSearch } = useDeferredSearch()
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
   const [fDeviceId, setFDeviceId] = useState<number | ''>('')
@@ -59,7 +62,7 @@ export default function AlertsManagement() {
       const filter = statusFilter === 'all' ? undefined : statusFilter
       const [alertsData, devicesData] = await Promise.all([
         listAlerts(filter),
-        listDevices()
+        listDeviceOptions()
       ])
       setAlerts(alertsData)
       setDevices(devicesData)
@@ -170,11 +173,13 @@ export default function AlertsManagement() {
   }
 
   const filtered = alerts.filter(a =>
-    !search.trim() ||
-    a.title.toLowerCase().includes(search.toLowerCase()) ||
-    (a.description ?? '').toLowerCase().includes(search.toLowerCase()) ||
-    a.severity.toLowerCase().includes(search.toLowerCase())
+    !normalizedSearch ||
+    a.title.toLowerCase().includes(normalizedSearch) ||
+    (a.description ?? '').toLowerCase().includes(normalizedSearch) ||
+    a.severity.toLowerCase().includes(normalizedSearch)
   )
+  const deviceMap = new Map(devices.map(device => [device.id, device]))
+  const pagination = useTablePagination(filtered)
 
   if (loading) {
     return (
@@ -197,7 +202,7 @@ export default function AlertsManagement() {
         <div className="flex gap-2 flex-wrap">
           <select
             value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
+            onChange={e => { setStatusFilter(e.target.value); pagination.setPage(1) }}
             className="rounded-lg px-3 py-2 font-mono text-xs"
             style={inputStyle}>
             <option value="all">All Status</option>
@@ -207,7 +212,7 @@ export default function AlertsManagement() {
           </select>
           <input
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); pagination.setPage(1) }}
             placeholder="Search…"
             className="rounded-lg px-3 py-2 font-mono text-xs"
             style={{ ...inputStyle, minWidth: 160 }}
@@ -246,8 +251,8 @@ export default function AlertsManagement() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(alert => {
-                const device = devices.find(d => d.id === alert.device_id)
+              {pagination.paginatedItems.map(alert => {
+                const device = alert.device_id != null ? deviceMap.get(alert.device_id) : undefined
                 return (
                   <tr key={alert.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }}
@@ -329,6 +334,18 @@ export default function AlertsManagement() {
             {search ? 'No alerts match your search.' : 'No alerts yet.'}
           </div>
         )}
+        {filtered.length > 0 && (
+          <TablePagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            startItem={pagination.startItem}
+            endItem={pagination.endItem}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={(pageSize) => { pagination.setPageSize(pageSize); pagination.setPage(1) }}
+          />
+        )}
       </GlassCard>
 
       {showModal && (
@@ -404,7 +421,7 @@ export default function AlertsManagement() {
               <button
                 onClick={() => setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
+                style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
                 Cancel
               </button>
               <button

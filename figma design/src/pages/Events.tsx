@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import TablePagination from '../components/TablePagination'
+import { useDeferredSearch } from '../hooks/useDeferredSearch'
+import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
-  listEvents, createEvent, updateEvent, deleteEvent, listDevices,
+  listEvents, createEvent, updateEvent, deleteEvent, listDeviceOptions,
   type EventRecord,
-  type DeviceRecord,
+  type DeviceOptionRecord,
 } from '../lib/api'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -18,7 +21,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const inputStyle: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.04)',
+  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
   border: '1px solid var(--t-border-alpha)',
   color: 'var(--t-text)',
   outline: 'none',
@@ -26,12 +29,12 @@ const inputStyle: React.CSSProperties = {
 
 export default function Events() {
   const [events, setEvents] = useState<EventRecord[]>([])
-  const [devices, setDevices] = useState<DeviceRecord[]>([])
+  const [devices, setDevices] = useState<DeviceOptionRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<EventRecord | null>(null)
   const [saving, setSaving] = useState(false)
-  const [search, setSearch] = useState('')
+  const { search, setSearch, normalizedSearch } = useDeferredSearch()
 
   const [fDeviceId, setFDeviceId] = useState<number | ''>('')
   const [fEventType, setFEventType] = useState('')
@@ -39,7 +42,7 @@ export default function Events() {
 
   const load = useCallback(async () => {
     try {
-      const [eventsData, devicesData] = await Promise.all([listEvents(), listDevices()])
+      const [eventsData, devicesData] = await Promise.all([listEvents(), listDeviceOptions()])
       setEvents(eventsData)
       setDevices(devicesData)
     } catch (e) {
@@ -107,10 +110,12 @@ export default function Events() {
   }
 
   const filtered = events.filter(e =>
-    !search.trim() ||
-    e.event_type.toLowerCase().includes(search.toLowerCase()) ||
-    (e.description ?? '').toLowerCase().includes(search.toLowerCase())
+    !normalizedSearch ||
+    e.event_type.toLowerCase().includes(normalizedSearch) ||
+    (e.description ?? '').toLowerCase().includes(normalizedSearch)
   )
+  const deviceMap = new Map(devices.map(device => [device.id, device]))
+  const pagination = useTablePagination(filtered)
 
   if (loading) {
     return (
@@ -133,7 +138,7 @@ export default function Events() {
         <div className="flex gap-2">
           <input
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); pagination.setPage(1) }}
             placeholder="Search…"
             className="rounded-lg px-3 py-2 font-mono text-xs"
             style={{ ...inputStyle, minWidth: 160 }}
@@ -163,8 +168,8 @@ export default function Events() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(event => {
-                const device = devices.find(d => d.id === event.device_id)
+              {pagination.paginatedItems.map(event => {
+                const device = event.device_id != null ? deviceMap.get(event.device_id) : undefined
                 return (
                   <tr key={event.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }}
@@ -218,6 +223,18 @@ export default function Events() {
             {search ? 'No events match your search.' : 'No events yet.'}
           </div>
         )}
+        {filtered.length > 0 && (
+          <TablePagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            startItem={pagination.startItem}
+            endItem={pagination.endItem}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={(pageSize) => { pagination.setPageSize(pageSize); pagination.setPage(1) }}
+          />
+        )}
       </GlassCard>
 
       {showModal && (
@@ -270,7 +287,7 @@ export default function Events() {
               <button
                 onClick={() => setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
+                style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
                 Cancel
               </button>
               <button

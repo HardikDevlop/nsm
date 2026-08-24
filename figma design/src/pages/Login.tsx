@@ -76,7 +76,7 @@ export default function Login() {
                 placeholder="ad****@agnigate.com"
                 className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none transition-all"
                 style={{
-                  background: 'rgba(255,255,255,0.04)',
+                  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
                   border: '1px solid var(--t-border-alpha)',
                   color: 'var(--t-text)',
                 }}
@@ -98,7 +98,7 @@ export default function Login() {
                 placeholder="••••••••"
                 className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none transition-all"
                 style={{
-                  background: 'rgba(255,255,255,0.04)',
+                  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
                   border: '1px solid var(--t-border-alpha)',
                   color: 'var(--t-text)',
                 }}

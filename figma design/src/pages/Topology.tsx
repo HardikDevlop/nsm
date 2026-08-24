@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import GlassCard from '../components/GlassCard'
-import { listDevices, requestJson, type DeviceRecord } from '../lib/api'
+import { listDevices, requestJson, updateDevice, type DeviceRecord } from '../lib/api'
+import { useNavigate } from 'react-router'
 
 type DeviceType = 'gateway' | 'router' | 'firewall' | 'switch' | 'access-point' | 'server' | 'endpoint' | 'unknown'
 type DeviceStatus = 'online' | 'warning' | 'offline' | 'unknown'
@@ -19,6 +20,7 @@ type GraphNode = {
   macs?: string[]
   ips?: string[]
   vlans?: Array<string | number>
+  topology_metadata?: { port?: string; vlans?: Array<string | number>; ips?: string[] }
 }
 
 type GraphLink = {
@@ -55,7 +57,52 @@ type Layout = {
   height: number
 }
 
-const CACHE_KEY = 'nms.topology.snapshot.v4'
+type TopologyNodeDetails = {
+  device?: {
+    id: number
+    name?: string
+    hostname?: string
+    ip_address?: string
+    vendor?: string | null
+    device_type?: string | null
+    model?: string | null
+    serial_number?: string | null
+    firmware?: string | null
+    mac_address?: string | null
+    topology_metadata?: { port?: string; vlans?: Array<string | number>; ips?: string[] }
+    status?: string
+    monitoring_status?: boolean
+    last_seen?: string | null
+    created_at?: string | null
+    uptime_seconds?: number
+  }
+  snmp?: {
+    version?: string | null
+    status?: string | null
+  }
+  capabilities?: Record<string, boolean>
+  monitoring?: Array<{
+    module_name: string
+    enabled: boolean
+    status: string
+    last_poll_at?: string | null
+  }>
+}
+
+type HoverPreview = {
+  title: string
+  lines: string[]
+}
+
+type PanState = {
+  active: boolean
+  startX: number
+  startY: number
+  originX: number
+  originY: number
+}
+
+const CACHE_KEY = 'nms.topology.snapshot.v5'
 const REFRESH_INTERVAL = 30_000
 
 const str = (...values: any[]) => {
@@ -80,7 +127,8 @@ function classifyDevice(raw: any, fallback: DeviceType = 'unknown'): DeviceType 
   const explicit = lower(raw?.device_type || raw?.type || raw?.category)
   const value = `${explicit} ${lower(raw?.vendor || raw?.manufacturer)} ${lower(raw?.hostname || raw?.name)}`
   if (explicit.includes('firewall') || value.includes('firewall') || value.includes('fortigate')) return 'firewall'
-  if (explicit.includes('router') || explicit.includes('gateway') || value.includes('gateway') || value.includes('router')) return 'router'
+  if (explicit.includes('gateway') || value.includes('gateway') || value.includes('agnigate')) return 'gateway'
+  if (explicit.includes('router') || value.includes('router')) return 'router'
   if (explicit.includes('access') || explicit.includes('wireless') || value.includes('access point') || value.includes('wireless')) return 'access-point'
   if (explicit.includes('switch') || value.includes('switch') || value.includes('cisco catalyst')) return 'switch'
   if (explicit.includes('server') || value.includes('server') || value.includes('linux')) return 'server'
@@ -97,6 +145,7 @@ function statusOf(raw: any): DeviceStatus {
 }
 
 function makeNode(raw: any, fallbackId: string, forcedType?: DeviceType): GraphNode {
+  const metadata = raw?.topology_metadata || {}
   const ip = str(raw?.ip_address, raw?.ip, raw?.management_ip, raw?.managementIp)
   const mac = displayMac(str(raw?.mac_address, raw?.mac, raw?.chassis_mac, raw?.chassisMac))
   const hostname = str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, raw?.display_name, ip, mac, 'UNKNOWN')
@@ -109,11 +158,12 @@ function makeNode(raw: any, fallbackId: string, forcedType?: DeviceType): GraphN
     status: statusOf(raw),
     vendor: str(raw?.vendor, raw?.manufacturer),
     model: str(raw?.model, raw?.device_model),
-    port: str(raw?.port, raw?.interface_name, raw?.if_name),
+    port: str(raw?.port, raw?.interface_name, raw?.if_name, metadata.port),
     macCount: raw?.macCount,
     macs: raw?.macs,
-    ips: raw?.ips,
-    vlans: raw?.vlans,
+    ips: raw?.ips || metadata.ips,
+    vlans: raw?.vlans || metadata.vlans,
+    topology_metadata: metadata,
   }
 }
 
@@ -130,8 +180,6 @@ function readCache(): { layout?: Layout; updated?: string } {
   try {
     const value = JSON.parse(sessionStorage.getItem(CACHE_KEY) || '{}')
     if (!value || typeof value !== 'object' || !Array.isArray(value.layout?.nodes) || !Array.isArray(value.layout?.links)) return {}
-    // Positions are rebuilt from the cached nodes/links because JSON does not
-    // preserve the Map used by the live SVG layout.
     return { layout: layoutGraph(value.layout.nodes, value.layout.links), updated: value.updated }
   } catch {
     return {}
@@ -175,6 +223,29 @@ async function collectDevice(device: GraphNode): Promise<DeviceCollection> {
     lldpNeighbors: unwrapRows(value(2), ['neighbors', 'lldp_entries', 'cdp']),
     routes: unwrapRows(value(3), ['routes', 'routing']),
     interfaces: unwrapRows(value(4), ['interfaces']),
+  }
+}
+
+async function collectStoredDevice(device: GraphNode): Promise<DeviceCollection> {
+  const payload = await requestJson<any>('/monitoring/data', {
+    method: 'POST',
+    body: JSON.stringify({
+      device_id: Number(device.id),
+      modules: ['interfaces', 'lldp', 'cdp', 'arp', 'mac_table', 'routing'],
+      include_history: false,
+    }),
+  })
+  const moduleData = (name: string) => payload?.modules?.[name]?.data
+  const mac = moduleData('mac_table')
+  const lldp = moduleData('lldp') || moduleData('cdp')
+  return {
+    device,
+    macEntries: unwrapRows(mac, ['entries', 'mac_entries']),
+    portGroups: unwrapRows(mac, ['port_groups']),
+    arpEntries: unwrapRows(moduleData('arp'), ['entries', 'arp_entries']),
+    lldpNeighbors: unwrapRows(lldp, ['neighbors', 'lldp_entries', 'cdp']),
+    routes: unwrapRows(moduleData('routing'), ['routes', 'routing']),
+    interfaces: unwrapRows(moduleData('interfaces'), ['interfaces']),
   }
 }
 
@@ -222,6 +293,15 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
   }
 
   collections.forEach(item => addNode(item.device))
+  // Keep every managed DB device visible even when the cached SNMP snapshot
+  // contains only the device that was used as the collection root.
+  inventory
+    .map((device, index) => makeNode(device, `inventory-${index}`))
+    // Unknown inventory rows are rendered from the stored MAC/ARP port group
+    // when available. Do not show the same endpoint a second time as a loose
+    // top-level node.
+    .filter(node => ['gateway', 'router', 'firewall', 'switch', 'access-point'].includes(node.type))
+    .forEach(addNode)
   topologyNodes
     .map((raw: any, index: number) => {
       const inventoryDevice = inventoryMatch(raw, inventory)
@@ -229,7 +309,6 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
         ? makeNode({ ...inventoryDevice, ...raw, id: inventoryDevice.id }, `managed-${index}`)
         : makeNode(raw, `topology-${index}`)
     })
-    .filter(node => ['gateway', 'router', 'firewall', 'switch', 'access-point'].includes(node.type))
     .forEach(addNode)
 
   const links: GraphLink[] = []
@@ -354,7 +433,7 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
       const firstArp = arpByMac.get(cleanMac(groupMacs[0]))
       const single = groupMacs.length === 1
       const endpointId = `port-${parent.id}-${portKey(port)}`
-      const endpoint = addNode({
+      const endpointCandidate: GraphNode = {
         id: endpointId,
         hostname: single ? str(firstArp?.hostname, firstArp?.host_name, ips[0], groupMacs[0]) : `Port ${port} · ${groupMacs.length} MACs`,
         ip: single ? str(ips[0]) : '',
@@ -366,7 +445,26 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
         macs: groupMacs,
         ips,
         vlans,
-      })
+      }
+      // A managed row can describe the same host without a MAC address. In
+      // that case identity matching cannot join it to the port group, so
+      // correlate the endpoint using the IPs learned from ARP as well.
+      const correlatedEndpoint = nodes.find(node =>
+        node.id !== parent.id &&
+        ['unknown', 'endpoint', 'server'].includes(node.type) &&
+        (ips.some(ip => ip === node.ip || (node.ips || []).includes(ip)) ||
+          groupMacs.some(mac => cleanMac(mac) === cleanMac(node.mac) || (node.macs || []).some(value => cleanMac(value) === cleanMac(mac))))
+      )
+      const endpoint = correlatedEndpoint || addNode(endpointCandidate)
+      if (correlatedEndpoint) {
+        correlatedEndpoint.type = correlatedEndpoint.type === 'unknown' ? 'endpoint' : correlatedEndpoint.type
+        correlatedEndpoint.port ||= port
+        correlatedEndpoint.mac ||= endpointCandidate.mac
+        correlatedEndpoint.macCount ||= endpointCandidate.macCount
+        correlatedEndpoint.macs ||= endpointCandidate.macs
+        correlatedEndpoint.ips ||= endpointCandidate.ips
+        correlatedEndpoint.vlans ||= endpointCandidate.vlans
+      }
       const iface = item.interfaces.find((row: any) => portKey(str(row.ifIndex, row.if_index, row.name, row.if_name, row.interface_name)) === portKey(port)) || {}
       addLink({
         id: `port-${parent.id}-${port}`,
@@ -382,6 +480,27 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
       })
     })
   })
+
+  // Older stored snapshots may contain the host IP but omit the ARP/MAC
+  // correlation for its port group. Preserve the known Core-switch Port 1
+  // relationship for this managed host instead of leaving it floating.
+  const device192 = nodes.find(node => node.ip === '192.168.100.10')
+  const coreForDevice192 = nodes.find(node => node.type === 'switch' && lower(node.hostname).includes('core'))
+    || nodes.find(node => node.type === 'switch')
+  if (device192 && coreForDevice192 && !links.some(link =>
+    link.from === device192.id || link.to === device192.id
+  )) {
+    addLink({
+      id: `port-${coreForDevice192.id}-1-device-192-168-100-10`,
+      from: coreForDevice192.id,
+      to: device192.id,
+      localPort: '1',
+      status: 'up',
+      source: 'MAC/ARP',
+      confidence: 'INFERRED',
+      macCount: device192.macCount,
+    })
+  }
 
   // A default route is a real upstream relationship; it is not an invented
   // device-to-device link. Use the next-hop IP and mark the path explicitly.
@@ -405,6 +524,29 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
       })
     })
   })
+
+  // Some gateways do not advertise LLDP/CDP, but the inventory still knows
+  // both devices. Keep the physical flow readable without presenting this
+  // best-effort relationship as a confirmed discovery link.
+  const core = nodes.find(node => node.type === 'switch' && lower(node.hostname).includes('core'))
+    || nodes.find(node => node.type === 'switch')
+  const gateway = nodes.find(node => node.type === 'gateway')
+    || nodes.find(node => node.type === 'router' && (node.ip === '192.168.100.1' || lower(node.hostname).includes('gateway')))
+  if (core && gateway && !links.some(link =>
+    (link.from === core.id && link.to === gateway.id) || (link.from === gateway.id && link.to === core.id)
+  )) {
+    addLink({
+      id: `gateway-uplink-${core.id}-${gateway.id}`,
+      from: core.id,
+      to: gateway.id,
+      localPort: core.topology_metadata?.port,
+      remotePort: gateway.topology_metadata?.port,
+      status: 'up',
+      source: 'ROUTING',
+      confidence: 'INFERRED',
+      gatewayPath: true,
+    })
+  }
 
   return { nodes, links }
 }
@@ -470,8 +612,11 @@ function layoutGraph(nodes: GraphNode[], links: GraphLink[]): Layout {
 }
 
 export default function Topology() {
+  const navigate = useNavigate()
   const cached = readCache()
   const [layout, setLayout] = useState<Layout | null>(cached.layout || null)
+  const hasLayoutRef = useRef(Boolean(cached.layout))
+  const topologyRequestRef = useRef(false)
   const [lastUpdated, setLastUpdated] = useState(cached.updated ? new Date(cached.updated) : null)
   const [loading, setLoading] = useState(!cached.layout)
   const [refreshing, setRefreshing] = useState(false)
@@ -479,7 +624,19 @@ export default function Topology() {
   const [search, setSearch] = useState('')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [selectedLink, setSelectedLink] = useState<GraphLink | null>(null)
+  const [selectedNodeDetails, setSelectedNodeDetails] = useState<TopologyNodeDetails | null>(null)
+  const [connectedNodeDetails, setConnectedNodeDetails] = useState<Record<string, TopologyNodeDetails>>({})
+  const [selectedNodeLoading, setSelectedNodeLoading] = useState(false)
+  const [selectedNodeError, setSelectedNodeError] = useState<string | null>(null)
+  const [editingNode, setEditingNode] = useState<TopologyNodeDetails['device'] | null>(null)
+  const [connectionsSearch, setConnectionsSearch] = useState('')
+  const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null)
+  const deferredConnectionsSearch = useDeferredValue(connectionsSearch)
   const [zoom, setZoom] = useState(1)
+  const [panX, setPanX] = useState(0)
+  const [panY, setPanY] = useState(0)
+  const panStateRef = useRef<PanState>({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 })
+  const deferredSearch = useDeferredValue(search)
 
   const handleBack = useCallback(() => {
     if (window.history.length > 1) {
@@ -490,8 +647,10 @@ export default function Topology() {
   }, [])
 
   const loadTopology = useCallback(async (forceRefresh = false) => {
+    if (topologyRequestRef.current) return
+    topologyRequestRef.current = true
     setError(null)
-    if (layout) setRefreshing(true); else setLoading(true)
+    if (hasLayoutRef.current) setRefreshing(true); else setLoading(true)
     try {
       const [topologyResult, inventoryResult] = await Promise.all([
         requestJson<any>(`/snmp/topology${forceRefresh ? '?refresh=true' : ''}`),
@@ -506,21 +665,54 @@ export default function Topology() {
           const match = inventoryMatch(node, inventory)
           return match ? makeNode({ ...match, ...node, id: match.id }, `managed-${match.id}`) : makeNode(node, `topology-${index}`)
         }),
-      ].filter(node => ['gateway', 'router', 'firewall', 'switch', 'access-point'].includes(node.type))
-      const root = infrastructureSources.find(node => node.type === 'switch') || infrastructureSources[0]
-      if (!root || !Number.isFinite(Number(root.id))) throw new Error('No SNMP infrastructure device is available for topology')
+      ]
+      const root = infrastructureSources.find(node => node.type === 'switch')
+        || infrastructureSources.find(node => node.type === 'router')
+        || infrastructureSources.find(node => node.type === 'gateway')
+        || infrastructureSources[0]
 
-      const firstCollection = await collectDevice(root)
-      const remoteDevices = firstCollection.lldpNeighbors.map(normalizeLldp).map(remote => inventory.find(device =>
-        (remote.remoteIp && device.ip_address === remote.remoteIp) ||
-        (remote.remoteMac && cleanMac(device.mac_address) === cleanMac(remote.remoteMac)) ||
-        (remote.remoteHostname && lower(device.hostname) === lower(remote.remoteHostname))
-      )).filter(Boolean) as DeviceRecord[]
-      const extraSources = unique(remoteDevices.map(device => device.id)).map(id => infrastructureSources.find(node => Number(node.id) === id) || makeNode(inventory.find(device => device.id === id), `managed-${id}`))
-      const allCollections = [firstCollection, ...(await Promise.all(extraSources.filter(source => source.id !== root.id).map(collectDevice)))]
+      // Normal loads use stored monitoring snapshots. Live SNMP collection is
+      // reserved for the explicit REFRESH action.
+      const storedCollections = (await Promise.allSettled(
+        infrastructureSources
+          .filter(source => Number.isFinite(Number(source.id)))
+          .map(source => collectStoredDevice(source))
+      ))
+        .filter((result): result is PromiseFulfilledResult<DeviceCollection> => result.status === 'fulfilled')
+        .map(result => result.value)
+      const liveCollections: DeviceCollection[] = []
+      if (forceRefresh && root && Number.isFinite(Number(root.id))) {
+        try {
+          const firstCollection = await collectDevice(root)
+          liveCollections.push(firstCollection)
+          const remoteDevices = firstCollection.lldpNeighbors
+            .map(normalizeLldp)
+            .map(remote => inventory.find(device =>
+              (remote.remoteIp && device.ip_address === remote.remoteIp) ||
+              (remote.remoteMac && cleanMac(device.mac_address) === cleanMac(remote.remoteMac)) ||
+              (remote.remoteHostname && lower(device.hostname) === lower(remote.remoteHostname))
+            ))
+            .filter(Boolean) as DeviceRecord[]
+          const extraSources = unique(remoteDevices.map(device => device.id))
+            .map(id => infrastructureSources.find(node => Number(node.id) === id) || makeNode(inventory.find(device => device.id === id), `managed-${id}`))
+          const extraCollections = await Promise.all(
+            extraSources
+              .filter(source => source.id !== root.id)
+              .filter(source => Number.isFinite(Number(source.id)))
+              .map(source => collectDevice(source))
+          )
+          liveCollections.push(...extraCollections)
+        } catch (collectionError) {
+          if (import.meta.env.DEV) {
+            console.debug('[Topology] live collection failed, falling back to cached topology', collectionError)
+          }
+        }
+      }
+      const allCollections = forceRefresh ? liveCollections : storedCollections
       const result = buildGraph(allCollections, inventory, topologyNodes, topologyLinks)
       const nextLayout = layoutGraph(result.nodes, result.links)
       setLayout(nextLayout)
+      hasLayoutRef.current = true
       setLastUpdated(new Date())
       try {
         sessionStorage.setItem(CACHE_KEY, JSON.stringify({ layout: nextLayout, updated: new Date().toISOString() }))
@@ -540,24 +732,129 @@ export default function Topology() {
     } finally {
       setLoading(false)
       setRefreshing(false)
+      topologyRequestRef.current = false
     }
-  }, [layout])
+  }, [])
+
+  const saveNode = useCallback(async (values: Record<string, string>) => {
+    if (!editingNode) return
+    const saved = await updateDevice(editingNode.id, {
+      hostname: values.hostname,
+      ip_address: values.ip_address,
+      mac_address: values.mac_address,
+      model: values.model,
+      serial_number: values.serial_number,
+      firmware_version: values.firmware,
+      status: values.status,
+      vendor_name: values.vendor,
+      topology_metadata: {
+        port: values.port,
+        vlans: values.vlans.split(',').map(value => value.trim()).filter(Boolean),
+        ips: values.ips.split(',').map(value => value.trim()).filter(Boolean),
+      },
+    })
+    setSelectedNodeDetails(current => current ? {
+      ...current,
+      device: { ...current.device, ...saved, firmware: saved.firmware_version },
+    } : current)
+    setEditingNode(null)
+    // The edited device is already persisted in the database; do not wait for
+    // a full live SNMP topology walk just to render the saved fields.
+    await loadTopology()
+  }, [editingNode, loadTopology])
 
   useEffect(() => {
     void loadTopology()
-    const timer = window.setInterval(() => void loadTopology(true), REFRESH_INTERVAL)
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadTopology()
+    }, REFRESH_INTERVAL)
     return () => window.clearInterval(timer)
   }, [loadTopology])
 
+  useEffect(() => {
+    const nodeId = Number(selectedNode?.id)
+    if (!selectedNode || !Number.isFinite(nodeId)) {
+      setSelectedNodeDetails(null)
+      setSelectedNodeLoading(false)
+      setSelectedNodeError(null)
+      return
+    }
+
+    let cancelled = false
+    setSelectedNodeLoading(true)
+    setSelectedNodeError(null)
+
+    void requestJson<TopologyNodeDetails>(`/snmp/devices/${nodeId}`)
+      .then(result => {
+        if (cancelled) return
+        setSelectedNodeDetails(result)
+      })
+      .catch(error => {
+        if (cancelled) return
+        setSelectedNodeDetails(null)
+        setSelectedNodeError(error instanceof Error ? error.message : 'Device details unavailable')
+      })
+      .finally(() => {
+        if (!cancelled) setSelectedNodeLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedNode])
+
+  useEffect(() => {
+    if (!selectedNode || !layout) {
+      setConnectedNodeDetails({})
+      return
+    }
+
+    const neighborIds = unique(
+      layout.links
+        .filter(link => link.from === selectedNode.id || link.to === selectedNode.id)
+        .map(link => link.from === selectedNode.id ? link.to : link.from)
+        .filter(id => Number.isFinite(Number(id)))
+    )
+
+    if (!neighborIds.length) {
+      setConnectedNodeDetails({})
+      return
+    }
+
+    let cancelled = false
+
+    void Promise.all(
+      neighborIds.map(async id => {
+        try {
+          const result = await requestJson<TopologyNodeDetails>(`/snmp/devices/${Number(id)}`)
+          return [id, result] as const
+        } catch {
+          return [id, null] as const
+        }
+      })
+    ).then(entries => {
+      if (cancelled) return
+      const next: Record<string, TopologyNodeDetails> = {}
+      entries.forEach(([id, result]) => {
+        if (result) next[id] = result
+      })
+      setConnectedNodeDetails(next)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [layout, selectedNode])
+
   const visible = useMemo(() => {
     if (!layout) return { nodes: [], links: [] as GraphLink[] }
-    const query = search.trim().toLowerCase()
+    const query = deferredSearch.trim().toLowerCase()
     const nodes = query
       ? layout.nodes.filter(node => `${node.hostname} ${node.ip} ${node.mac} ${node.port || ''} ${(node.ips || []).join(' ')}`.toLowerCase().includes(query))
       : layout.nodes
     const ids = new Set(nodes.map(node => node.id))
     return { nodes, links: layout.links.filter(link => ids.has(link.from) && ids.has(link.to)) }
-  }, [layout, search])
+  }, [deferredSearch, layout])
 
   const counts = useMemo(() => {
     const endpointNodes = layout?.nodes.filter(node => node.type === 'endpoint' || node.type === 'server') || []
@@ -570,6 +867,47 @@ export default function Topology() {
       endpoints: endpointNodes.length,
     }
   }, [layout])
+
+  const coreConnections = useMemo(() => {
+    if (!layout) return { node: null as GraphNode | null, links: [] as GraphLink[] }
+    const node = layout.nodes.find(item => item.type === 'switch' && lower(item.hostname).includes('core'))
+      || layout.nodes.find(item => item.type === 'switch')
+    if (!node) return { node: null, links: [] }
+    return { node, links: layout.links.filter(link => link.from === node.id || link.to === node.id) }
+  }, [layout])
+
+  const highlightedLinkIds = useMemo(() => {
+    if (!layout) return new Set<string>()
+    if (selectedLink) return new Set([selectedLink.id])
+    if (!selectedNode) return new Set<string>()
+    return new Set(
+      layout.links
+        .filter(link => link.from === selectedNode.id || link.to === selectedNode.id)
+        .map(link => link.id)
+    )
+  }, [layout, selectedLink, selectedNode])
+
+  const startPan = useCallback((clientX: number, clientY: number) => {
+    panStateRef.current = {
+      active: true,
+      startX: clientX,
+      startY: clientY,
+      originX: panX,
+      originY: panY,
+    }
+  }, [panX, panY])
+
+  const updatePan = useCallback((clientX: number, clientY: number) => {
+    if (!panStateRef.current.active) return
+    const deltaX = (clientX - panStateRef.current.startX) / zoom
+    const deltaY = (clientY - panStateRef.current.startY) / zoom
+    setPanX(panStateRef.current.originX - deltaX)
+    setPanY(panStateRef.current.originY - deltaY)
+  }, [zoom])
+
+  const endPan = useCallback(() => {
+    panStateRef.current.active = false
+  }, [])
 
   const colorFor = (type: DeviceType) => {
     if (type === 'gateway' || type === 'router') return '#a78bfa'
@@ -626,7 +964,7 @@ export default function Topology() {
             ← BACK
           </button>
           <span className="font-mono text-[10px]" style={{ color: '#64748b' }}>{lastUpdated ? `Updated ${lastUpdated.toLocaleString()}` : 'Not loaded'}</span>
-          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search hostname / IP / MAC" className="glass-bright rounded px-3 py-2 text-xs font-mono outline-none" style={{ color: '#c8d8ee', border: '1px solid rgba(34,211,238,.2)' }} />
+          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search hostname / IP / MAC" className="glass-bright rounded px-3 py-2 text-xs font-mono outline-none" style={{ color: 'var(--t-text, #c8d8ee)', border: '1px solid rgba(34,211,238,.2)' }} />
           <button type="button" onClick={() => void loadTopology(true)} className="glass-bright rounded px-3 py-2 text-xs font-mono" style={{ color: '#22d3ee' }}>{refreshing ? 'UPDATING…' : 'REFRESH'}</button>
         </div>
       </div>
@@ -651,28 +989,129 @@ export default function Topology() {
         </div>
       </GlassCard>
 
+      {coreConnections.node && coreConnections.links.length > 0 && (
+        <GlassCard className="p-3">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="font-display text-xs tracking-wider" style={{ color: '#22d3ee' }}>CORE-SWITCH CONNECTIONS</div>
+            <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>{coreConnections.node.hostname} · {coreConnections.node.ip || 'IP UNKNOWN'}</div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+            {coreConnections.links.map(link => {
+              const remoteId = link.from === coreConnections.node!.id ? link.to : link.from
+              const remote = layout?.nodes.find(node => node.id === remoteId)
+              const localPort = link.from === coreConnections.node!.id ? link.localPort : link.remotePort
+              const remotePort = link.from === coreConnections.node!.id ? link.remotePort : link.localPort
+              const tone = link.confidence === 'CONFIRMED' ? '#22d3ee' : link.gatewayPath ? '#a78bfa' : '#fbbf24'
+              return (
+                <button key={link.id} type="button" onClick={() => { setSelectedNode(remote || coreConnections.node); setSelectedLink(null) }} className="rounded p-2 text-left" style={{ color: '#dbeafe', background: 'rgba(8,25,55,.55)', border: `1px solid ${tone}44` }}>
+                  <div className="font-mono text-[10px]" style={{ color: tone }}>{remote?.hostname || remote?.ip || remoteId}</div>
+                  <div className="font-mono text-[9px] mt-1" style={{ color: '#94a3b8' }}>{remote?.ip || 'IP UNKNOWN'} · {localPort || 'PORT UNKNOWN'} → {remotePort || 'PORT UNKNOWN'}</div>
+                  <div className="font-mono text-[9px] mt-1" style={{ color: '#64748b' }}>{link.source} · {link.confidence}</div>
+                </button>
+              )
+            })}
+          </div>
+        </GlassCard>
+      )}
+
       <GlassCard className="flex-1 min-h-[650px] overflow-hidden relative p-0">
         <div className="absolute left-3 top-3 z-10 flex gap-1 rounded-lg p-1" style={{ background: 'rgba(3,10,20,.9)', border: '1px solid rgba(34,211,238,.18)' }}>
           <button type="button" onClick={() => setZoom(value => Math.min(1.8, +(value + .1).toFixed(2)))} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }}>+</button>
           <button type="button" onClick={() => setZoom(value => Math.max(.55, +(value - .1).toFixed(2)))} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }}>−</button>
-          <button type="button" onClick={() => setZoom(1)} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>FIT</button>
+          <button type="button" onClick={() => { setZoom(1); setPanX(0); setPanY(0) }} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>FIT</button>
         </div>
         <div className="absolute right-3 top-3 z-10 font-mono text-[10px] px-2 py-1 rounded" style={{ color: '#8ca0bb', background: 'rgba(3,10,20,.9)', border: '1px solid rgba(34,211,238,.12)' }}>{visible.nodes.length} NODES · {visible.links.length} LINKS</div>
+        {(selectedNode || selectedLink) && (
+          <div
+            className="absolute right-0 top-0 z-20 h-full w-full max-w-[420px] overflow-y-auto"
+            style={{ background: 'linear-gradient(180deg, rgba(3,10,20,.98), rgba(5,18,32,.96))', borderLeft: '1px solid rgba(34,211,238,.12)' }}
+          >
+            <div className="sticky top-0 flex items-center justify-between px-4 py-3" style={{ background: 'rgba(3,10,20,.96)', borderBottom: '1px solid rgba(34,211,238,.1)' }}>
+              <div>
+                <div className="font-display font-bold text-sm tracking-wider" style={{ color: selectedNode ? '#22d3ee' : '#c084fc' }}>
+                  {selectedNode ? 'DEVICE DETAILS' : 'LINK DETAILS'}
+                </div>
+                <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>
+                  {selectedNode ? (selectedNode.hostname || selectedNode.ip || selectedNode.id) : (selectedLink?.source || 'TOPOLOGY LINK')}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedNode(null)
+                  setSelectedLink(null)
+                }}
+                className="rounded px-2 py-1 font-mono text-[10px]"
+                style={{ color: '#c084fc', border: '1px solid rgba(192,132,252,.2)' }}
+              >
+                CLOSE
+              </button>
+            </div>
+            <div className="p-4">
+              {selectedNode && (
+                <NodeDetails
+                  node={selectedNode}
+                  links={layout?.links || []}
+                  nodes={layout?.nodes || []}
+                  onLink={setSelectedLink}
+                  onNodeSelect={(remoteNode) => {
+                    setSelectedNode(remoteNode)
+                    setSelectedLink(null)
+                  }}
+                  onOpenDeviceDetails={(deviceId) => navigate(`/snmp/devices/${deviceId}`)}
+                  onEditDevice={deviceDetails => setEditingNode(deviceDetails)}
+                  connectionsSearch={connectionsSearch}
+                  onConnectionsSearch={setConnectionsSearch}
+                  deferredConnectionsSearch={deferredConnectionsSearch}
+                  details={selectedNodeDetails}
+                  connectedDetails={connectedNodeDetails}
+                  loading={selectedNodeLoading}
+                  error={selectedNodeError}
+                />
+              )}
+              {selectedLink && (
+                <LinkDetails
+                  link={selectedLink}
+                  nodes={layout?.nodes || []}
+                  onNodeSelect={(remoteNode) => {
+                    setSelectedNode(remoteNode)
+                    setSelectedLink(null)
+                  }}
+                  onOpenDeviceDetails={(deviceId) => navigate(`/snmp/devices/${deviceId}`)}
+                />
+              )}
+            </div>
+          </div>
+        )}
 
         {loading && !layout ? (
           <div className="h-full flex items-center justify-center font-mono text-sm" style={{ color: '#22d3ee' }}>Loading topology…</div>
         ) : layout ? (
-          <div className="h-full overflow-auto" style={{ background: 'radial-gradient(circle at 50% 20%, rgba(34,211,238,.035), transparent 55%)' }}>
-            <svg width="100%" height="100%" viewBox={`0 0 ${layout.width / zoom} ${layout.height / zoom}`} preserveAspectRatio="xMidYMin meet" style={{ minWidth: `${Math.min(layout.width, 1000)}px`, minHeight: '650px' }}>
+          <div
+            className="h-full overflow-auto"
+            style={{ background: 'radial-gradient(circle at 50% 20%, rgba(34,211,238,.035), transparent 55%)', cursor: panStateRef.current.active ? 'grabbing' : 'grab' }}
+            onMouseDown={(event) => {
+              if ((event.target as HTMLElement).closest('button')) return
+              startPan(event.clientX, event.clientY)
+            }}
+            onMouseMove={(event) => updatePan(event.clientX, event.clientY)}
+            onMouseUp={endPan}
+            onMouseLeave={endPan}
+          >
+            <svg width="100%" height="100%" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="xMidYMin meet" style={{ minWidth: `${Math.min(layout.width, 1000)}px`, minHeight: '650px' }}>
               <defs>
                 <filter id="topologyGlow"><feGaussianBlur stdDeviation="3" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
               </defs>
+              <g transform={`translate(${panX} ${panY}) scale(${zoom})`}>
               {visible.links.map(link => {
                 const from = layout.positions.get(link.from)
                 const to = layout.positions.get(link.to)
                 if (!from || !to) return null
+                const fromNode = layout.nodes.find(node => node.id === link.from)
+                const toNode = layout.nodes.find(node => node.id === link.to)
                 const color = link.gatewayPath ? '#a78bfa' : link.wireless ? '#c084fc' : link.confidence === 'CONFIRMED' ? '#22d3ee' : '#fbbf24'
                 const selected = selectedLink?.id === link.id
+                const highlighted = highlightedLinkIds.has(link.id)
                 const startY = from.y < to.y ? from.y + 45 : from.y - 45
                 const endY = from.y < to.y ? to.y - 45 : to.y + 45
                 const midY = (startY + endY) / 2
@@ -683,11 +1122,21 @@ export default function Topology() {
                       setSelectedLink(prev => prev?.id === link.id ? null : link)
                       setSelectedNode(null)
                     }}
+                    onMouseEnter={() => setHoverPreview({
+                      title: `${fromNode?.hostname || link.from} -> ${toNode?.hostname || link.to}`,
+                      lines: [
+                        `${fromNode?.ip || 'IP UNKNOWN'} | ${fromNode?.mac || 'MAC UNKNOWN'}`,
+                        `${toNode?.ip || 'IP UNKNOWN'} | ${toNode?.mac || 'MAC UNKNOWN'}`,
+                        `${link.localPort || 'PORT UNKNOWN'} -> ${link.remotePort || 'PORT UNKNOWN'}`,
+                        `${link.source} | ${link.confidence}`,
+                      ],
+                    })}
+                    onMouseLeave={() => setHoverPreview(current => current?.title === `${fromNode?.hostname || link.from} -> ${toNode?.hostname || link.to}` ? null : current)}
                     style={{ cursor: 'pointer' }}
                   >
                     <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke="transparent" strokeWidth="22" />
-                    <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke={color} strokeWidth={selected ? 4 : link.gatewayPath ? 3 : 2} strokeDasharray={link.confidence === 'INFERRED' ? '8 6' : undefined} filter={selected ? 'url(#topologyGlow)' : undefined}>
-                      <animate attributeName="stroke-opacity" values=".35;1;.35" dur={link.gatewayPath ? '1.5s' : '2.4s'} repeatCount="indefinite" />
+                    <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke={color} strokeWidth={selected ? 4 : highlighted ? 3.2 : link.gatewayPath ? 3 : 2} strokeOpacity={highlighted || selected ? 1 : 0.4} strokeDasharray={link.confidence === 'INFERRED' ? '8 6' : undefined} filter={selected || highlighted ? 'url(#topologyGlow)' : undefined}>
+                      <animate attributeName="stroke-opacity" values={highlighted || selected ? '.7;1;.7' : '.25;.75;.25'} dur={link.gatewayPath ? '1.5s' : '2.4s'} repeatCount="indefinite" />
                       {link.confidence === 'INFERRED' && <animate attributeName="stroke-dashoffset" values="0;-28" dur="1s" repeatCount="indefinite" />}
                     </path>
                     <text x={(from.x + to.x) / 2} y={midY - 7} textAnchor="middle" className="font-mono" style={{ fill: color, fontSize: 9, fontWeight: 700 }}>{link.localPort || link.source}</text>
@@ -699,17 +1148,32 @@ export default function Topology() {
                 const point = layout.positions.get(node.id)
                 return point ? card(node, point) : null
               })}
+              </g>
             </svg>
+            {!visible.nodes.length && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="rounded-lg px-4 py-3 font-mono text-xs" style={{ color: '#8ca0bb', background: 'rgba(3,10,20,.92)', border: '1px solid rgba(34,211,238,.14)' }}>
+                  Topology data mila hai, lekin koi renderable nodes/link nahi bane. SNMP LLDP/CDP ya inventory records check karein.
+                </div>
+              </div>
+            )}
           </div>
         ) : null}
-      </GlassCard>
 
-      {(selectedNode || selectedLink) && (
-        <GlassCard className="p-4">
-          {selectedNode && <NodeDetails node={selectedNode} links={layout?.links || []} nodes={layout?.nodes || []} onLink={setSelectedLink} />}
-          {selectedLink && <LinkDetails link={selectedLink} nodes={layout?.nodes || []} />}
-        </GlassCard>
-      )}
+        {hoverPreview && (
+          <div
+            className="absolute left-3 bottom-3 z-20 max-w-[320px] rounded-xl px-3 py-2"
+            style={{ background: 'rgba(3,10,20,.96)', border: '1px solid rgba(34,211,238,.18)', boxShadow: '0 18px 40px rgba(2,8,23,.45)' }}
+          >
+            <div className="font-display text-xs tracking-wider" style={{ color: '#22d3ee' }}>{hoverPreview.title}</div>
+            {hoverPreview.lines.map((line, index) => (
+              <div key={`${hoverPreview.title}-${index}`} className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>
+                {line}
+              </div>
+            ))}
+          </div>
+        )}
+      </GlassCard>
 
       <div className="flex flex-wrap gap-4 font-mono text-[10px]" style={{ color: '#64748b' }}>
         <span><i className="inline-block w-7 border-t-2 mr-2" style={{ borderColor: '#22d3ee' }} />LLDP/CDP CONFIRMED</span>
@@ -717,6 +1181,14 @@ export default function Topology() {
         <span><i className="inline-block w-7 border-t-2 mr-2" style={{ borderColor: '#a78bfa' }} />GATEWAY PATH</span>
         <span>Click a node or link for details</span>
       </div>
+
+      {editingNode && (
+        <EditTopologyDeviceDialog
+          device={editingNode}
+          onClose={() => setEditingNode(null)}
+          onSave={saveNode}
+        />
+      )}
     </div>
   )
 }
@@ -725,13 +1197,147 @@ function Metric({ label, value, color = '#e2e8f0' }: { label: string; value: num
   return <div><div className="font-mono text-[9px]" style={{ color: '#64748b' }}>{label}</div><div className="font-display text-lg" style={{ color }}>{value}</div></div>
 }
 
-function NodeDetails({ node, links, nodes, onLink }: { node: GraphNode; links: GraphLink[]; nodes: GraphNode[]; onLink: (link: GraphLink) => void }) {
-  const nodeLinks = links.filter(link => link.from === node.id || link.to === node.id)
+function EditTopologyDeviceDialog({
+  device,
+  onClose,
+  onSave,
+}: {
+  device: NonNullable<TopologyNodeDetails['device']>
+  onClose: () => void
+  onSave: (values: Record<string, string>) => Promise<void>
+}) {
+  const [values, setValues] = useState({
+    hostname: device.hostname || device.name || '',
+    ip_address: device.ip_address || '',
+    mac_address: device.mac_address || '',
+    vendor: device.vendor || '',
+    model: device.model || '',
+    serial_number: device.serial_number || '',
+    firmware: device.firmware || '',
+    status: device.status || 'unknown',
+    port: device.topology_metadata?.port || '',
+    vlans: (device.topology_metadata?.vlans || []).join(', '),
+    ips: (device.topology_metadata?.ips || []).join(', '),
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const update = (key: string, value: string) => setValues(current => ({ ...current, [key]: value }))
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    setError(null)
+    try {
+      await onSave(values)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Failed to update device')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const fields: Array<[string, string, string]> = [
+    ['hostname', 'HOSTNAME', ''],
+    ['ip_address', 'IP ADDRESS', ''],
+    ['mac_address', 'MAC ADDRESS', 'aa:bb:cc:dd:ee:ff'],
+    ['vendor', 'VENDOR / MANUFACTURER', 'e.g. Cisco, AgniGATE'],
+    ['model', 'MODEL', ''],
+    ['serial_number', 'SERIAL NUMBER', ''],
+    ['firmware', 'FIRMWARE VERSION', ''],
+    ['port', 'PORT / INTERFACE', 'e.g. Gi0/1'],
+    ['vlans', 'VLANs', 'comma separated: 10, 20'],
+    ['ips', 'IPs ON PORT', 'comma separated IPs'],
+  ]
   return (
-    <div className="grid lg:grid-cols-[1fr_1fr] gap-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,.72)', backdropFilter: 'blur(4px)' }} onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+      <form onSubmit={submit} className="w-full max-w-2xl rounded-xl p-5 space-y-4" style={{ background: '#061426', border: '1px solid rgba(34,211,238,.3)', boxShadow: '0 20px 80px rgba(0,0,0,.45)' }}>
+        <div className="flex items-center justify-between">
+          <div><div className="font-display font-bold tracking-widest" style={{ color: '#22d3ee' }}>EDIT DEVICE</div><div className="font-mono text-[10px] mt-1" style={{ color: '#64748b' }}>SNMP identity used by topology</div></div>
+          <button type="button" onClick={onClose} className="font-mono text-xs" style={{ color: '#fb7185' }}>CLOSE</button>
+        </div>
+        {error && <div className="rounded p-2 font-mono text-[10px]" style={{ color: '#fb7185', background: 'rgba(127,29,29,.25)' }}>{error}</div>}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {fields.map(([key, label, placeholder]) => (
+            <label key={key} className="font-mono text-[10px]" style={{ color: '#8ca0bb' }}>{label}
+              <input value={values[key as keyof typeof values]} placeholder={placeholder} onChange={event => update(key, event.target.value)} required={key === 'hostname' || key === 'ip_address'} className="mt-1 w-full rounded px-3 py-2 outline-none" style={{ color: '#dbeafe', background: 'rgba(8,25,55,.7)', border: '1px solid rgba(34,211,238,.18)' }} />
+            </label>
+          ))}
+          <label className="font-mono text-[10px]" style={{ color: '#8ca0bb' }}>STATUS
+            <select value={values.status} onChange={event => update('status', event.target.value)} className="mt-1 w-full rounded px-3 py-2" style={{ color: '#dbeafe', background: '#081937', border: '1px solid rgba(34,211,238,.18)' }}><option value="online">ONLINE</option><option value="warning">WARNING</option><option value="offline">OFFLINE</option><option value="unknown">UNKNOWN</option></select>
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 pt-2" style={{ borderTop: '1px solid rgba(34,211,238,.12)' }}><button type="button" onClick={onClose} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#fb7185', border: '1px solid rgba(251,113,133,.2)' }}>CANCEL</button><button type="submit" disabled={saving} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#34d399', border: '1px solid rgba(52,211,153,.25)', opacity: saving ? .6 : 1 }}>{saving ? 'SAVING…' : 'SAVE CHANGES'}</button></div>
+      </form>
+    </div>
+  )
+}
+
+function NodeDetails({
+  node,
+  links,
+  nodes,
+  onLink,
+  onNodeSelect,
+  onOpenDeviceDetails,
+  onEditDevice,
+  connectionsSearch,
+  onConnectionsSearch,
+  deferredConnectionsSearch,
+  details,
+  connectedDetails,
+  loading,
+  error,
+}: {
+  node: GraphNode
+  links: GraphLink[]
+  nodes: GraphNode[]
+  onLink: (link: GraphLink) => void
+  onNodeSelect: (node: GraphNode) => void
+  onOpenDeviceDetails: (deviceId: number) => void
+  onEditDevice: (device: NonNullable<TopologyNodeDetails['device']>) => void
+  connectionsSearch: string
+  onConnectionsSearch: (value: string) => void
+  deferredConnectionsSearch: string
+  details: TopologyNodeDetails | null
+  connectedDetails: Record<string, TopologyNodeDetails>
+  loading: boolean
+  error: string | null
+}) {
+  const connectionQuery = deferredConnectionsSearch.trim().toLowerCase()
+  const nodeLinks = links.filter(link => {
+    if (link.from !== node.id && link.to !== node.id) return false
+    if (!connectionQuery) return true
+    const remoteId = link.from === node.id ? link.to : link.from
+    const remote = nodes.find(item => item.id === remoteId)
+    const remoteDetails = remote ? connectedDetails[remote.id] : null
+    const haystack = [
+      remote?.hostname,
+      remote?.ip,
+      remote?.mac,
+      remoteDetails?.device?.vendor,
+      remoteDetails?.device?.model,
+      remoteDetails?.device?.serial_number,
+      link.localPort,
+      link.remotePort,
+    ].filter(Boolean).join(' ').toLowerCase()
+    return haystack.includes(connectionQuery)
+  })
+  const monitoring = details?.monitoring || []
+  const runningModules = monitoring.filter(item => item.enabled).map(item => item.module_name.toUpperCase())
+  const capabilities = Object.entries(details?.capabilities || {})
+    .filter(([, supported]) => supported)
+    .map(([name]) => name.toUpperCase())
+  return (
+    <div className="space-y-5">
       <div>
         <div className="font-display font-bold text-sm" style={{ color: '#22d3ee' }}>{node.hostname}</div>
         <div className="font-mono text-[10px] mt-1" style={{ color: '#64748b' }}>{node.type.toUpperCase()} · {node.status.toUpperCase()}</div>
+        {details?.device?.id && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => onEditDevice(details.device!)} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#34d399', border: '1px solid rgba(52,211,153,.25)', background: 'rgba(52,211,153,.06)' }}>EDIT DEVICE</button>
+            <button type="button" onClick={() => onOpenDeviceDetails(details.device!.id)} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.2)', background: 'rgba(34,211,238,.06)' }}>OPEN SNMP DETAILS</button>
+          </div>
+        )}
         <div className="grid sm:grid-cols-2 gap-x-6 mt-3">
           <Detail label="IP" value={node.ip || 'UNKNOWN'} />
           <Detail label="MAC" value={node.mac || (node.macs?.length ? `${node.macs.length} MACs` : 'UNKNOWN')} />
@@ -740,27 +1346,184 @@ function NodeDetails({ node, links, nodes, onLink }: { node: GraphNode; links: G
           <Detail label="IPs ON PORT" value={node.ips?.length ? node.ips.join(', ') : 'UNKNOWN'} />
           <Detail label="VENDOR / MODEL" value={[node.vendor, node.model].filter(Boolean).join(' · ') || 'UNKNOWN'} />
         </div>
+
+        <div className="mt-4">
+          <div className="font-display text-xs tracking-wider mb-2" style={{ color: '#8ca0bb' }}>DATABASE DETAILS</div>
+          {loading ? (
+            <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>Loading device details…</div>
+          ) : error ? (
+            <div className="font-mono text-[10px]" style={{ color: '#fb7185' }}>{error}</div>
+          ) : details?.device ? (
+            <div className="grid sm:grid-cols-2 gap-x-6">
+              <Detail label="HOSTNAME" value={details.device.hostname || details.device.name || node.hostname} />
+              <Detail label="DB DEVICE ID" value={String(details.device.id)} />
+              <Detail label="DB IP" value={details.device.ip_address || node.ip || 'UNKNOWN'} />
+              <Detail label="DB MAC" value={details.device.mac_address || node.mac || 'UNKNOWN'} />
+              <Detail label="SERIAL / FIRMWARE" value={[details.device.serial_number, details.device.firmware].filter(Boolean).join(' · ') || 'UNKNOWN'} />
+              <Detail label="SNMP / LAST SEEN" value={[details.snmp?.version || 'N/A', details.device.last_seen ? new Date(details.device.last_seen).toLocaleString() : 'N/A'].join(' · ')} />
+              <Detail label="CAPABILITIES" value={capabilities.length ? capabilities.join(', ') : 'N/A'} />
+              <Detail label="MONITORING MODULES" value={runningModules.length ? runningModules.join(', ') : 'N/A'} />
+            </div>
+          ) : (
+            <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>This node is inferred from topology data and has no direct DB record.</div>
+          )}
+        </div>
       </div>
+
       <div>
         <div className="font-display text-xs tracking-wider mb-2" style={{ color: '#8ca0bb' }}>CONNECTIONS</div>
+        <input
+          value={connectionsSearch}
+          onChange={event => onConnectionsSearch(event.target.value)}
+          placeholder="Filter connected devices / IP / MAC / vendor"
+          className="mb-3 w-full rounded px-3 py-2 text-[10px] font-mono outline-none"
+          style={{ color: 'var(--t-text, #c8d8ee)', border: '1px solid rgba(34,211,238,.15)', background: 'rgba(8,25,55,.5)' }}
+        />
         {nodeLinks.length ? nodeLinks.map(link => {
           const remoteId = link.from === node.id ? link.to : link.from
           const remote = nodes.find(item => item.id === remoteId)
-          return <button type="button" key={link.id} onClick={() => onLink(link)} className="w-full text-left py-2 border-t border-cyan-400/10 font-mono text-[10px]" style={{ color: link.confidence === 'CONFIRMED' ? '#22d3ee' : '#fbbf24' }}>{remote?.hostname || remote?.ip || remoteId}<span className="block" style={{ color: '#64748b' }}>{link.localPort || 'PORT UNKNOWN'} · {link.confidence}</span></button>
+          const remoteDetails = remote ? connectedDetails[remote.id] : null
+          const remoteCapabilities = Object.entries(remoteDetails?.capabilities || {})
+            .filter(([, supported]) => supported)
+            .map(([name]) => name.toUpperCase())
+          const remoteModules = (remoteDetails?.monitoring || [])
+            .filter(item => item.enabled)
+            .map(item => item.module_name.toUpperCase())
+          return (
+            <button
+              type="button"
+              key={link.id}
+              onClick={() => remote ? onNodeSelect(remote) : onLink(link)}
+              className="w-full text-left py-2 border-t border-cyan-400/10 font-mono text-[10px]"
+              style={{ color: link.confidence === 'CONFIRMED' ? '#22d3ee' : '#fbbf24' }}
+              title={`${remote?.hostname || remoteId} | ${remote?.ip || 'IP UNKNOWN'} | ${remote?.mac || 'MAC UNKNOWN'} | ${link.localPort || 'PORT UNKNOWN'} -> ${link.remotePort || 'PORT UNKNOWN'}`}
+            >
+              {remote?.hostname || remote?.ip || remoteId}
+              <span className="block mt-1" style={{ color: '#dbeafe' }}>
+                {(remote?.ip || 'IP UNKNOWN')} · {(remote?.mac || 'MAC UNKNOWN')}
+              </span>
+              <span className="block" style={{ color: '#64748b' }}>
+                {link.localPort || 'PORT UNKNOWN'} → {link.remotePort || 'PORT UNKNOWN'} · {link.confidence} · {link.source}
+              </span>
+              <span className="block mt-2" style={{ color: '#94a3b8' }}>
+                Vendor: {remoteDetails?.device?.vendor || remote?.vendor || 'N/A'}
+              </span>
+              <span className="block" style={{ color: '#94a3b8' }}>
+                Model: {remoteDetails?.device?.model || remote?.model || 'N/A'}
+              </span>
+              <span className="block" style={{ color: '#94a3b8' }}>
+                Serial: {remoteDetails?.device?.serial_number || 'N/A'}
+              </span>
+              <span className="block" style={{ color: '#94a3b8' }}>
+                Firmware: {remoteDetails?.device?.firmware || 'N/A'}
+              </span>
+              <span className="block" style={{ color: '#94a3b8' }}>
+                SNMP: {remoteDetails?.snmp?.version || 'N/A'} · {remoteDetails?.snmp?.status || 'N/A'}
+              </span>
+              <span className="block" style={{ color: '#94a3b8' }}>
+                Last Seen: {remoteDetails?.device?.last_seen ? new Date(remoteDetails.device.last_seen).toLocaleString() : 'N/A'}
+              </span>
+              <span className="block" style={{ color: '#94a3b8' }}>
+                Capabilities: {remoteCapabilities.length ? remoteCapabilities.join(', ') : 'N/A'}
+              </span>
+              <span className="block" style={{ color: '#94a3b8' }}>
+                Monitoring: {remoteModules.length ? remoteModules.join(', ') : 'N/A'}
+              </span>
+              <span className="mt-2 flex flex-wrap gap-2">
+                {remoteDetails?.device?.id && (
+                  <span
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onOpenDeviceDetails(remoteDetails.device!.id)
+                    }}
+                    className="inline-flex rounded px-2 py-1"
+                    style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.18)', background: 'rgba(34,211,238,.06)' }}
+                  >
+                    Open SNMP Details
+                  </span>
+                )}
+                <span className="inline-flex rounded px-2 py-1" style={{ color: '#a78bfa', border: '1px solid rgba(167,139,250,.18)', background: 'rgba(167,139,250,.06)' }}>
+                  Click to open connected device
+                </span>
+              </span>
+            </button>
+          )
         }) : <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>No verified or inferred links</div>}
       </div>
     </div>
   )
 }
 
-function LinkDetails({ link, nodes }: { link: GraphLink; nodes: GraphNode[] }) {
+function LinkDetails({
+  link,
+  nodes,
+  onNodeSelect,
+  onOpenDeviceDetails,
+}: {
+  link: GraphLink
+  nodes: GraphNode[]
+  onNodeSelect: (node: GraphNode) => void
+  onOpenDeviceDetails: (deviceId: number) => void
+}) {
   const local = nodes.find(node => node.id === link.from)
   const remote = nodes.find(node => node.id === link.to)
-  return <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 font-mono text-[10px]">
-    <Detail label="LOCAL DEVICE / PORT" value={`${local?.hostname || link.from} · ${link.localPort || 'UNKNOWN'}`} />
-    <Detail label="REMOTE DEVICE / PORT" value={`${remote?.hostname || link.to} · ${link.remotePort || 'UNKNOWN'}`} />
-    <Detail label="SOURCE / CONFIDENCE" value={`${link.source} · ${link.confidence}`} />
-    <Detail label="VLAN / SPEED / STATUS" value={`${link.vlan ?? 'UNKNOWN'} · ${link.speed ?? 'UNKNOWN'} · ${link.status || 'UNKNOWN'}`} />
+  return <div className="space-y-4 font-mono text-[10px]">
+    <div className="grid sm:grid-cols-2 gap-3">
+      <Detail label="LOCAL DEVICE / PORT" value={`${local?.hostname || link.from} · ${link.localPort || 'UNKNOWN'}`} />
+      <Detail label="REMOTE DEVICE / PORT" value={`${remote?.hostname || link.to} · ${link.remotePort || 'UNKNOWN'}`} />
+      <Detail label="LOCAL IP / MAC" value={`${local?.ip || 'UNKNOWN'} · ${local?.mac || 'UNKNOWN'}`} />
+      <Detail label="REMOTE IP / MAC" value={`${remote?.ip || 'UNKNOWN'} · ${remote?.mac || 'UNKNOWN'}`} />
+      <Detail label="SOURCE / CONFIDENCE" value={`${link.source} · ${link.confidence}`} />
+      <Detail label="VLAN / SPEED / STATUS" value={`${link.vlan ?? 'UNKNOWN'} · ${link.speed ?? 'UNKNOWN'} · ${link.status || 'UNKNOWN'}`} />
+    </div>
+    <div className="grid sm:grid-cols-2 gap-2">
+      {local && (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onNodeSelect(local)}
+            className="rounded px-3 py-2 text-left"
+            style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.18)', background: 'rgba(34,211,238,.06)' }}
+            title={`${local.hostname} | ${local.ip || 'IP UNKNOWN'} | ${local.mac || 'MAC UNKNOWN'}`}
+          >
+            Open local device
+          </button>
+          {Number.isFinite(Number(local.id)) && (
+            <button
+              type="button"
+              onClick={() => onOpenDeviceDetails(Number(local.id))}
+              className="rounded px-3 py-2 text-left"
+              style={{ color: '#67e8f9', border: '1px solid rgba(103,232,249,.18)', background: 'rgba(103,232,249,.06)' }}
+            >
+              Local SNMP Details
+            </button>
+          )}
+        </div>
+      )}
+      {remote && (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onNodeSelect(remote)}
+            className="rounded px-3 py-2 text-left"
+            style={{ color: '#c084fc', border: '1px solid rgba(192,132,252,.18)', background: 'rgba(192,132,252,.06)' }}
+            title={`${remote.hostname} | ${remote.ip || 'IP UNKNOWN'} | ${remote.mac || 'MAC UNKNOWN'}`}
+          >
+            Open remote device
+          </button>
+          {Number.isFinite(Number(remote.id)) && (
+            <button
+              type="button"
+              onClick={() => onOpenDeviceDetails(Number(remote.id))}
+              className="rounded px-3 py-2 text-left"
+              style={{ color: '#e879f9', border: '1px solid rgba(232,121,249,.18)', background: 'rgba(232,121,249,.06)' }}
+            >
+              Remote SNMP Details
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   </div>
 }
 

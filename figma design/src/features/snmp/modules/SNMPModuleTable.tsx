@@ -30,7 +30,7 @@ function SNMPModuleTable<T>({
   defaultSortOrder = 'asc',
   onRowClick,
   rowKey = 'id' as keyof T,
-  pageSize: initialPageSize = 50,
+  pageSize: initialPageSize = 25,
   showPagination = true,
   className = '',
 }: SNMPModuleTableProps<T>) {
@@ -255,8 +255,8 @@ function SNMPModuleTable<T>({
               style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)' }}>
               <option value={25}>25</option>
               <option value={50}>50</option>
+              <option value={75}>75</option>
               <option value={100}>100</option>
-              <option value={200}>200</option>
             </select>
             <button onClick={() => handlePageChange(page - 1)} disabled={page === 1}
               className="glass-bright px-3 py-1.5 rounded font-mono text-xs"

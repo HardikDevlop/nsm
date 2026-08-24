@@ -23,6 +23,7 @@ const Login = lazyRetry(() => import('./pages/Login'))
 const Unauthorized = lazyRetry(() => import('./pages/Unauthorized'))
 const Dashboard = lazyRetry(() => import('./pages/Dashboard'))
 const Topology = lazyRetry(() => import('./pages/Topology'))
+const ManualTopology = lazyRetry(() => import('./pages/ManualTopology'))
 const ISPMonitoring = lazyRetry(() => import('./pages/ISPMonitoring'))
 const Incidents = lazyRetry(() => import('./pages/Incidents'))
 const PacketAnalysis = lazyRetry(() => import('./pages/PacketAnalysis'))
@@ -63,6 +64,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, Component: withPermission(Dashboard, 'dashboard:read') },
           { path: 'topology', Component: withPermission(Topology, 'topology:read') },
+          { path: 'manual-topology', Component: withPermission(ManualTopology, 'topology:read') },
           { path: 'isp', Component: withPermission(ISPMonitoring, 'isp:read') },
           { path: 'incidents', Component: withPermission(Incidents, 'incidents:read') },
           { path: 'alerts', Component: withPermission(AlertsManagement, 'alerts:read') },

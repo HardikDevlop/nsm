@@ -4,9 +4,10 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
-import * as XLSX from 'xlsx'
 import GlassCard from '../components/GlassCard'
 import { getDailyReport, type DailyReport, type DailyReportDevice } from '../lib/api'
+
+let xlsxModulePromise: Promise<typeof import('xlsx')> | null = null
 
 /* ── colour palette ─────────────────────────────────────────────────────── */
 const SEV: Record<string, { bg: string; text: string; border: string }> = {
@@ -61,18 +62,18 @@ function SectionTitle({ icon, title, subtitle }: { icon: string; title: string; 
       </div>
       <div>
         <div className="font-display font-bold text-base tracking-wider neon-cyan">{title}</div>
-        {subtitle && <div className="font-mono text-[10px] mt-0.5" style={{ color: '#8899bb' }}>{subtitle}</div>}
+        {subtitle && <div className="font-mono text-[10px] mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{subtitle}</div>}
       </div>
     </div>
   )
 }
 
-function StatTile({ label, value, color = '#c8d8ee', sub }: { label: string; value: string | number; color?: string; sub?: string }) {
+function StatTile({ label, value, color = 'var(--t-text, #c8d8ee)', sub }: { label: string; value: string | number; color?: string; sub?: string }) {
   return (
     <div className="p-3 rounded-lg text-center" style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(0,212,255,0.1)' }}>
       <div className="font-display font-bold text-xl" style={{ color }}>{value}</div>
-      <div className="font-mono text-[10px] mt-0.5" style={{ color: '#8899bb' }}>{label}</div>
-      {sub && <div className="font-mono text-[9px] mt-0.5" style={{ color: '#556677' }}>{sub}</div>}
+      <div className="font-mono text-[10px] mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{label}</div>
+      {sub && <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--t-muted, #556677)' }}>{sub}</div>}
     </div>
   )
 }
@@ -93,20 +94,20 @@ function DeviceTable({ rows, cols }: {
   rows: DailyReportDevice[]
   cols: { key: string; label: string; render?: (row: DailyReportDevice) => React.ReactNode }[]
 }) {
-  if (!rows.length) return <div className="font-mono text-xs py-4 text-center" style={{ color: '#8899bb' }}>Data Not Available</div>
+  if (!rows.length) return <div className="font-mono text-xs py-4 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
   return (
     <div className="overflow-x-auto">
       <table className="w-full" style={{ minWidth: 400 }}>
         <thead>
           <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
-            {cols.map(c => <th key={c.key} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: '#8899bb' }}>{c.label}</th>)}
+            {cols.map(c => <th key={c.key} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: 'var(--t-muted, #8899bb)' }}>{c.label}</th>)}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => (
             <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.05)' }}>
               {cols.map(c => (
-                <td key={c.key} className="px-3 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>
+                <td key={c.key} className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                   {c.render ? c.render(row) : na((row as unknown as Record<string, unknown>)[c.key])}
                 </td>
               ))}
@@ -131,7 +132,7 @@ function HealthGauge({ score, label }: { score: number; label: string }) {
           transform="rotate(-90 50 50)"
           style={{ filter: `drop-shadow(0 0 6px ${color})`, transition: 'stroke-dasharray 1s ease' }}/>
         <text x="50" y="46" textAnchor="middle" style={{ fontSize: 18, fontFamily: 'Space Grotesk', fontWeight: 700, fill: color }}>{score}</text>
-        <text x="50" y="60" textAnchor="middle" style={{ fontSize: 9, fontFamily: 'JetBrains Mono', fill: '#8899bb' }}>/ 100</text>
+        <text x="50" y="60" textAnchor="middle" style={{ fontSize: 9, fontFamily: 'JetBrains Mono', fill: 'var(--t-muted, #8899bb)' }}>/ 100</text>
       </svg>
       <div className="font-mono text-xs mt-1 font-bold" style={{ color }}>{label}</div>
     </div>
@@ -141,7 +142,8 @@ function HealthGauge({ score, label }: { score: number; label: string }) {
 /* ═══════════════════════════════════════════════════════════════════════════
    EXCEL EXPORT
 ═══════════════════════════════════════════════════════════════════════════ */
-function exportToExcel(d: DailyReport) {
+async function exportToExcel(d: DailyReport) {
+  const XLSX = await (xlsxModulePromise ??= import('xlsx'))
   const wb = XLSX.utils.book_new()
 
   /* ── helper: append a sheet ── */
@@ -267,6 +269,7 @@ export default function DailyReport() {
   const [data,    setData]    = useState<DailyReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -281,13 +284,22 @@ export default function DailyReport() {
   }, [])
 
   const handlePrint = () => window.print()
+  const handleExport = async () => {
+    if (!data || exporting) return
+    setExporting(true)
+    try {
+      await exportToExcel(data)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   /* ── loading / error ── */
   if (loading) return (
     <div className="p-6 flex items-center justify-center min-h-[60vh]">
       <div className="flex flex-col items-center gap-4">
         <div className="w-10 h-10 rounded-full border-2 animate-spin" style={{ borderColor: '#00d4ff', borderTopColor: 'transparent' }}/>
-        <span className="font-mono text-sm" style={{ color: '#8899bb' }}>Generating report…</span>
+        <span className="font-mono text-sm" style={{ color: 'var(--t-muted, #8899bb)' }}>Generating report…</span>
       </div>
     </div>
   )
@@ -324,7 +336,7 @@ export default function DailyReport() {
             <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">
               NMS PRO — DAILY NETWORK MONITORING REPORT
             </h1>
-            <p className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>
+            <p className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>
               Reporting Period: {d.period}
             </p>
           </div>
@@ -341,11 +353,11 @@ export default function DailyReport() {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
               Print / PDF
             </button>
-            <button onClick={() => exportToExcel(d)}
+            <button onClick={() => void handleExport()}
               className="flex items-center gap-1.5 px-4 py-2 rounded font-mono text-xs font-semibold hover:opacity-90 transition-all"
               style={{ background: 'rgba(0,200,100,0.15)', color: '#00cc66', border: '1px solid rgba(0,200,100,0.4)' }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-              Export Excel
+              {exporting ? 'Exporting…' : 'Export Excel'}
             </button>          </div>
         </div>
 
@@ -357,9 +369,9 @@ export default function DailyReport() {
                 NMS PRO — DAILY NETWORK MONITORING REPORT
               </div>
               <div className="font-mono text-xs mt-1 space-y-0.5">
-                <div style={{ color: '#8899bb' }}>Date: <span style={{ color: '#c8d8ee' }}>{d.report_date}</span></div>
-                <div style={{ color: '#8899bb' }}>Period: <span style={{ color: '#c8d8ee' }}>{d.period}</span></div>
-                <div style={{ color: '#8899bb' }}>Generated: <span style={{ color: '#c8d8ee' }}>{ts(d.generated_at)}</span></div>
+                <div style={{ color: 'var(--t-muted, #8899bb)' }}>Date: <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{d.report_date}</span></div>
+                <div style={{ color: 'var(--t-muted, #8899bb)' }}>Period: <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{d.period}</span></div>
+                <div style={{ color: 'var(--t-muted, #8899bb)' }}>Generated: <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{ts(d.generated_at)}</span></div>
               </div>
             </div>
             <div className="flex items-center gap-6">
@@ -367,15 +379,15 @@ export default function DailyReport() {
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ background: '#00ff88' }}/>
-                  <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Online: <span style={{ color: '#00ff88' }}>{d.availability.online}</span></span>
+                  <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Online: <span style={{ color: '#00ff88' }}>{d.availability.online}</span></span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ background: '#ff3366' }}/>
-                  <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Offline: <span style={{ color: '#ff3366' }}>{d.availability.offline}</span></span>
+                  <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Offline: <span style={{ color: '#ff3366' }}>{d.availability.offline}</span></span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ background: '#00d4ff' }}/>
-                  <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Availability: <span style={{ color: '#00d4ff' }}>{pct(d.availability.availability_pct)}</span></span>
+                  <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Availability: <span style={{ color: '#00d4ff' }}>{pct(d.availability.availability_pct)}</span></span>
                 </div>
               </div>
             </div>
@@ -388,7 +400,7 @@ export default function DailyReport() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
             <StatTile label="Total Devices"   value={d.availability.total_devices} color="#00d4ff"/>
             <StatTile label="Online"          value={d.availability.online}  color="#00ff88"/>
-            <StatTile label="Offline"         value={d.availability.offline} color={d.availability.offline > 0 ? '#ff3366' : '#8899bb'}/>
+            <StatTile label="Offline"         value={d.availability.offline} color={d.availability.offline > 0 ? '#ff3366' : 'var(--t-muted, #8899bb)'}/>
             <StatTile label="Availability %"  value={pct(d.availability.availability_pct)} color={d.availability.availability_pct >= 99 ? '#00ff88' : d.availability.availability_pct >= 95 ? '#ffaa00' : '#ff3366'}/>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
@@ -424,7 +436,7 @@ export default function DailyReport() {
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
                   {['Metric', 'Avg', 'Max', 'Samples', 'Status'].map(h => (
-                    <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: '#8899bb' }}>{h}</th>
+                    <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -440,20 +452,20 @@ export default function DailyReport() {
                   const avg  = row.data.avg
                   const maxV = row.data.max
                   const bad  = avg != null && avg > row.threshold
-                  const col  = avg == null ? '#8899bb' : bad ? '#ff3366' : avg > row.threshold * 0.8 ? '#ffaa00' : '#00ff88'
+                  const col  = avg == null ? 'var(--t-muted, #8899bb)' : bad ? '#ff3366' : avg > row.threshold * 0.8 ? '#ffaa00' : '#00ff88'
                   return (
                     <tr key={row.label} style={{ borderBottom: '1px solid rgba(0,212,255,0.05)' }}>
-                      <td className="px-3 py-2.5 font-mono text-xs" style={{ color: '#c8d8ee' }}>{row.label}</td>
+                      <td className="px-3 py-2.5 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{row.label}</td>
                       <td className="px-3 py-2.5 font-mono text-xs font-semibold" style={{ color: col }}>
                         {avg != null ? `${avg.toFixed(1)}${row.unit}` : 'N/A'}
                       </td>
-                      <td className="px-3 py-2.5 font-mono text-xs" style={{ color: '#8899bb' }}>
+                      <td className="px-3 py-2.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                         {maxV != null ? `${maxV.toFixed(1)}${row.unit}` : 'N/A'}
                       </td>
-                      <td className="px-3 py-2.5 font-mono text-xs" style={{ color: '#8899bb' }}>{row.data.samples}</td>
+                      <td className="px-3 py-2.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{row.data.samples}</td>
                       <td className="px-3 py-2.5">
                         {row.data.samples === 0
-                          ? <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(136,153,187,0.1)', color: '#8899bb' }}>N/A</span>
+                          ? <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(136,153,187,0.1)', color: 'var(--t-muted, #8899bb)' }}>N/A</span>
                           : bad
                             ? <SevBadge sev="WARNING"/>
                             : <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,255,136,0.1)', color: '#00ff88' }}>NORMAL</span>
@@ -474,16 +486,16 @@ export default function DailyReport() {
               { title: 'Top Latency Devices', rows: d.performance.top_latency_devices, key: 'avg_value', unit: ' ms' },
             ].map(panel => (
               <div key={panel.title}>
-                <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#667799' }}>{panel.title}</div>
+                <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--t-muted, #667799)' }}>{panel.title}</div>
                 {panel.rows.length === 0
-                  ? <div className="font-mono text-xs" style={{ color: '#8899bb' }}>N/A</div>
+                  ? <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>N/A</div>
                   : <div className="space-y-2">
                       {panel.rows.map((r, i) => {
                         const v = (r as unknown as Record<string,unknown>)[panel.key] as number ?? 0
                         return (
                           <div key={i}>
                             <div className="flex justify-between font-mono text-[10px] mb-0.5">
-                              <span className="truncate max-w-[120px]" style={{ color: '#c8d8ee' }}>{r.hostname}</span>
+                              <span className="truncate max-w-[120px]" style={{ color: 'var(--t-text, #c8d8ee)' }}>{r.hostname}</span>
                               <span style={{ color: v > 70 ? '#ff3366' : '#00d4ff' }}>{v.toFixed(1)}{panel.unit}</span>
                             </div>
                             <MiniBar pct={panel.unit === ' ms' ? Math.min(v / 3, 100) : v}/>
@@ -503,20 +515,20 @@ export default function DailyReport() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
             <StatTile label="Total Interfaces" value={d.interfaces.total} color="#00d4ff"/>
             <StatTile label="Up"   value={d.interfaces.up}   color="#00ff88"/>
-            <StatTile label="Down" value={d.interfaces.down} color={d.interfaces.down > 0 ? '#ff3366' : '#8899bb'}/>
+            <StatTile label="Down" value={d.interfaces.down} color={d.interfaces.down > 0 ? '#ff3366' : 'var(--t-muted, #8899bb)'}/>
           </div>
 
           {/* High traffic */}
           <div className="mb-4">
-            <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#667799' }}>High-Utilisation Interfaces (Top 10 by Traffic)</div>
+            <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--t-muted, #667799)' }}>High-Utilisation Interfaces (Top 10 by Traffic)</div>
             {d.interfaces.high_traffic.length === 0
-              ? <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Data Not Available</div>
+              ? <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
               : <div className="overflow-x-auto">
                   <table className="w-full" style={{ minWidth: 520 }}>
                     <thead>
                       <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
                         {['Interface','Device','Status','Traffic In','Traffic Out','Speed'].map(h => (
-                          <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: '#8899bb' }}>{h}</th>
+                          <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -524,11 +536,11 @@ export default function DailyReport() {
                       {d.interfaces.high_traffic.map((iface, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.05)' }}>
                           <td className="px-3 py-2 font-mono text-xs" style={{ color: '#00d4ff' }}>{iface.name}</td>
-                          <td className="px-3 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>{iface.hostname}</td>
+                          <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{iface.hostname}</td>
                           <td className="px-3 py-2"><span style={statusStyle(iface.status)} className="font-mono text-xs">{iface.status.toUpperCase()}</span></td>
-                          <td className="px-3 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>{fmtBytes(iface.traffic_in)}</td>
-                          <td className="px-3 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>{fmtBytes(iface.traffic_out)}</td>
-                          <td className="px-3 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>{iface.speed ?? '—'}</td>
+                          <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{fmtBytes(iface.traffic_in)}</td>
+                          <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{fmtBytes(iface.traffic_out)}</td>
+                          <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{iface.speed ?? '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -570,22 +582,22 @@ export default function DailyReport() {
           <SectionTitle icon="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" title="4. Alerts & Events" subtitle="Alert summary for the last 24 hours"/>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mb-5">
             <StatTile label="Total Alerts"   value={d.alerts.total_alerts_24h} color="#00d4ff"/>
-            <StatTile label="Critical" value={d.alerts.critical} color={d.alerts.critical > 0 ? '#ff3366' : '#8899bb'}/>
-            <StatTile label="High"     value={d.alerts.high}     color={d.alerts.high > 0     ? '#ff6644' : '#8899bb'}/>
-            <StatTile label="Warning"  value={d.alerts.warning}  color={d.alerts.warning > 0  ? '#ffaa00' : '#8899bb'}/>
+            <StatTile label="Critical" value={d.alerts.critical} color={d.alerts.critical > 0 ? '#ff3366' : 'var(--t-muted, #8899bb)'}/>
+            <StatTile label="High"     value={d.alerts.high}     color={d.alerts.high > 0     ? '#ff6644' : 'var(--t-muted, #8899bb)'}/>
+            <StatTile label="Warning"  value={d.alerts.warning}  color={d.alerts.warning > 0  ? '#ffaa00' : 'var(--t-muted, #8899bb)'}/>
             <StatTile label="Resolved" value={d.alerts.resolved} color="#00ff88"/>
-            <StatTile label="Open"     value={d.alerts.open}     color={d.alerts.open > 0     ? '#ffaa00' : '#8899bb'}/>
+            <StatTile label="Open"     value={d.alerts.open}     color={d.alerts.open > 0     ? '#ffaa00' : 'var(--t-muted, #8899bb)'}/>
           </div>
 
           {/* Recent alerts table */}
           {d.alerts.recent_alerts.length > 0 ? (
             <div className="overflow-x-auto mb-4">
-              <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#667799' }}>Recent Alerts (Last 20)</div>
+              <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--t-muted, #667799)' }}>Recent Alerts (Last 20)</div>
               <table className="w-full" style={{ minWidth: 600 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
                     {['Severity','Title','Device','Status','Time'].map(h => (
-                      <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: '#8899bb' }}>{h}</th>
+                      <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -593,44 +605,44 @@ export default function DailyReport() {
                   {d.alerts.recent_alerts.map((a, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.05)' }}>
                       <td className="px-3 py-2"><SevBadge sev={a.severity}/></td>
-                      <td className="px-3 py-2 font-mono text-xs max-w-xs truncate" style={{ color: '#c8d8ee' }}>{a.title}</td>
-                      <td className="px-3 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>{a.hostname}</td>
+                      <td className="px-3 py-2 font-mono text-xs max-w-xs truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{a.title}</td>
+                      <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{a.hostname}</td>
                       <td className="px-3 py-2 font-mono text-xs" style={{ color: a.status === 'resolved' ? '#00ff88' : '#ffaa00' }}>{a.status}</td>
-                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{ts(a.created_at)}</td>
+                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{ts(a.created_at)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           ) : (
-            <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Data Not Available</div>
+            <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
           )}
 
           {/* Events summary */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#667799' }}>Event Types (24h) — Total: {d.alerts.total_events_24h}</div>
+              <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--t-muted, #667799)' }}>Event Types (24h) — Total: {d.alerts.total_events_24h}</div>
               {Object.entries(d.alerts.event_types).length > 0
                 ? <div className="space-y-1.5">
                     {Object.entries(d.alerts.event_types).map(([type, count]) => (
                       <div key={type} className="flex items-center justify-between font-mono text-xs">
-                        <span style={{ color: '#c8d8ee' }}>{type.replace(/_/g, ' ')}</span>
+                        <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{type.replace(/_/g, ' ')}</span>
                         <span className="px-2 py-0.5 rounded" style={{ background: 'rgba(0,212,255,0.1)', color: '#00d4ff' }}>{count}</span>
                       </div>
                     ))}
                   </div>
-                : <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No events</div>
+                : <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No events</div>
               }
             </div>
             <div>
-              <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#667799' }}>Top Alert-Generating Devices</div>
+              <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--t-muted, #667799)' }}>Top Alert-Generating Devices</div>
               {d.alerts.top_alert_devices.length > 0
                 ? <DeviceTable rows={d.alerts.top_alert_devices} cols={[
                     { key: 'hostname', label: 'Device' },
                     { key: 'ip',      label: 'IP' },
                     { key: 'count',   label: 'Alerts', render: r => <span style={{ color: '#ff3366' }}>{r.count}</span> },
                   ]}/>
-                : <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Data Not Available</div>
+                : <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
               }
             </div>
           </div>
@@ -645,7 +657,7 @@ export default function DailyReport() {
           />
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
             <StatTile label="Total Changes"  value={d.incidents.total_status_changes} color="#00d4ff"/>
-            <StatTile label="Went Offline"   value={d.incidents.went_offline}          color={d.incidents.went_offline > 0 ? '#ff3366' : '#8899bb'}/>
+            <StatTile label="Went Offline"   value={d.incidents.went_offline}          color={d.incidents.went_offline > 0 ? '#ff3366' : 'var(--t-muted, #8899bb)'}/>
             <StatTile label="Came Online"    value={d.incidents.came_online}           color="#00ff88"/>
           </div>
 
@@ -655,19 +667,19 @@ export default function DailyReport() {
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
                     {['Device','IP','Previous Status','New Status','Reason','Time'].map(h => (
-                      <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: '#8899bb' }}>{h}</th>
+                      <th key={h} className="text-left px-3 py-2 font-mono text-[10px] uppercase" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {d.incidents.changes.map((c, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.05)' }}>
-                      <td className="px-3 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>{c.hostname}</td>
-                      <td className="px-3 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>{c.ip}</td>
+                      <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{c.hostname}</td>
+                      <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{c.ip}</td>
                       <td className="px-3 py-2 font-mono text-xs" style={statusStyle(c.old_status ?? '')}>{c.old_status ?? '—'}</td>
                       <td className="px-3 py-2 font-mono text-xs" style={statusStyle(c.new_status)}>{c.new_status}</td>
-                      <td className="px-3 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>{c.reason ?? '—'}</td>
-                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{ts(c.timestamp)}</td>
+                      <td className="px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{c.reason ?? '—'}</td>
+                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{ts(c.timestamp)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -694,16 +706,16 @@ export default function DailyReport() {
             <div>
               <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#ff6644' }}>Top CPU Usage</div>
               {d.top_performers.top_cpu.length === 0
-                ? <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Data Not Available</div>
+                ? <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
                 : <div className="space-y-2.5">
                     {d.top_performers.top_cpu.map((r, i) => (
                       <div key={i}>
                         <div className="flex justify-between font-mono text-[10px] mb-0.5">
-                          <span className="truncate max-w-[130px]" style={{ color: '#c8d8ee' }}>{r.hostname}</span>
+                          <span className="truncate max-w-[130px]" style={{ color: 'var(--t-text, #c8d8ee)' }}>{r.hostname}</span>
                           <span style={{ color: r.avg_value! > 80 ? '#ff3366' : '#ffaa00' }}>{r.avg_value?.toFixed(1)}%</span>
                         </div>
                         <MiniBar pct={r.avg_value ?? 0} color="#ff6644"/>
-                        <div className="font-mono text-[9px] mt-0.5" style={{ color: '#556677' }}>Max: {r.max_value?.toFixed(1)}% — {r.ip}</div>
+                        <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--t-muted, #556677)' }}>Max: {r.max_value?.toFixed(1)}% — {r.ip}</div>
                       </div>
                     ))}
                   </div>
@@ -714,16 +726,16 @@ export default function DailyReport() {
             <div>
               <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#b366ff' }}>Top Memory Usage</div>
               {d.top_performers.top_memory.length === 0
-                ? <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Data Not Available</div>
+                ? <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
                 : <div className="space-y-2.5">
                     {d.top_performers.top_memory.map((r, i) => (
                       <div key={i}>
                         <div className="flex justify-between font-mono text-[10px] mb-0.5">
-                          <span className="truncate max-w-[130px]" style={{ color: '#c8d8ee' }}>{r.hostname}</span>
+                          <span className="truncate max-w-[130px]" style={{ color: 'var(--t-text, #c8d8ee)' }}>{r.hostname}</span>
                           <span style={{ color: r.avg_value! > 85 ? '#ff3366' : '#b366ff' }}>{r.avg_value?.toFixed(1)}%</span>
                         </div>
                         <MiniBar pct={r.avg_value ?? 0} color="#b366ff"/>
-                        <div className="font-mono text-[9px] mt-0.5" style={{ color: '#556677' }}>Max: {r.max_value?.toFixed(1)}% — {r.ip}</div>
+                        <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--t-muted, #556677)' }}>Max: {r.max_value?.toFixed(1)}% — {r.ip}</div>
                       </div>
                     ))}
                   </div>
@@ -734,16 +746,16 @@ export default function DailyReport() {
             <div>
               <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#00d4ff' }}>Top Latency</div>
               {d.top_performers.top_latency.length === 0
-                ? <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Data Not Available</div>
+                ? <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
                 : <div className="space-y-2.5">
                     {d.top_performers.top_latency.map((r, i) => (
                       <div key={i}>
                         <div className="flex justify-between font-mono text-[10px] mb-0.5">
-                          <span className="truncate max-w-[130px]" style={{ color: '#c8d8ee' }}>{r.hostname}</span>
+                          <span className="truncate max-w-[130px]" style={{ color: 'var(--t-text, #c8d8ee)' }}>{r.hostname}</span>
                           <span style={{ color: r.avg_value! > 100 ? '#ff3366' : '#00d4ff' }}>{ms(r.avg_value)}</span>
                         </div>
                         <MiniBar pct={Math.min((r.avg_value ?? 0) / 3, 100)} color="#00d4ff"/>
-                        <div className="font-mono text-[9px] mt-0.5" style={{ color: '#556677' }}>Max: {ms(r.max_value)} — {r.ip}</div>
+                        <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--t-muted, #556677)' }}>Max: {ms(r.max_value)} — {r.ip}</div>
                       </div>
                     ))}
                   </div>
@@ -754,7 +766,7 @@ export default function DailyReport() {
             <div>
               <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#ff3366' }}>Max Downtime</div>
               {d.top_performers.max_downtime.length === 0
-                ? <div className="font-mono text-xs py-2" style={{ color: '#8899bb' }}>No downtime recorded ✓</div>
+                ? <div className="font-mono text-xs py-2" style={{ color: 'var(--t-muted, #8899bb)' }}>No downtime recorded ✓</div>
                 : <DeviceTable rows={d.top_performers.max_downtime} cols={[
                     { key: 'hostname', label: 'Device' },
                     { key: 'ip',       label: 'IP' },
@@ -767,7 +779,7 @@ export default function DailyReport() {
             <div>
               <div className="font-mono text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: '#ffaa00' }}>Most Alerts</div>
               {d.top_performers.max_alerts.length === 0
-                ? <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Data Not Available</div>
+                ? <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Data Not Available</div>
                 : <DeviceTable rows={d.top_performers.max_alerts} cols={[
                     { key: 'hostname', label: 'Device' },
                     { key: 'ip',       label: 'IP' },
@@ -794,12 +806,12 @@ export default function DailyReport() {
               <HealthGauge score={d.daily_summary.health_score} label={d.daily_summary.overall_health}/>
               <div className="w-full space-y-2">
                 <div className="flex items-center justify-between font-mono text-xs">
-                  <span style={{ color: '#8899bb' }}>Availability</span>
+                  <span style={{ color: 'var(--t-muted, #8899bb)' }}>Availability</span>
                   <span style={{ color: '#00d4ff' }}>{pct(d.daily_summary.availability_pct)}</span>
                 </div>
                 <MiniBar pct={d.daily_summary.availability_pct} color="#00d4ff"/>
                 <div className="flex items-center justify-between font-mono text-xs mt-1">
-                  <span style={{ color: '#8899bb' }}>Health Score</span>
+                  <span style={{ color: 'var(--t-muted, #8899bb)' }}>Health Score</span>
                   <span style={{ color: healthColor }}>{d.daily_summary.health_score} / 100</span>
                 </div>
                 <MiniBar pct={d.daily_summary.health_score} color={healthColor}/>
@@ -808,7 +820,7 @@ export default function DailyReport() {
 
             {/* Issues list */}
             <div>
-              <div className="font-mono text-[10px] font-semibold mb-3 uppercase tracking-wider" style={{ color: '#667799' }}>Issues Observed</div>
+              <div className="font-mono text-[10px] font-semibold mb-3 uppercase tracking-wider" style={{ color: 'var(--t-muted, #667799)' }}>Issues Observed</div>
               <div className="space-y-2">
                 {d.daily_summary.issues.map((issue, i) => {
                   const isGood = issue.startsWith('No major')
@@ -819,7 +831,7 @@ export default function DailyReport() {
                         border: `1px solid ${isGood ? 'rgba(0,255,136,0.2)' : 'rgba(255,170,0,0.2)'}`,
                       }}>
                       <span style={{ color: isGood ? '#00ff88' : '#ffaa00', marginTop: 1 }}>{isGood ? '✓' : '⚠'}</span>
-                      <span style={{ color: '#c8d8ee' }}>{issue}</span>
+                      <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{issue}</span>
                     </div>
                   )
                 })}
@@ -828,7 +840,7 @@ export default function DailyReport() {
 
             {/* Devices needing attention */}
             <div>
-              <div className="font-mono text-[10px] font-semibold mb-3 uppercase tracking-wider" style={{ color: '#667799' }}>Devices Needing Attention</div>
+              <div className="font-mono text-[10px] font-semibold mb-3 uppercase tracking-wider" style={{ color: 'var(--t-muted, #667799)' }}>Devices Needing Attention</div>
               {d.daily_summary.devices_needing_attention.length === 0
                 ? <div className="font-mono text-xs py-2 px-3 rounded"
                     style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)', color: '#00ff88' }}>
@@ -839,12 +851,12 @@ export default function DailyReport() {
                       <div key={i} className="flex items-center justify-between p-2 rounded"
                         style={{ background: 'rgba(255,51,102,0.06)', border: '1px solid rgba(255,51,102,0.2)' }}>
                         <div>
-                          <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{dev.hostname}</div>
-                          <div className="font-mono text-[9px]" style={{ color: '#8899bb' }}>{dev.ip}</div>
+                          <div className="font-mono text-xs font-semibold" style={{ color: 'var(--t-text, #c8d8ee)' }}>{dev.hostname}</div>
+                          <div className="font-mono text-[9px]" style={{ color: 'var(--t-muted, #8899bb)' }}>{dev.ip}</div>
                         </div>
                         <div className="text-right">
                           <span style={statusStyle(dev.status ?? '')} className="font-mono text-[10px]">{dev.status}</span>
-                          <div className="font-mono text-[9px] mt-0.5" style={{ color: '#8899bb' }}>{dev.reason}</div>
+                          <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{dev.reason}</div>
                         </div>
                       </div>
                     ))}
@@ -872,7 +884,7 @@ export default function DailyReport() {
                   <div className="shrink-0 mt-0.5">
                     <SevBadge sev={rec.priority}/>
                   </div>
-                  <div className="font-mono text-xs leading-relaxed" style={{ color: '#c8d8ee' }}>{rec.message}</div>
+                  <div className="font-mono text-xs leading-relaxed" style={{ color: 'var(--t-text, #c8d8ee)' }}>{rec.message}</div>
                 </div>
               )
             })}
@@ -881,10 +893,10 @@ export default function DailyReport() {
           {/* Footer */}
           <div className="mt-6 pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2"
             style={{ borderTop: '1px solid rgba(0,212,255,0.1)' }}>
-            <div className="font-mono text-[10px]" style={{ color: '#556677' }}>
+            <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>
               Generated by NMS Pro · Agnigate Networks · {ts(d.generated_at)}
             </div>
-            <div className="font-mono text-[10px]" style={{ color: '#556677' }}>
+            <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>
               Report Period: {d.period}
             </div>
           </div>

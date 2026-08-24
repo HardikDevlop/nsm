@@ -194,7 +194,7 @@ export default function DeviceMonitoringList() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">DEVICE MONITORING</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {devices.length} device{devices.length !== 1 ? 's' : ''} in database · {totalMonitored} under monitoring
           </p>
         </div>
@@ -229,19 +229,19 @@ export default function DeviceMonitoringList() {
       {/* Summary cards */}
       <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: '#8899bb' }}>TOTAL DEVICES</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>TOTAL DEVICES</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00d4ff' }}>{devices.length}</div>
         </GlassCard>
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: '#8899bb' }}>MONITORED</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>MONITORED</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00d4ff' }}>{totalMonitored}</div>
         </GlassCard>
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: '#8899bb' }}>ONLINE</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>ONLINE</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00ff88' }}>{totalUp}</div>
         </GlassCard>
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: '#8899bb' }}>OFFLINE</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>OFFLINE</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#ff3366' }}>{totalDown}</div>
         </GlassCard>
       </div>
@@ -250,9 +250,9 @@ export default function DeviceMonitoringList() {
       <GlassCard className="p-4 md:p-5">
         <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-4">ALL DEVICES</div>
         {loading ? (
-          <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading devices…</div>
+          <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading devices…</div>
         ) : devices.length === 0 ? (
-          <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+          <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
             No devices in database. Run a discovery and add devices first.
           </div>
         ) : (
@@ -265,7 +265,7 @@ export default function DeviceMonitoringList() {
               const liveLastCheck = live ? (live.last_check as string | null) : null
               const isBusy = !!actionInProgress[device.ip_address]
 
-              let statusColor = '#8899bb'
+              let statusColor = 'var(--t-muted, #8899bb)'
               let statusLabel = 'NOT MONITORED'
               if (isMonitored) {
                 if (liveStatus === 'up') { statusColor = '#00ff88'; statusLabel = 'UP' }
@@ -284,10 +284,10 @@ export default function DeviceMonitoringList() {
 
                   {/* Device info */}
                   <div className="flex-1 min-w-0 w-full sm:w-auto">
-                    <div className="font-display text-sm tracking-wider" style={{ color: '#c8d8ee' }}>
+                    <div className="font-display text-sm tracking-wider" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                       {device.hostname || 'Unknown'}
                     </div>
-                    <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+                    <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                       {device.ip_address}
                       {device.mac_address ? ` · ${device.mac_address}` : ''}
                     </div>
@@ -302,7 +302,7 @@ export default function DeviceMonitoringList() {
                         </div>
                       ) : null}
                       {liveLastCheck ? (
-                        <div className="font-mono text-xs" style={{ color: '#667799' }}>
+                        <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>
                           {formatTime(liveLastCheck)}
                         </div>
                       ) : null}

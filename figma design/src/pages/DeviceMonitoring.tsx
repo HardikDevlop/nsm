@@ -17,7 +17,7 @@ import {
   type DeviceRecord,
 } from '../lib/api'
 
-const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 12, color: '#c8d8ee' }
+const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--t-text, #c8d8ee)' }
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -55,6 +55,8 @@ export default function DeviceMonitoring() {
   const metricPageSize = 25
   const statusPageSize = 25
   const cleanupRef = useRef<(() => void) | null>(null)
+  const deviceRef = useRef<DeviceRecord | null>(null)
+  const monitoringRef = useRef(false)
 
   // Load initial device data
   const loadDevice = useCallback(async () => {
@@ -73,7 +75,7 @@ export default function DeviceMonitoring() {
   const loadMetrics = useCallback(async () => {
     if (!deviceId) return
     try {
-      const data = await listDeviceMetrics(Number(deviceId))
+      const data = await listDeviceMetrics(Number(deviceId), { limit: 200 })
       setMetrics(data)
     } catch { /* silent */ }
   }, [deviceId])
@@ -95,6 +97,14 @@ export default function DeviceMonitoring() {
     } catch { /* silent */ }
   }, [])
 
+  useEffect(() => {
+    deviceRef.current = device
+  }, [device])
+
+  useEffect(() => {
+    monitoringRef.current = isMonitoring
+  }, [isMonitoring])
+
   // Initial load
   useEffect(() => {
     let ignore = false
@@ -114,8 +124,9 @@ export default function DeviceMonitoring() {
       // Check if this device is already being monitored (started from list page or elsewhere)
       try {
         const status = await getMonitoringStatus()
-        if (cancelled || !device) return
-        const match = status.devices.find(d => String(d.device_id) === deviceId || String(d.ip) === device.ip_address)
+        const currentDevice = deviceRef.current
+        if (cancelled || !currentDevice) return
+        const match = status.devices.find(d => String(d.device_id) === deviceId || String(d.ip) === currentDevice.ip_address)
         if (match) {
           setIsMonitoring(true)
           setLiveStatus(String(match.status ?? 'unknown'))
@@ -132,8 +143,9 @@ export default function DeviceMonitoring() {
           if (cancelled) return
           const data = event.data as { summary: Record<string, unknown>; devices: Array<Record<string, unknown>> }
           const allDevices = data.devices
-          if (!device) return
-          const match = allDevices.find(d => String(d.device_id) === deviceId || String(d.ip) === device.ip_address)
+          const currentDevice = deviceRef.current
+          if (!currentDevice) return
+          const match = allDevices.find(d => String(d.device_id) === deviceId || String(d.ip) === currentDevice.ip_address)
           if (match) {
             // Device is being monitored — update live data
             setIsMonitoring(true)
@@ -142,7 +154,7 @@ export default function DeviceMonitoring() {
             setLiveLastCheck(match.last_check as string | null)
             const hist = match.history as Array<{ time: string; status: string; rtt_ms: number | null }> | undefined
             if (hist) setLiveHistory(hist)
-          } else if (isMonitoring) {
+          } else if (monitoringRef.current) {
             // Device was being monitored but is no longer in the list — stopped externally
             setIsMonitoring(false)
             setLiveStatus(null)
@@ -162,11 +174,12 @@ export default function DeviceMonitoring() {
         cleanupRef.current = null
       }
     }
-  }, [device, deviceId, isMonitoring])
+  }, [device, deviceId])
 
   // Auto-refresh metrics every 15s
   useEffect(() => {
     const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
       void loadMetrics()
       void loadStatusHistory()
     }, 15000)
@@ -262,7 +275,7 @@ export default function DeviceMonitoring() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <h1 className="font-display font-bold text-lg sm:text-xl tracking-widest neon-cyan">DEVICE MONITORING</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {device ? `${device.hostname} · ${device.ip_address}` : 'Loading device details…'}
           </p>
         </div>
@@ -292,13 +305,13 @@ export default function DeviceMonitoring() {
                   </span>
                 </div>
                 <div>
-                  <div className="font-display text-sm tracking-wide" style={{ color: '#c8d8ee' }}>{device.hostname}</div>
-                  <div className="font-mono text-xs" style={{ color: '#8899bb' }}>{device.ip_address}</div>
+                  <div className="font-display text-sm tracking-wide" style={{ color: 'var(--t-text, #c8d8ee)' }}>{device.hostname}</div>
+                  <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address}</div>
                   {liveRtt !== null && liveRtt !== undefined ? (
                     <div className="font-mono text-xs mt-0.5" style={{ color: '#00d4ff' }}>RTT: {liveRtt.toFixed(1)}ms</div>
                   ) : null}
                   {liveLastCheck ? (
-                    <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Last check: {formatTimestamp(liveLastCheck)}</div>
+                    <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Last check: {formatTimestamp(liveLastCheck)}</div>
                   ) : null}
                 </div>
               </div>
@@ -309,7 +322,7 @@ export default function DeviceMonitoring() {
                     onClick={handleStartMonitoring}
                     disabled={startingMonitor}
                     className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition disabled:opacity-60"
-                    style={{ background: 'rgba(0,255,136,0.16)', border: '1px solid rgba(0,255,136,0.3)', color: '#c8d8ee' }}
+                    style={{ background: 'rgba(0,255,136,0.16)', border: '1px solid rgba(0,255,136,0.3)', color: 'var(--t-text, #c8d8ee)' }}
                   >
                     {startingMonitor ? 'STARTING…' : 'START MONITORING'}
                   </button>
@@ -319,7 +332,7 @@ export default function DeviceMonitoring() {
                   <button
                     onClick={handleStopMonitoring}
                     className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition"
-                    style={{ background: 'rgba(255,51,102,0.16)', border: '1px solid rgba(255,51,102,0.3)', color: '#c8d8ee' }}
+                    style={{ background: 'rgba(255,51,102,0.16)', border: '1px solid rgba(255,51,102,0.3)', color: 'var(--t-text, #c8d8ee)' }}
                   >
                     STOP MONITORING
                   </button>
@@ -331,17 +344,17 @@ export default function DeviceMonitoring() {
             {/* Device Overview */}
             <GlassCard className="p-3 md:p-4">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">DEVICE OVERVIEW</div>
-              <div className="space-y-1.5 font-mono text-xs" style={{ color: '#c8d8ee' }}>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Hostname</span><span>{device.hostname}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>IP Address</span><span>{device.ip_address}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>MAC Address</span><span>{device.mac_address || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Status</span><span style={{ color: isUp ? '#00ff88' : isDown ? '#ff3366' : '#ffaa00' }}>{device.status}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Monitoring</span><span>{device.monitoring_status ? 'Enabled' : 'Disabled'}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Model</span><span>{device.model || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Serial</span><span>{device.serial_number || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Firmware</span><span>{device.firmware_version || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Last Seen</span><span>{formatTimestamp(device.last_seen)}</span></div>
-                <div className="flex justify-between"><span style={{ color: '#8899bb' }}>Created</span><span>{formatTimestamp(device.created_at)}</span></div>
+              <div className="space-y-1.5 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Hostname</span><span>{device.hostname}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>IP Address</span><span>{device.ip_address}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>MAC Address</span><span>{device.mac_address || '—'}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Status</span><span style={{ color: isUp ? '#00ff88' : isDown ? '#ff3366' : '#ffaa00' }}>{device.status}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Monitoring</span><span>{device.monitoring_status ? 'Enabled' : 'Disabled'}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Model</span><span>{device.model || '—'}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Serial</span><span>{device.serial_number || '—'}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Firmware</span><span>{device.firmware_version || '—'}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Last Seen</span><span>{formatTimestamp(device.last_seen)}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Created</span><span>{formatTimestamp(device.created_at)}</span></div>
               </div>
             </GlassCard>
 
@@ -352,42 +365,42 @@ export default function DeviceMonitoring() {
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <div className="flex-1">
-                      <div className="font-mono text-xs mb-0.5" style={{ color: '#8899bb' }}>AVAILABILITY</div>
+                      <div className="font-mono text-xs mb-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>AVAILABILITY</div>
                       <div className="font-display text-xl font-bold" style={{ color: summary.availability_pct >= 99 ? '#00ff88' : summary.availability_pct >= 95 ? '#ffaa00' : '#ff3366' }}>
                         {summary.availability_pct}%
                       </div>
                     </div>
                     <div className="h-8 w-px" style={{ background: 'rgba(0,212,255,0.15)' }} />
                     <div className="flex-1">
-                      <div className="font-mono text-xs mb-0.5" style={{ color: '#8899bb' }}>CHANGES</div>
+                      <div className="font-mono text-xs mb-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>CHANGES</div>
                       <div className="font-display text-lg font-bold" style={{ color: '#00d4ff' }}>{summary.total_status_changes}</div>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="rounded p-2" style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.15)' }}>
-                      <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Uptime</div>
+                      <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Uptime</div>
                       <div className="font-mono text-sm" style={{ color: '#00ff88' }}>{formatDuration(summary.uptime_seconds)}</div>
                     </div>
                     <div className="rounded p-2" style={{ background: 'rgba(255,51,102,0.06)', border: '1px solid rgba(255,51,102,0.15)' }}>
-                      <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Downtime</div>
+                      <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Downtime</div>
                       <div className="font-mono text-sm" style={{ color: '#ff3366' }}>{formatDuration(summary.downtime_seconds)}</div>
                     </div>
                   </div>
-                  <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+                  <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                     {summary.total_pings} pings • {summary.total_hours}h window
                   </div>
                   {summary.last_status_change ? (
-                    <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+                    <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                       Last: {formatTimestamp(summary.last_status_change)}
                     </div>
                   ) : null}
                 </div>
               ) : (
-                <div className="space-y-1.5 font-mono text-xs" style={{ color: '#8899bb' }}>
+                <div className="space-y-1.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                   <div className="flex justify-between"><span>Uptime</span><span>{formatDuration(device.uptime_seconds)}</span></div>
                   <div className="flex justify-between"><span>Downtime</span><span>{formatDuration(device.downtime_seconds)}</span></div>
                   <div className="flex justify-between"><span>Last Change</span><span>{formatTimestamp(device.last_status_change)}</span></div>
-                  <div className="mt-2" style={{ color: '#8899bb' }}>Start monitoring for stats.</div>
+                  <div className="mt-2" style={{ color: 'var(--t-muted, #8899bb)' }}>Start monitoring for stats.</div>
                 </div>
               )}
             </GlassCard>
@@ -396,16 +409,16 @@ export default function DeviceMonitoring() {
           {/* Latency Chart */}
           <GlassCard className="p-4">
             <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">LATENCY & PACKET LOSS</div>
-            <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>5-min chunks • Last 5+ buckets • Auto-refresh 15s</div>
+            <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>5-min chunks • Last 5+ buckets • Auto-refresh 15s</div>
             {chartData.length === 0 ? (
-              <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No data yet. Start monitoring to see trends.</div>
+              <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No data yet. Start monitoring to see trends.</div>
             ) : (
               <ResponsiveContainer width="100%" height={180}>
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,212,255,0.08)" />
-                  <XAxis dataKey="time" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                  <YAxis yAxisId="left" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fill: '#8899bb', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <XAxis dataKey="time" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis yAxisId="left" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} domain={[0, 100]} />
                   <Tooltip contentStyle={ttStyle} />
                   <Line yAxisId="left" type="monotone" dataKey="latency" stroke="#00d4ff" strokeWidth={1.5} dot={false} name="Latency (ms)" />
                   <Line yAxisId="right" type="monotone" dataKey="packet_loss" stroke="#ff3366" strokeWidth={1} dot={false} name="Packet Loss (%)" strokeDasharray="4 2" />
@@ -419,19 +432,19 @@ export default function DeviceMonitoring() {
             {/* Live Ping History (from SSE) */}
             <GlassCard className="p-3 md:p-4">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">LIVE PING HISTORY</div>
-              <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>Last 20 pings from real-time monitor</div>
+              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>Last 20 pings from real-time monitor</div>
               {liveHistory.length === 0 ? (
-                <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No live data. Start monitoring for real-time pings.</div>
+                <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No live data. Start monitoring for real-time pings.</div>
               ) : (
                 <div className="space-y-1 max-h-[320px] overflow-y-auto">
                   {liveHistory.slice().reverse().map((entry, i) => (
                     <div key={i} className="flex items-center justify-between rounded p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                       <div className="flex items-center gap-2">
                         <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.status === 'up' ? '#00ff88' : '#ff3366' }} />
-                        <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{entry.status === 'up' ? 'UP' : 'DN'}</span>
+                        <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{entry.status === 'up' ? 'UP' : 'DN'}</span>
                       </div>
-                      <span className="font-mono text-xs" style={{ color: '#8899bb' }}>{entry.rtt_ms !== null ? `${entry.rtt_ms.toFixed(1)}ms` : 'timeout'}</span>
-                      <span className="font-mono text-xs" style={{ color: '#667799' }}>{formatTimestamp(entry.time)}</span>
+                      <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{entry.rtt_ms !== null ? `${entry.rtt_ms.toFixed(1)}ms` : 'timeout'}</span>
+                      <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>{formatTimestamp(entry.time)}</span>
                     </div>
                   ))}
                 </div>
@@ -441,9 +454,9 @@ export default function DeviceMonitoring() {
             {/* Status Change History */}
             <GlassCard className="p-3 md:p-4">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">STATUS CHANGE HISTORY</div>
-              <div className="font-mono text-xs mb-3" style={{ color: '#8899bb' }}>Up/down transitions from database</div>
+              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>Up/down transitions from database</div>
               {statusHistory.length === 0 ? (
-                <div className="font-mono text-xs" style={{ color: '#8899bb' }}>No status changes recorded yet.</div>
+                <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No status changes recorded yet.</div>
               ) : (
                 <>
                   <div className="space-y-1 max-h-[280px] overflow-y-auto">
@@ -451,20 +464,20 @@ export default function DeviceMonitoring() {
                       <div key={entry.id} className="flex items-center justify-between rounded p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                         <div className="flex items-center gap-2">
                           <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.new_status === 'online' ? '#00ff88' : '#ff3366' }} />
-                          <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>
+                          <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                             {entry.old_status ?? '?'} → {entry.new_status}
                           </span>
                         </div>
-                        <span className="font-mono text-xs" style={{ color: '#667799' }}>{formatTimestamp(entry.timestamp)}</span>
+                        <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>{formatTimestamp(entry.timestamp)}</span>
                       </div>
                     ))}
                   </div>
                   {totalStatusPages > 1 && (
                     <div className="mt-2 flex items-center justify-between">
-                      <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Page {statusPage} of {totalStatusPages}</div>
+                      <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Page {statusPage} of {totalStatusPages}</div>
                       <div className="flex gap-1">
-                        <button onClick={() => setStatusPage(p => Math.max(1, p - 1))} disabled={statusPage === 1} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' }}>←</button>
-                        <button onClick={() => setStatusPage(p => Math.min(totalStatusPages, p + 1))} disabled={statusPage >= totalStatusPages} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' }}>→</button>
+                        <button onClick={() => setStatusPage(p => Math.max(1, p - 1))} disabled={statusPage === 1} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: 'var(--t-text, #c8d8ee)' }}>←</button>
+                        <button onClick={() => setStatusPage(p => Math.min(totalStatusPages, p + 1))} disabled={statusPage >= totalStatusPages} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: 'var(--t-text, #c8d8ee)' }}>→</button>
                       </div>
                     </div>
                   )}
@@ -475,7 +488,7 @@ export default function DeviceMonitoring() {
 
         </>
       ) : (
-        !error && <GlassCard className="p-5"><div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading device data…</div></GlassCard>
+        !error && <GlassCard className="p-5"><div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading device data…</div></GlassCard>
       )}
     </div>
   )

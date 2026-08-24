@@ -8,7 +8,7 @@ import {
 } from '../lib/api'
 
 const inputStyle: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.04)',
+  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
   border: '1px solid var(--t-border-alpha)',
   color: 'var(--t-text)',
   outline: 'none',
@@ -186,7 +186,7 @@ export default function Vendors() {
             <div className="flex gap-2 justify-end">
               <button onClick={()=>setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all"
-                style={{ background:'rgba(255,255,255,0.05)',border:'1px solid var(--t-border-alpha)',color:'var(--t-muted)' }}>
+                style={{ background:'var(--t-border-light, rgba(255,255,255,0.05))',border:'1px solid var(--t-border-alpha)',color:'var(--t-muted)' }}>
                 Cancel
               </button>
               <button onClick={()=>void handleSubmit()} disabled={saving||!fName.trim()}

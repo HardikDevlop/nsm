@@ -5,9 +5,14 @@ import { useTheme } from './ThemeContext'
 import { listAlerts, recordPageView, type AlertRecord } from '../lib/api'
 
 const PAGE_VIEW_THROTTLE_MS = 30_000
+const ALERT_CACHE_KEY = 'nms.layout.alerts.v1'
+const ALERT_HIDDEN_KEY = 'nms.layout.hidden-alert-ids.v1'
+const ALERT_REFRESH_MS = 60_000
 
-const NotificationPanel = lazy(() => import('./NotificationPanel'))
-const ThemePicker = lazy(() => import('./ThemePicker'))
+const loadNotificationPanel = () => import('./NotificationPanel')
+const loadThemePicker = () => import('./ThemePicker')
+const NotificationPanel = lazy(loadNotificationPanel)
+const ThemePicker = lazy(loadThemePicker)
 
 export default function Layout() {
   const [notifOpen, setNotifOpen] = useState(false)
@@ -20,7 +25,46 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
+  const [hiddenAlertIds, setHiddenAlertIds] = useState<number[]>([])
   const showBack = location.pathname !== '/'
+
+  const persistAlerts = (nextAlerts: AlertRecord[]) => {
+    try {
+      window.sessionStorage.setItem(ALERT_CACHE_KEY, JSON.stringify({ alerts: nextAlerts }))
+    } catch {
+      // optional cache only
+    }
+  }
+
+  const persistHiddenAlertIds = (nextIds: number[]) => {
+    try {
+      window.sessionStorage.setItem(ALERT_HIDDEN_KEY, JSON.stringify({ ids: nextIds }))
+    } catch {
+      // optional cache only
+    }
+  }
+
+  useEffect(() => {
+    try {
+      const cached = window.sessionStorage.getItem(ALERT_CACHE_KEY)
+      if (!cached) return
+      const parsed = JSON.parse(cached) as { alerts?: AlertRecord[] }
+      if (Array.isArray(parsed.alerts)) setAlerts(parsed.alerts)
+    } catch {
+      // optional cache only
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      const cached = window.sessionStorage.getItem(ALERT_HIDDEN_KEY)
+      if (!cached) return
+      const parsed = JSON.parse(cached) as { ids?: number[] }
+      if (Array.isArray(parsed.ids)) setHiddenAlertIds(parsed.ids.filter(id => Number.isFinite(id)))
+    } catch {
+      // optional cache only
+    }
+  }, [])
 
   useEffect(() => {
     const key = `nms.pageview.${location.pathname}`
@@ -38,8 +82,11 @@ export default function Layout() {
       if (!mounted || inFlight || document.visibilityState !== 'visible') return
       inFlight = true
       try {
-        const nextAlerts = await listAlerts()
-        if (mounted) setAlerts(nextAlerts)
+        const nextAlerts = await listAlerts(undefined, { limit: 50 })
+        if (mounted) {
+          setAlerts(nextAlerts)
+          persistAlerts(nextAlerts)
+        }
       } catch {
         if (mounted) setAlerts([])
       } finally {
@@ -47,7 +94,7 @@ export default function Layout() {
       }
     }
     void loadAlerts()
-    const timer = window.setInterval(() => { void loadAlerts() }, 30000)
+    const timer = window.setInterval(() => { void loadAlerts() }, ALERT_REFRESH_MS)
     const onVisibilityChange = () => { if (document.visibilityState === 'visible') void loadAlerts() }
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
@@ -57,13 +104,45 @@ export default function Layout() {
     }
   }, [])
 
-  const panelAlerts = alerts.slice(0, 8).map(alert => ({
+  useEffect(() => {
+    const warm = () => {
+      void loadNotificationPanel().catch(() => undefined)
+      void loadThemePicker().catch(() => undefined)
+    }
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(warm, { timeout: 1500 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timer = window.setTimeout(warm, 800)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  const visiblePanelSource = alerts.filter(alert => !hiddenAlertIds.includes(alert.id))
+  const panelAlerts = visiblePanelSource.slice(0, 8).map(alert => ({
     id: alert.id,
     type: alert.severity,
     msg: alert.description || alert.title,
     time: new Date(alert.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   }))
-  const openAlertCount = alerts.filter(alert => alert.status !== 'resolved').length
+  const openAlertCount = visiblePanelSource.filter(alert => alert.status !== 'resolved').length
+
+  const handleDismissAlert = (id: number) => {
+    setHiddenAlertIds(current => {
+      if (current.includes(id)) return current
+      const nextIds = [...current, id]
+      persistHiddenAlertIds(nextIds)
+      return nextIds
+    })
+  }
+
+  const handleClearAllAlerts = () => {
+    const nextIds = visiblePanelSource.map(alert => alert.id)
+    setHiddenAlertIds(current => {
+      const merged = [...new Set([...current, ...nextIds])]
+      persistHiddenAlertIds(merged)
+      return merged
+    })
+  }
 
   useEffect(() => {
     const tick = () => setTime(new Date())
@@ -202,7 +281,13 @@ export default function Layout() {
       {/* Notification panel */}
       {notifOpen && (
         <Suspense fallback={null}>
-          <NotificationPanel alerts={panelAlerts} onClose={() => setNotifOpen(false)} onViewAll={() => { setNotifOpen(false); navigate('/alerts') }} />
+          <NotificationPanel
+            alerts={panelAlerts}
+            onClose={() => setNotifOpen(false)}
+            onViewAll={() => { setNotifOpen(false); navigate('/alerts') }}
+            onDismiss={handleDismissAlert}
+            onClearAll={handleClearAllAlerts}
+          />
         </Suspense>
       )}
 

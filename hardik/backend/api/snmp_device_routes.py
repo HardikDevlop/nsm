@@ -45,13 +45,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 
 from backend.database.session import get_db
 from backend.dependencies import get_current_user, require_permission
 from backend.models import Device, DeviceCredential, Event, Interface, Vendor, DeviceType
 from backend.models.identity import DeviceCapabilities, DeviceIdentity
-from backend.models.snmp import LatestInterface, MonitoringStatus
+from backend.models.snmp import DeviceInterface, LatestInterface, MonitoringStatus
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,33 @@ def _get_credentials(device_id: int, db: Session) -> DeviceCredential | None:
     return db.query(DeviceCredential).filter(
         DeviceCredential.device_id == device_id
     ).first()
+
+
+def _get_credentials_map(device_ids: list[int], db: Session) -> dict[int, DeviceCredential]:
+    if not device_ids:
+        return {}
+    rows = (
+        db.query(DeviceCredential)
+        .options(load_only(
+            DeviceCredential.id,
+            DeviceCredential.device_id,
+            DeviceCredential.snmp_version,
+            DeviceCredential.community_string,
+            DeviceCredential.username,
+            DeviceCredential.auth_protocol,
+            DeviceCredential.auth_password,
+            DeviceCredential.privacy_protocol,
+            DeviceCredential.privacy_password,
+            DeviceCredential.security_level,
+        ))
+        .filter(DeviceCredential.device_id.in_(device_ids))
+        .order_by(DeviceCredential.id.asc())
+        .all()
+    )
+    by_device_id: dict[int, DeviceCredential] = {}
+    for row in rows:
+        by_device_id.setdefault(row.device_id, row)
+    return by_device_id
 
 
 def _live_collect(device: Device, cred: DeviceCredential | None, domain: str | None = None) -> dict[str, Any]:
@@ -1618,10 +1645,36 @@ def get_snmp_polling_stats(device_id: int, db: Session = Depends(get_db), _: Any
 
 @router.get("/snmp/topology")
 def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool = Query(default=False), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
-    devices_q = db.query(Device).filter(Device.deleted_at.is_(None))
+    devices_q = (
+        db.query(Device)
+        .options(
+            load_only(
+                Device.id,
+                Device.hostname,
+                Device.ip_address,
+                Device.mac_address,
+                Device.model,
+                Device.status,
+                Device.deleted_at,
+                Device.device_type_id,
+                Device.vendor_id,
+            ),
+            joinedload(Device.vendor).load_only(Vendor.id, Vendor.vendor_name),
+            joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
+        )
+        .filter(Device.deleted_at.is_(None))
+    )
     if device_id:
         devices_q = devices_q.filter(Device.id == device_id)
     all_devices = devices_q.limit(200).all()
+    all_device_ids = [device.id for device in all_devices]
+    capability_map = {
+        row.device_id: row
+        for row in db.query(DeviceCapabilities)
+        .filter(DeviceCapabilities.device_id.in_(all_device_ids))
+        .all()
+    } if all_device_ids else {}
+    credentials_map = _get_credentials_map(all_device_ids, db)
     # Root from the default gateway first when one is known, otherwise fall
     # back to core/network infrastructure devices.
     identity_maps = _load_device_identity_maps(db, all_devices)
@@ -1637,7 +1690,7 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
     exact_gateway = next((d for d in all_devices if d.ip_address in ("192.168.1.0", "192.168.100.1")), None)
     d_list = [exact_gateway] if exact_gateway else gateway_devices[:1] or core_devices[:1] or all_devices[:1]
     if not refresh and d_list:
-        cached_cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d_list[0].id).first()
+        cached_cap = capability_map.get(d_list[0].id)
         cached_topology = ((cached_cap.capability_detail or {}).get("topology") or {}) if cached_cap else {}
         cached_data = cached_topology.get("data") or {}
         if cached_data.get("nodes") or cached_data.get("links"):
@@ -1648,6 +1701,36 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                 "cached": True,
                 "timestamp": cached_topology.get("timestamp"),
             }
+        # A normal page load must never fall through to a live SNMP walk.
+        # Return the DB inventory immediately while the explicit refresh action
+        # is allowed to collect and update topology data from the device.
+        inventory_nodes = []
+        for device in all_devices:
+            enriched = _enrich_topology_node(
+                {"id": str(device.id), "hostname": device.hostname, "ip_address": device.ip_address, "status": device.status},
+                device,
+                identity_maps,
+            )
+            inventory_nodes.append({
+                "id": str(device.id),
+                "hostname": enriched.get("hostname"),
+                "ip_address": enriched.get("ip_address"),
+                "status": device.status,
+                "type": enriched.get("device_type"),
+                "vendor": enriched.get("vendor"),
+                "model": enriched.get("model"),
+                "sys_name": enriched.get("sys_name"),
+                "sys_descr": enriched.get("sys_descr"),
+                "mac_address": enriched.get("mac_address"),
+                "display_name": enriched.get("display_name"),
+            })
+        return {
+            "devices": inventory_nodes,
+            "links": [],
+            "verified_only": True,
+            "cached": True,
+            "timestamp": None,
+        }
     nodes: dict[str, dict[str, Any]] = {}
     for d in d_list:
         enriched = _enrich_topology_node(
@@ -1673,7 +1756,7 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
     # Topology used to poll every device serially. A slow/unreachable device
     # therefore blocked the whole page behind SNMP timeout + retries. Fetch
     # credentials before starting workers and collect devices concurrently.
-    poll_targets = [(d, _get_credentials(d.id, db)) for d in d_list]
+    poll_targets = [(d, credentials_map.get(d.id)) for d in d_list]
     def collect_topology(target: tuple[Device, DeviceCredential | None]) -> tuple[Device, dict[str, Any]]:
         device, credential = target
         return device, _live_collect(device, credential, domain="topology")
@@ -1689,16 +1772,17 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
             # Persist only a successful topology result. An empty/failing
             # poll must not erase the last known graph.
             if topology.get("supported") and (data.get("nodes") or data.get("links")):
-                cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d.id).first()
+                cap = capability_map.get(d.id)
                 if cap is None:
                     cap = DeviceCapabilities(device_id=d.id, capability_detail={})
                     db.add(cap)
+                    capability_map[d.id] = cap
                 detail = dict(cap.capability_detail or {})
                 detail["topology"] = topology
                 cap.capability_detail = detail
                 db.flush()
             else:
-                cached = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d.id).first()
+                cached = capability_map.get(d.id)
                 data = ((cached.capability_detail or {}).get("topology") or {}).get("data") or {} if cached else {}
             topology_nodes = data.get("nodes", [])
             node_alias: dict[str, str] = {}
@@ -1740,7 +1824,7 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                     seen.add(key)
                     links.append({**link, "verified": True})
           except Exception:
-            cached = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == target_device.id).first()
+            cached = capability_map.get(target_device.id)
             data = ((cached.capability_detail or {}).get("topology") or {}).get("data") or {} if cached else {}
             for node in data.get("nodes", []):
                 node_id = str(node.get("id") or "")
@@ -2048,9 +2132,23 @@ def get_latest_interfaces(
     db: Session = Depends(get_db),
     _: Any = Depends(require_permission("devices:read")),
 ) -> list[dict[str, Any]]:
-    from backend.models.snmp import LatestInterface
     interfaces = db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
-    return [
+    known_indexes = {item.if_index for item in interfaces}
+    identity_interfaces = (
+        db.query(DeviceInterface)
+        .filter(
+            DeviceInterface.device_id == device_id,
+            ~DeviceInterface.if_index.in_(known_indexes),
+        )
+        .order_by(DeviceInterface.if_index.asc())
+        .all()
+        if known_indexes
+        else db.query(DeviceInterface)
+        .filter(DeviceInterface.device_id == device_id)
+        .order_by(DeviceInterface.if_index.asc())
+        .all()
+    )
+    latest_rows = [
         {
             "interface_id": i.interface_id,
             "if_index": i.if_index,
@@ -2071,6 +2169,28 @@ def get_latest_interfaces(
         }
         for i in interfaces
     ]
+    latest_rows.extend(
+        {
+            "interface_id": i.if_index,
+            "if_index": i.if_index,
+            "name": i.name,
+            "oper_status": i.status,
+            "admin_status": "UNKNOWN",
+            "speed_bps": i.speed_bps,
+            "rx_mbps": None,
+            "tx_mbps": None,
+            "rx_octets": None,
+            "tx_octets": None,
+            "rx_packets": None,
+            "tx_packets": None,
+            "errors": None,
+            "discards": None,
+            "utilization_percent": None,
+            "last_poll": None,
+        }
+        for i in identity_interfaces
+    )
+    return latest_rows
 
 
 @router.get("/snmp/devices/{device_id}/storage/latest")
@@ -2142,12 +2262,33 @@ def list_snmp_devices_optimized(
     """Optimized paginated device list with all info needed for the device list page."""
     from backend.models.identity import DeviceIdentity, DeviceCapabilities
     from backend.models.snmp import MonitoringConfig
-    from sqlalchemy import or_, func
+    from sqlalchemy import or_
 
-    query = db.query(Device).filter(Device.deleted_at.is_(None))
+    query = (
+        db.query(Device)
+        .options(
+            load_only(
+                Device.id,
+                Device.hostname,
+                Device.ip_address,
+                Device.model,
+                Device.serial_number,
+                Device.firmware_version,
+                Device.mac_address,
+                Device.status,
+                Device.last_seen,
+                Device.deleted_at,
+                Device.device_type_id,
+                Device.vendor_id,
+            ),
+            joinedload(Device.vendor).load_only(Vendor.id, Vendor.vendor_name),
+            joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
+        )
+        .filter(Device.deleted_at.is_(None))
+    )
 
-    # Join with credentials to only show SNMP-configured devices
-    query = query.join(DeviceCredential, DeviceCredential.device_id == Device.id)
+    # Show every active device. Some discovery/import flows create the device
+    # row before credentials are attached; those devices must remain visible.
 
     # Search filter
     if search:
@@ -2195,33 +2336,58 @@ def list_snmp_devices_optimized(
 
     total = query.count()
     devices = query.offset((page - 1) * page_size).limit(page_size).all()
+    device_ids = [device.id for device in devices]
+    credentials_by_device = _get_credentials_map(device_ids, db)
+
+    identities = {
+        row.device_id: row
+        for row in db.query(DeviceIdentity).filter(DeviceIdentity.device_id.in_(device_ids)).all()
+    } if device_ids else {}
+    capabilities = {
+        row.device_id: row
+        for row in db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id.in_(device_ids)).all()
+    } if device_ids else {}
+    configs_by_device: dict[int, list[MonitoringConfig]] = {}
+    if device_ids:
+        for config in db.query(MonitoringConfig).filter(MonitoringConfig.device_id.in_(device_ids)).all():
+            configs_by_device.setdefault(config.device_id, []).append(config)
 
     # Build response with all needed data
     items = []
     for d in devices:
-        # Get identity
-        di = db.query(DeviceIdentity).filter(DeviceIdentity.device_id == d.id).first()
-        # Get capabilities
-        dc = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == d.id).first()
-        # Get monitoring configs
-        configs = db.query(MonitoringConfig).filter(MonitoringConfig.device_id == d.id).all()
+        di = identities.get(d.id)
+        dc = capabilities.get(d.id)
+        configs = configs_by_device.get(d.id, [])
         modules_monitored = sum(1 for c in configs if c.enabled and c.status == "running")
 
         vendor_name = d.vendor.vendor_name if d.vendor else (di.vendor if di else None)
         snmp_status_val = "verified" if di and di.vendor else "unknown"
+        primary_credential = credentials_by_device.get(d.id)
+        identity_hostname = (
+            di.hostname
+            if di and di.hostname and di.hostname.strip().lower() not in {"unknown", "unknown device"}
+            else None
+        )
+        resolved_hostname = _first_non_empty(
+            identity_hostname,
+            di.sys_name if di else None,
+            d.hostname,
+            d.ip_address,
+        )
 
         items.append({
             "id": d.id,
-            "name": d.hostname,
+            "name": resolved_hostname,
             "ip_address": d.ip_address,
-            "hostname": d.hostname,
+            "hostname": resolved_hostname,
             "device_type": d.device_type.name if d.device_type else None,
             "model": d.model,
             "serial_number": d.serial_number,
             "firmware": d.firmware_version,
             "mac_address": d.mac_address,
+            "topology_metadata": d.topology_metadata or {},
             "status": d.status,
-            "snmp_version": d.credentials[0].snmp_version if d.credentials else None,
+            "snmp_version": primary_credential.snmp_version if primary_credential else None,
             "snmp_status": snmp_status_val,
             "monitoring_enabled": any(c.enabled for c in configs),
             "last_seen": d.last_seen.isoformat() if d.last_seen else None,
@@ -2249,14 +2415,68 @@ def get_device_details(
     from backend.models.snmp import MonitoringConfig, SNMPCredential, LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment, PollingHistory
     from backend.models import Interface, Vendor, DeviceType
 
-    device = db.query(Device).filter(Device.id == device_id, Device.deleted_at.is_(None)).first()
+    device = (
+        db.query(Device)
+        .options(
+            load_only(
+                Device.id,
+                Device.hostname,
+                Device.ip_address,
+                Device.model,
+                Device.serial_number,
+                Device.firmware_version,
+                Device.mac_address,
+                Device.status,
+                Device.monitoring_status,
+                Device.last_seen,
+                Device.created_at,
+                Device.uptime_seconds,
+                Device.deleted_at,
+                Device.vendor_id,
+                Device.device_type_id,
+            ),
+            joinedload(Device.vendor).load_only(Vendor.id, Vendor.vendor_name),
+            joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
+        )
+        .filter(Device.id == device_id, Device.deleted_at.is_(None))
+        .first()
+    )
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    di = db.query(DeviceIdentity).filter(DeviceIdentity.device_id == device_id).first()
-    dc = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
-    configs = db.query(MonitoringConfig).filter(MonitoringConfig.device_id == device_id).all()
-    cred = db.query(SNMPCredential).filter(SNMPCredential.device_id == device_id).first()
+    di = (
+        db.query(DeviceIdentity)
+        .filter(DeviceIdentity.device_id == device_id)
+        .first()
+    )
+    dc = (
+        db.query(DeviceCapabilities)
+        .filter(DeviceCapabilities.device_id == device_id)
+        .first()
+    )
+    configs = (
+        db.query(MonitoringConfig)
+        .options(load_only(
+            MonitoringConfig.module_name,
+            MonitoringConfig.enabled,
+            MonitoringConfig.interval_seconds,
+            MonitoringConfig.status,
+            MonitoringConfig.last_started_at,
+            MonitoringConfig.last_stopped_at,
+            MonitoringConfig.last_poll_at,
+            MonitoringConfig.next_poll_at,
+            MonitoringConfig.error_message,
+            MonitoringConfig.device_id,
+        ))
+        .filter(MonitoringConfig.device_id == device_id)
+        .all()
+    )
+    cred = (
+        db.query(SNMPCredential)
+        .options(load_only(SNMPCredential.device_id, SNMPCredential.version))
+        .filter(SNMPCredential.device_id == device_id)
+        .first()
+    )
 
     # Latest metrics
     cpu = db.query(LatestCPU).filter(LatestCPU.device_id == device_id).first()
@@ -2283,6 +2503,7 @@ def get_device_details(
             "serial_number": device.serial_number,
             "firmware": device.firmware_version,
             "mac_address": device.mac_address,
+            "topology_metadata": device.topology_metadata or {},
             "status": device.status,
             "monitoring_status": device.monitoring_status,
             "last_seen": device.last_seen.isoformat() if device.last_seen else None,
@@ -2290,7 +2511,7 @@ def get_device_details(
             "uptime_seconds": device.uptime_seconds,
         },
         "snmp": {
-            "version": cred.snmp_version if cred else None,
+            "version": cred.version if cred else None,
             "port": 161,
             "status": "verified" if di and di.vendor else "unknown",
             "last_test_at": None,

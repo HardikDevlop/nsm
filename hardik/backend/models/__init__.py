@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database.session import Base
@@ -111,6 +111,8 @@ class DeviceType(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     devices: Mapped[list["Device"]] = relationship(back_populates="device_type")
@@ -138,6 +140,7 @@ class Device(Base):
     downtime_seconds: Mapped[int] = mapped_column(Integer, default=0)
     last_status_change: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    topology_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
 
     site: Mapped[Site | None] = relationship(back_populates="devices")
     vendor: Mapped[Vendor | None] = relationship(back_populates="devices")
@@ -326,4 +329,7 @@ from backend.models.snmp import (  # noqa: E402,F401
 # Register new identity / capability / OUI / product catalog tables.
 from backend.models.identity import (  # noqa: E402,F401
     DeviceCapabilities, DeviceIdentity, DeviceProduct, VendorOUI,
+)
+from backend.models.manual_topology import (  # noqa: E402,F401
+    ManualTopologyChange, ManualTopologySnapshot,
 )

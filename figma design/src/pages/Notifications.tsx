@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import TablePagination from '../components/TablePagination'
+import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listNotifications, createNotification, updateNotification, deleteNotification, listAlerts,
@@ -18,7 +20,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const inputStyle: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.04)',
+  background: 'var(--t-border-light, rgba(255,255,255,0.04))',
   border: '1px solid var(--t-border-alpha)',
   color: 'var(--t-text)',
   outline: 'none',
@@ -46,7 +48,7 @@ export default function Notifications() {
 
   const load = useCallback(async () => {
     try {
-      const [notificationsData, alertsData] = await Promise.all([listNotifications(), listAlerts()])
+      const [notificationsData, alertsData] = await Promise.all([listNotifications(), listAlerts(undefined, { limit: 50 })])
       setNotifications(notificationsData)
       setAlerts(alertsData)
     } catch (e) {
@@ -122,6 +124,7 @@ export default function Notifications() {
     n.sent_to.toLowerCase().includes(search.toLowerCase()) ||
     n.status.toLowerCase().includes(search.toLowerCase())
   )
+  const pagination = useTablePagination(filtered)
 
   if (loading) {
     return (
@@ -144,7 +147,7 @@ export default function Notifications() {
         <div className="flex gap-2">
           <input
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); pagination.setPage(1) }}
             placeholder="Search…"
             className="rounded-lg px-3 py-2 font-mono text-xs"
             style={{ ...inputStyle, minWidth: 160 }}
@@ -174,7 +177,7 @@ export default function Notifications() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(notification => {
+              {pagination.paginatedItems.map(notification => {
                 const alert = alerts.find(a => a.id === notification.alert_id)
                 return (
                   <tr key={notification.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
@@ -232,6 +235,18 @@ export default function Notifications() {
           <div className="py-12 text-center font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
             {search ? 'No notifications match your search.' : 'No notifications yet.'}
           </div>
+        )}
+        {filtered.length > 0 && (
+          <TablePagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            startItem={pagination.startItem}
+            endItem={pagination.endItem}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={(pageSize) => { pagination.setPageSize(pageSize); pagination.setPage(1) }}
+          />
         )}
       </GlassCard>
 
@@ -296,7 +311,7 @@ export default function Notifications() {
               <button
                 onClick={() => setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
+                style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
                 Cancel
               </button>
               <button

@@ -69,7 +69,7 @@ Ab aap easily sab kuch ek command se stop kar sakte hain! 🎯
 
 
 
-
+DELETE /api/v1/devices
 
 
 

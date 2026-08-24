@@ -7,10 +7,12 @@ from backend.api.discovery_routes import router as discovery_router
 from backend.api.legacy_routes import router as legacy_router
 from backend.api.routes import router
 from backend.api.snmp_device_routes import router as snmp_device_router
+from backend.api.manual_topology_routes import router as manual_topology_router
 from backend.api.overview_routes import router as overview_router
 from backend.api.monitoring_data_routes import router as monitoring_data_router
 from backend.config.settings import get_settings
-from backend.database.session import Base, SessionLocal, engine, migrate_credential_columns
+from backend.database.migrations import run_migrations
+from backend.database.session import Base, SessionLocal, engine
 from backend.seed import seed_rbac, seed_ouis_and_products
 from backend.services.snmp_polling import get_polling_scheduler, shutdown_polling_scheduler
 from logging_config import configure_logging
@@ -21,7 +23,7 @@ import backend.models  # noqa: F401  (register all tables on Base.metadata)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
-    migrate_credential_columns()
+    run_migrations(engine)
     with SessionLocal() as db:
         seed_rbac(db)
         seed_ouis_and_products(db)
@@ -53,6 +55,7 @@ app.include_router(discovery_router, prefix="/api/v1")
 
 # SNMP per-device monitoring endpoints (fills the gap the frontend already expects)
 app.include_router(snmp_device_router)
+app.include_router(manual_topology_router)
 
 # Monitoring Data API (reads from database, no live polling)
 app.include_router(monitoring_data_router)

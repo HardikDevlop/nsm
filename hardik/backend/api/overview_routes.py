@@ -26,10 +26,11 @@ GET  /api/v1/monitoring/services
 from __future__ import annotations
 
 import logging
+from threading import Lock
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from backend.database.session import get_db
@@ -38,6 +39,9 @@ from backend.dependencies import require_permission
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["Overview & Service Control"])
+_OVERVIEW_CACHE_TTL_SECONDS = 10
+_overview_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_overview_cache_lock = Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +50,7 @@ router = APIRouter(prefix="/api/v1", tags=["Overview & Service Control"])
 
 @router.get("/overview")
 def get_overview(
+    hours: int = Query(default=24, ge=1, le=168),
     db: Session = Depends(get_db),
     _: Any = Depends(require_permission("dashboard:read")),
 ) -> dict[str, Any]:
@@ -58,8 +63,20 @@ def get_overview(
         Alert, Device, DeviceMetric, DeviceType, Event, Interface,
         Vendor, DeviceCredential,
     )
+    from backend.models.snmp import (  # noqa: PLC0415
+        LatestCPU, LatestMemory, LatestStorage, LatestInterface,
+        LatestEnvironment, InterfaceStatistic, PollingHistory,
+        MonitoringConfig, OIDCache, LLDPNeighbor, VLANInformation,
+        RoutingEntry,
+    )
 
-    since_24h = datetime.utcnow() - timedelta(hours=24)
+    now_ts = datetime.utcnow().timestamp()
+    with _overview_cache_lock:
+        cached = _overview_cache.get(hours)
+        if cached and now_ts - cached[0] < _OVERVIEW_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    since_24h = datetime.utcnow() - timedelta(hours=hours)
 
     # ── devices (with vendor and type joined) ──────────────────────────────
     device_rows = (
@@ -189,10 +206,114 @@ def get_overview(
         for e in event_rows
     ]
 
+    # Normalized SNMP data is read from latest_* and history tables. This
+    # endpoint never polls devices, so dashboard refreshes cannot create jobs.
+    latest_cpu = {row.device_id: row for row in db.query(LatestCPU).all()}
+    latest_memory = {row.device_id: row for row in db.query(LatestMemory).all()}
+    latest_storage = db.query(LatestStorage).all()
+    latest_interfaces = db.query(LatestInterface).all()
+    latest_environment = db.query(LatestEnvironment).all()
+    interface_stats = db.query(InterfaceStatistic).filter(InterfaceStatistic.created_at >= since_24h).order_by(InterfaceStatistic.created_at.asc()).all()
+    polling_rows = db.query(PollingHistory).filter(PollingHistory.created_at >= since_24h).order_by(PollingHistory.created_at.desc()).all()
+    device_by_id = {device.id: device for device in device_rows}
+
+    storage_by_device: dict[int, list[dict[str, Any]]] = {}
+    for row in latest_storage:
+        storage_by_device.setdefault(row.device_id, []).append({
+            "mount_name": row.mount_name,
+            "utilization_percent": row.utilization_percent,
+            "polled_at": row.polled_at.isoformat() if row.polled_at else None,
+        })
+    environment_by_device: dict[int, list[dict[str, Any]]] = {}
+    for row in latest_environment:
+        environment_by_device.setdefault(row.device_id, []).append({
+            "sensor_name": row.sensor_name, "sensor_type": row.sensor_type,
+            "value": row.value, "unit": row.unit, "status": row.status,
+            "polled_at": row.polled_at.isoformat() if row.polled_at else None,
+        })
+    interface_rows = [{
+        "device_id": row.device_id,
+        "device_name": device_by_id.get(row.device_id).hostname if device_by_id.get(row.device_id) else None,
+        "interface_id": row.interface_id, "name": row.name,
+        "oper_status": row.oper_status, "admin_status": row.admin_status,
+        "speed_bps": row.speed_bps, "rx_mbps": row.rx_mbps, "tx_mbps": row.tx_mbps,
+        "errors": row.errors, "discards": row.discards,
+        "rx_packets": row.rx_packets, "tx_packets": row.tx_packets,
+        "utilization_percent": row.utilization_percent,
+        "polled_at": row.polled_at.isoformat() if row.polled_at else None,
+    } for row in latest_interfaces]
+    latest_poll_by_device: dict[int, dict[str, Any]] = {}
+    for row in polling_rows:
+        latest_poll_by_device.setdefault(row.device_id, {
+            "timestamp": row.created_at.isoformat() if row.created_at else None,
+            "status": row.status, "collector": row.collector, "error": row.error,
+        })
+    top_devices: dict[int, dict[str, Any]] = {}
+    for row in interface_rows:
+        item = top_devices.setdefault(row["device_id"], {
+            "device_id": row["device_id"], "device_name": row["device_name"], "rx_mbps": 0, "tx_mbps": 0,
+        })
+        item["rx_mbps"] += row["rx_mbps"] or 0
+        item["tx_mbps"] += row["tx_mbps"] or 0
+    alert_counts = {severity: sum(1 for alert in alert_rows if alert.severity == severity) for severity in ("critical", "high", "medium", "low", "warning", "info")}
+    type_counts: dict[str, int] = {}
+    for device in device_rows:
+        type_name = dtypes.get(device.device_type_id or 0) or "Other"
+        type_counts[type_name] = type_counts.get(type_name, 0) + 1
+    normalized = {
+        "devices": {
+            str(device.id): {
+                "cpu": latest_cpu.get(device.id).utilization_percent if latest_cpu.get(device.id) else None,
+                "memory": latest_memory.get(device.id).utilization_percent if latest_memory.get(device.id) else None,
+                "load": latest_cpu.get(device.id).load_avg if latest_cpu.get(device.id) else None,
+                "uptime_seconds": device.uptime_seconds,
+                "storage": storage_by_device.get(device.id, []),
+                "environment": environment_by_device.get(device.id, []),
+                "last_poll": latest_poll_by_device.get(device.id),
+            } for device in device_rows
+        },
+        "interfaces": interface_rows,
+        "traffic_history": [{
+            "timestamp": row.created_at.isoformat() if row.created_at else None,
+            "device_id": row.device_id, "rx_mbps": row.rx_mbps, "tx_mbps": row.tx_mbps,
+            "utilization_percent": row.utilization_percent,
+        } for row in interface_stats],
+        "traffic": {
+            "rx_mbps": sum(row["rx_mbps"] or 0 for row in interface_rows),
+            "tx_mbps": sum(row["tx_mbps"] or 0 for row in interface_rows),
+            "top_devices": sorted(top_devices.values(), key=lambda item: item["rx_mbps"] + item["tx_mbps"], reverse=True)[:8],
+            "top_interfaces": sorted(interface_rows, key=lambda item: (item["rx_mbps"] or 0) + (item["tx_mbps"] or 0), reverse=True)[:8],
+        },
+        "polling": {
+            "success": sum(1 for row in polling_rows if row.status == "success"),
+            "failure": sum(1 for row in polling_rows if row.status != "success"),
+            "last_success": next((row.created_at.isoformat() for row in polling_rows if row.status == "success" and row.created_at), None),
+            "last_failure": next((row.created_at.isoformat() for row in polling_rows if row.status != "success" and row.created_at), None),
+            "active_jobs": db.query(MonitoringConfig).filter(MonitoringConfig.enabled.is_(True)).count(),
+            "collector_failures": sum(1 for row in polling_rows if row.status not in ("success", "no_data")),
+            "unsupported_oids": db.query(OIDCache).filter(OIDCache.supported.is_(False)).count(),
+        },
+        "interface_summary": {
+            "total": len(interface_rows),
+            "up": sum(1 for row in interface_rows if str(row["oper_status"]).lower() in ("up", "upward")),
+            "down": sum(1 for row in interface_rows if str(row["oper_status"]).lower() in ("down", "downward")),
+            "errors": sum(row["errors"] or 0 for row in interface_rows),
+            "drops": sum(row["discards"] or 0 for row in interface_rows),
+        },
+        "alerts_by_severity": alert_counts,
+        "device_types": type_counts,
+        "network": {
+            "lldp_neighbors": db.query(LLDPNeighbor).count(),
+            "vlan_count": db.query(VLANInformation).count(),
+            "routing_entries": db.query(RoutingEntry).count(),
+            "arp_entries": None, "mac_entries": None, "topology_nodes": len(device_rows),
+        },
+    }
+
     # ── background service status ──────────────────────────────────────────
     services = _get_service_states()
 
-    return {
+    payload = {
         "summary": {
             "total_devices":    total,
             "online_devices":   online,
@@ -205,9 +326,13 @@ def get_overview(
         "devices":  devices_out,
         "alerts":   alerts_out,
         "events":   events_out,
+        "normalized": normalized,
         "services": services,
         "fetched_at": datetime.utcnow().isoformat(),
     }
+    with _overview_cache_lock:
+        _overview_cache[hours] = (now_ts, payload)
+    return payload
 
 
 # ---------------------------------------------------------------------------

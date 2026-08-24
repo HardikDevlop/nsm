@@ -7,7 +7,7 @@ import {
 } from '../lib/api'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 
-const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 12, color: '#c8d8ee' }
+const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--t-text, #c8d8ee)' }
 const methColor: Record<string, string> = { GET: '#00d4ff', POST: '#7c3aed', PUT: '#ffaa00', DELETE: '#ff3366', PATCH: '#00ff88' }
 
 // ── Interface Detail Modal ─────────────────────────────────────────────────
@@ -20,11 +20,11 @@ function InterfaceDetailModal({ row, onClose }: { row: IfaceRow; onClose: () => 
       style={{ backdropFilter: 'blur(3px)', background: 'rgba(0,0,0,0.65)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="w-full max-w-md rounded-xl overflow-hidden"
-        style={{ background: 'rgba(4,14,33,0.98)', border: `1px solid ${isUp ? 'rgba(0,255,136,0.4)' : 'rgba(255,51,102,0.4)'}`, boxShadow: `0 0 40px ${isUp ? 'rgba(0,255,136,0.1)' : 'rgba(255,51,102,0.1)'}` }}>
+        style={{ background: 'var(--t-card, rgba(4,14,33,0.98))', border: `1px solid ${isUp ? 'rgba(0,255,136,0.4)' : 'rgba(255,51,102,0.4)'}`, boxShadow: `0 0 40px ${isUp ? 'rgba(0,255,136,0.1)' : 'rgba(255,51,102,0.1)'}` }}>
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${isUp ? 'rgba(0,255,136,0.2)' : 'rgba(255,51,102,0.2)'}` }}>
           <div>
             <div className="font-display font-bold text-base tracking-widest neon-cyan">{row.name}</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>{row.device}</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{row.device}</div>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 hover:bg-red-500/20 transition-all" style={{ color: '#ff3366' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
@@ -34,7 +34,7 @@ function InterfaceDetailModal({ row, onClose }: { row: IfaceRow; onClose: () => 
           <div className="flex items-center gap-3 rounded-lg p-4" style={{ background: isUp ? 'rgba(0,255,136,0.06)' : 'rgba(255,51,102,0.06)', border: `1px solid ${isUp ? 'rgba(0,255,136,0.2)' : 'rgba(255,51,102,0.2)'}` }}>
             <div className="w-3 h-3 rounded-full" style={{ background: isUp ? '#00ff88' : '#ff3366' }} />
             <span className="font-mono text-sm font-bold" style={{ color: isUp ? '#00ff88' : '#ff3366' }}>{row.status.toUpperCase()}</span>
-            {row.iface.speed && <span className="font-mono text-xs ml-auto" style={{ color: '#8899bb' }}>{row.iface.speed}</span>}
+            {row.iface.speed && <span className="font-mono text-xs ml-auto" style={{ color: 'var(--t-muted, #8899bb)' }}>{row.iface.speed}</span>}
           </div>
           <div className="grid grid-cols-2 gap-3 font-mono text-xs">
             {[
@@ -44,8 +44,8 @@ function InterfaceDetailModal({ row, onClose }: { row: IfaceRow; onClose: () => 
               ['Interface ID', `#${row.iface.id}`],
             ].map(([k, v]) => (
               <div key={k} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
-                <div style={{ color: '#8899bb' }}>{k}</div>
-                <div className="mt-1 font-semibold" style={{ color: k === 'Packet Errors' && row.errors > 0 ? '#ff3366' : '#c8d8ee' }}>{v}</div>
+                <div style={{ color: 'var(--t-muted, #8899bb)' }}>{k}</div>
+                <div className="mt-1 font-semibold" style={{ color: k === 'Packet Errors' && row.errors > 0 ? '#ff3366' : 'var(--t-text, #c8d8ee)' }}>{v}</div>
               </div>
             ))}
           </div>
@@ -220,7 +220,7 @@ export default function NginxMonitoring() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">NGINX MONITORING</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {devices.length} devices · {interfaces.length} interfaces · {events.length} events · auto-refresh 15s
           </p>
         </div>
@@ -252,7 +252,7 @@ export default function NginxMonitoring() {
         ].map(k => (
           <GlassCard key={k.l} className="p-4 text-center">
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: k.c }}>{k.v}</div>
-            <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{k.l}</div>
+            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{k.l}</div>
           </GlassCard>
         ))}
       </div>
@@ -261,7 +261,7 @@ export default function NginxMonitoring() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <GlassCard className="p-4 md:p-5">
           <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-1">LATENCY & PACKET LOSS</div>
-          <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Last 30 metric readings · IST</div>
+          <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Last 30 metric readings · IST</div>
           <ResponsiveContainer width="100%" height={160}>
             <AreaChart data={trafficData}>
               <defs>
@@ -269,8 +269,8 @@ export default function NginxMonitoring() {
                   <stop offset="5%" stopColor="#00d4ff" stopOpacity={0.35} /><stop offset="95%" stopColor="#00d4ff" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="time" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={4} />
-              <YAxis tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+              <XAxis dataKey="time" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={4} />
+              <YAxis tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={ttStyle} />
               <Area type="monotone" dataKey="latency" stroke="#00d4ff" strokeWidth={2} fill="url(#grps)" dot={false} name="Latency ms" />
               <Line type="monotone" dataKey="packet_loss" stroke="#ff3366" strokeWidth={1.5} dot={false} name="Packet Loss %" />
@@ -280,7 +280,7 @@ export default function NginxMonitoring() {
 
         <GlassCard className="p-4 md:p-5">
           <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-1">INTERFACE TRAFFIC</div>
-          <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>Top interfaces by traffic volume</div>
+          <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Top interfaces by traffic volume</div>
           <ResponsiveContainer width="100%" height={160}>
             <AreaChart data={connData}>
               <defs>
@@ -288,8 +288,8 @@ export default function NginxMonitoring() {
                   <stop offset="5%" stopColor="#00d4ff" stopOpacity={0.3} /><stop offset="95%" stopColor="#00d4ff" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="name" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={4} />
-              <YAxis tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+              <XAxis dataKey="name" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={4} />
+              <YAxis tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={ttStyle} />
               <Area type="monotone" dataKey="active" stroke="#00d4ff" strokeWidth={2} fill="url(#gact)" dot={false} name="In (KB/10)" />
               <Line type="monotone" dataKey="waiting" stroke="#7c3aed" strokeWidth={1.5} dot={false} name="Out (KB/20)" />
@@ -314,7 +314,7 @@ export default function NginxMonitoring() {
             <div key={rc.code} className="flex items-center gap-2 py-1.5" style={{ borderBottom: '1px solid rgba(0,212,255,0.06)' }}>
               <div className="w-2 h-2 rounded-full" style={{ background: rc.color }} />
               <span className="font-mono text-sm font-semibold" style={{ color: rc.color }}>{rc.code}</span>
-              <span className="font-mono text-xs ml-auto" style={{ color: '#8899bb' }}>{rc.count.toLocaleString()}</span>
+              <span className="font-mono text-xs ml-auto" style={{ color: 'var(--t-muted, #8899bb)' }}>{rc.count.toLocaleString()}</span>
               <span className="font-mono text-xs" style={{ color: rc.color }}>{rc.pct}%</span>
             </div>
           ))}
@@ -323,7 +323,7 @@ export default function NginxMonitoring() {
         <GlassCard className="col-span-2 p-4 md:p-5">
           <div className="font-display font-bold text-base tracking-wider neon-cyan mb-4">API ANALYTICS — Top Endpoints</div>
           {apiEndpoints.length === 0 ? (
-            <div className="font-mono text-xs py-8 text-center" style={{ color: '#8899bb' }}>
+            <div className="font-mono text-xs py-8 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>
               No API events recorded yet. Events will appear here as they are generated.
             </div>
           ) : (
@@ -332,17 +332,17 @@ export default function NginxMonitoring() {
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                   {['Endpoint', 'Method', 'RPS', 'p50', 'p99', 'Err%'].map(h => (
-                    <th key={h} className="text-left px-3 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>{h}</th>
+                    <th key={h} className="text-left px-3 py-2 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {apiEndpoints.map((api, i) => (
                   <tr key={`${api.path}-${i}`} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
-                    <td className="px-3 py-2.5 font-mono text-xs" style={{ color: '#c8d8ee' }}>{api.path}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{api.path}</td>
                     <td className="px-3 py-2.5">
                       <span className="font-mono text-xs px-1.5 py-0.5 rounded"
-                        style={{ color: methColor[api.method] ?? '#8899bb', background: `${methColor[api.method] ?? '#8899bb'}18` }}>
+                        style={{ color: methColor[api.method] ?? 'var(--t-muted, #8899bb)', background: `${methColor[api.method] ?? 'var(--t-muted, #8899bb)'}18` }}>
                         {api.method}
                       </span>
                     </td>
@@ -361,7 +361,7 @@ export default function NginxMonitoring() {
           <div className="mt-4">
             <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-3">INTERFACE TRAFFIC BREAKDOWN</div>
             {interfaceTraffic.length === 0 ? (
-              <div className="font-mono text-xs py-4 text-center" style={{ color: '#8899bb' }}>
+              <div className="font-mono text-xs py-4 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>
                 No interface traffic data available.
               </div>
             ) : (
@@ -372,15 +372,15 @@ export default function NginxMonitoring() {
                     style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}
                     onClick={() => setSelectedIface(iface)}>
                     <span className={`status-dot ${iface.status}`} />
-                    <span className="font-mono text-xs flex-1" style={{ color: '#c8d8ee' }}>{iface.name}</span>
-                    <span className="font-mono text-xs" style={{ color: '#8899bb' }}>{iface.device}</span>
+                    <span className="font-mono text-xs flex-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>{iface.name}</span>
+                    <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{iface.device}</span>
                     <span className="font-mono text-xs" style={{ color: '#00d4ff' }}>↓ {iface.inMB} MB</span>
                     <span className="font-mono text-xs" style={{ color: '#7c3aed' }}>↑ {iface.outMB} MB</span>
                     <span className="font-mono text-xs px-2 py-0.5 rounded"
                       style={{ color: iface.errors > 0 ? '#ff3366' : '#00ff88', background: iface.errors > 0 ? 'rgba(255,51,102,0.12)' : 'rgba(0,255,136,0.1)' }}>
                       {iface.errors} err
                     </span>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8899bb" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--t-muted, #8899bb)" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
                   </div>
                 ))}
               </div>

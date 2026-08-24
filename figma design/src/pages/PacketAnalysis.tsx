@@ -2,12 +2,12 @@ import { useCallback, useMemo, useState } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PieChart, Pie, Cell, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import {
-  listAlerts, listDevices, listInterfaces, listDeviceMetrics, getMonitoringStatus,
+  getOverview, listDeviceMetrics, getMonitoringStatus,
   type AlertRecord, type DeviceMetricRecord, type DeviceRecord, type InterfaceRecord,
 } from '../lib/api'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 
-const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: '#c8d8ee' }
+const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--t-text, #c8d8ee)' }
 const sevStyle: Record<string, { c: string; bg: string }> = {
   critical: { c: '#ff3366', bg: 'rgba(255,51,102,0.12)' },
   high:     { c: '#ff6644', bg: 'rgba(255,102,68,0.12)' },
@@ -26,11 +26,11 @@ function PacketDetailModal({ pkt, device, onClose }: { pkt: SuspiciousPkt; devic
       style={{ backdropFilter: 'blur(3px)', background: 'rgba(0,0,0,0.65)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="w-full max-w-lg rounded-xl overflow-hidden"
-        style={{ background: 'rgba(4,14,33,0.98)', border: `1px solid ${s.c}40`, boxShadow: `0 0 40px ${s.c}18` }}>
+        style={{ background: 'var(--t-card, rgba(4,14,33,0.98))', border: `1px solid ${s.c}40`, boxShadow: `0 0 40px ${s.c}18` }}>
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${s.c}25` }}>
           <div>
             <div className="font-display font-bold text-base tracking-widest neon-cyan">{pkt.id}</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>{pkt.time}</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{pkt.time}</div>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 hover:bg-red-500/20 transition-all" style={{ color: '#ff3366' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
@@ -38,8 +38,8 @@ function PacketDetailModal({ pkt, device, onClose }: { pkt: SuspiciousPkt; devic
         </div>
         <div className="p-5 space-y-4">
           <div className="rounded-lg p-4" style={{ background: `${s.c}0d`, border: `1px solid ${s.c}25` }}>
-            <div className="font-mono text-xs font-semibold mb-1" style={{ color: '#c8d8ee' }}>{pkt.reason}</div>
-            {pkt.alert.description && <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{pkt.alert.description}</div>}
+            <div className="font-mono text-xs font-semibold mb-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>{pkt.reason}</div>
+            {pkt.alert.description && <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{pkt.alert.description}</div>}
           </div>
           <div className="grid grid-cols-2 gap-3 font-mono text-xs">
             {[
@@ -49,8 +49,8 @@ function PacketDetailModal({ pkt, device, onClose }: { pkt: SuspiciousPkt; devic
               ['Device', device ? device.hostname : 'Unknown'], ['Device IP', device ? device.ip_address : 'N/A'],
             ].map(([k, v]) => (
               <div key={k} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
-                <div style={{ color: '#8899bb' }}>{k}</div>
-                <div className="mt-1 font-semibold" style={{ color: k === 'Severity' ? s.c : '#c8d8ee' }}>{v}</div>
+                <div style={{ color: 'var(--t-muted, #8899bb)' }}>{k}</div>
+                <div className="mt-1 font-semibold" style={{ color: k === 'Severity' ? s.c : 'var(--t-text, #c8d8ee)' }}>{v}</div>
               </div>
             ))}
           </div>
@@ -70,10 +70,27 @@ export default function PacketAnalysis() {
   const [error, setError] = useState<string | null>(null)
 
   const fetchAll = useCallback(async () => {
-    const [interfaceData, alertData, deviceData, metricData, monStatus] = await Promise.all([
-      listInterfaces(), listAlerts(), listDevices(), listDeviceMetrics(), getMonitoringStatus(),
+    const [overview, metricData, monStatus] = await Promise.all([
+      getOverview(24), listDeviceMetrics(undefined, { limit: 200 }), getMonitoringStatus(),
     ])
-    return { interfaces: interfaceData, alerts: alertData, devices: deviceData, metrics: metricData, liveDevices: monStatus.devices }
+    const interfaceData: InterfaceRecord[] = overview.normalized.interfaces.map((item, index) => ({
+      id: item.interface_id ?? index,
+      device_id: item.device_id,
+      interface_name: item.name || `if-${item.interface_id ?? index}`,
+      status: item.oper_status || 'unknown',
+      speed: item.speed_bps ? String(item.speed_bps) : null,
+      traffic_in: item.rx_mbps ?? 0,
+      traffic_out: item.tx_mbps ?? 0,
+      packet_errors: item.errors ?? 0,
+      last_updated: item.polled_at || overview.fetched_at,
+    }))
+    return {
+      interfaces: interfaceData,
+      alerts: overview.alerts as AlertRecord[],
+      devices: overview.devices as DeviceRecord[],
+      metrics: metricData,
+      liveDevices: monStatus.devices,
+    }
   }, [])
 
   const { loading, refresh } = useAutoRefresh(
@@ -139,7 +156,7 @@ export default function PacketAnalysis() {
       { name: 'DNS', count: Math.round(dnsShare), color: '#ffaa00' },
       { name: 'ICMP', count: Math.round(icmpShare), color: '#00bfff' },
       { name: 'SSH', count: Math.round(sshShare), color: '#ff3366' },
-      { name: 'Other', count: Math.max(0, Math.round(otherShare)), color: '#556677' },
+      { name: 'Other', count: Math.max(0, Math.round(otherShare)), color: 'var(--t-muted, #556677)' },
     ]
     const grandTotal = data.reduce((s, d) => s + d.count, 0) || 1
     return data.map(d => ({ ...d, pct: Math.round((d.count / grandTotal) * 100) }))
@@ -216,7 +233,7 @@ export default function PacketAnalysis() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">PACKET ANALYSIS (PCAP)</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             Deep packet inspection · {devices.length} devices · {interfaces.length} interfaces
           </p>
         </div>
@@ -231,7 +248,7 @@ export default function PacketAnalysis() {
       </div>
 
       {error ? <div className="font-mono text-xs" style={{ color: '#ff3366' }}>{error}</div> : null}
-      {loading && !interfaces.length && <div className="font-mono text-xs" style={{ color: '#8899bb' }}>Loading packet data…</div>}
+      {loading && !interfaces.length && <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading packet data…</div>}
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -244,7 +261,7 @@ export default function PacketAnalysis() {
         ].map(s => (
           <GlassCard key={s.l} className="p-4 text-center">
             <div className="font-display font-bold text-2xl" style={{ color: s.c }}>{s.v}</div>
-            <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{s.l}</div>
+            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{s.l}</div>
           </GlassCard>
         ))}
       </div>
@@ -254,7 +271,7 @@ export default function PacketAnalysis() {
         <GlassCard className="p-4 md:p-5">
           <div className="font-display font-bold text-base tracking-wider neon-cyan mb-4">PROTOCOL DISTRIBUTION</div>
           {protocols.length === 0 || protocols.every(p => p.count === 0) ? (
-            <div className="font-mono text-xs py-8 text-center" style={{ color: '#8899bb' }}>
+            <div className="font-mono text-xs py-8 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>
               No traffic data yet. Interfaces will populate protocol breakdown.
             </div>
           ) : (
@@ -270,9 +287,9 @@ export default function PacketAnalysis() {
                 {protocols.map(p => (
                   <div key={p.name} className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color }} />
-                    <span className="font-mono text-xs flex-1" style={{ color: '#8899bb' }}>{p.name}</span>
+                    <span className="font-mono text-xs flex-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{p.name}</span>
                     <span className="font-mono text-xs" style={{ color: p.color }}>{p.pct}%</span>
-                    <span className="font-mono text-xs" style={{ color: '#556677', fontSize: 9 }}>{formatBytes(p.count)}</span>
+                    <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #556677)', fontSize: 9 }}>{formatBytes(p.count)}</span>
                   </div>
                 ))}
               </div>
@@ -283,11 +300,11 @@ export default function PacketAnalysis() {
         {/* Traffic flow */}
         <GlassCard className="col-span-2 p-4 md:p-5">
           <div className="font-display font-bold text-base tracking-wider neon-cyan mb-1">TRAFFIC FLOW ANALYSIS</div>
-          <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>
+          <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {metrics.length > 0 ? `Last ${Math.min(metrics.length, 30)} metric readings from device monitoring` : 'Interface traffic distribution'}
           </div>
           {flowData.length === 0 ? (
-            <div className="font-mono text-xs py-12 text-center" style={{ color: '#8899bb' }}>
+            <div className="font-mono text-xs py-12 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>
               No flow data yet. Start device monitoring to see real-time traffic patterns.
             </div>
           ) : (
@@ -299,16 +316,16 @@ export default function PacketAnalysis() {
                       <stop offset="5%" stopColor="#00d4ff" stopOpacity={0.4} /><stop offset="95%" stopColor="#00d4ff" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis dataKey="t" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={Math.max(0, Math.floor(flowData.length / 8))} />
-                  <YAxis tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={Math.max(0, Math.floor(flowData.length / 8))} />
+                  <YAxis tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={ttStyle} />
                   <Area type="monotone" dataKey="bytes" stroke="#00d4ff" strokeWidth={2} fill="url(#gb)" dot={false} name="Bytes" />
                 </AreaChart>
               </ResponsiveContainer>
               <ResponsiveContainer width="100%" height={100}>
                 <BarChart data={flowData}>
-                  <XAxis dataKey="t" tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={Math.max(0, Math.floor(flowData.length / 8))} />
-                  <YAxis tick={{ fill: '#8899bb', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="t" tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} interval={Math.max(0, Math.floor(flowData.length / 8))} />
+                  <YAxis tick={{ fill: 'var(--t-muted, #8899bb)', fontSize: 11, fontFamily: 'JetBrains Mono' }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={ttStyle} />
                   <Bar dataKey="pkts" fill="#7c3aed" fillOpacity={0.7} radius={[2, 2, 0, 0]} name="Packets" />
                 </BarChart>
@@ -323,14 +340,14 @@ export default function PacketAnalysis() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
           <div>
             <div className="font-display font-bold text-base tracking-wider neon-cyan">SUSPICIOUS PACKET DETECTION</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>Mapped from real device alerts · DPI engine</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Mapped from real device alerts · DPI engine</div>
           </div>
           <span className="font-mono text-xs px-3 py-1 rounded" style={{ background: 'rgba(255,51,102,0.15)', color: '#ff3366', border: '1px solid rgba(255,51,102,0.3)' }}>
             {suspicious.length} ALERT{suspicious.length !== 1 ? 'S' : ''}
           </span>
         </div>
         {suspicious.length === 0 ? (
-          <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>
+          <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>
             No suspicious packets detected. Alerts from device monitoring will appear here.
           </div>
         ) : (
@@ -339,7 +356,7 @@ export default function PacketAnalysis() {
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                   {['Packet ID', 'Source', 'Destination', 'Proto', 'Size', 'Reason', 'Severity', 'Time'].map(h => (
-                    <th key={h} className="text-left px-4 py-2.5 font-mono text-xs whitespace-nowrap" style={{ color: '#8899bb' }}>{h}</th>
+                    <th key={h} className="text-left px-4 py-2.5 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -352,15 +369,15 @@ export default function PacketAnalysis() {
                     style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}
                     onClick={() => setSelectedPkt(pkt)}>
                     <td className="px-4 py-3 font-mono text-xs neon-cyan">{pkt.id}</td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: '#c8d8ee' }}>{pkt.src}</td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: '#c8d8ee' }}>{pkt.dst}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{pkt.src}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{pkt.dst}</td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: '#7c3aed' }}>{pkt.proto}</td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>{pkt.size}</td>
-                    <td className="px-4 py-3 font-mono text-xs max-w-xs truncate" style={{ color: '#8899bb' }}>{pkt.reason}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{pkt.size}</td>
+                    <td className="px-4 py-3 font-mono text-xs max-w-xs truncate" style={{ color: 'var(--t-muted, #8899bb)' }}>{pkt.reason}</td>
                     <td className="px-4 py-3">
                       <span className="font-mono text-xs px-2 py-0.5 rounded uppercase" style={{ color: s.c, background: s.bg }}>{pkt.sev}</span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs whitespace-nowrap" style={{ color: '#667799' }}>{pkt.time}</td>
+                    <td className="px-4 py-3 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--t-muted, #667799)' }}>{pkt.time}</td>
                   </tr>
                 )
               })}
@@ -375,7 +392,7 @@ export default function PacketAnalysis() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
             <div>
               <div className="font-display font-bold text-base tracking-wider neon-cyan">INTERFACE TRAFFIC BREAKDOWN</div>
-              <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>SNMP-interface traffic from devices</div>
+              <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>SNMP-interface traffic from devices</div>
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -383,15 +400,15 @@ export default function PacketAnalysis() {
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                 {['Device', 'IP', 'Interface', 'Status', 'Speed', 'Total In', 'Total Out', 'Total', 'Errors'].map(h => (
-                  <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: '#8899bb' }}>{h}</th>
+                  <th key={h} className="text-left px-4 py-2.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {interfaceRows.map(iface => (
                 <tr key={iface.id} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
-                  <td className="px-4 py-3 font-mono text-xs" style={{ color: '#c8d8ee' }}>{iface.deviceName}</td>
-                  <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>{iface.deviceIp}</td>
+                  <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{iface.deviceName}</td>
+                  <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{iface.deviceIp}</td>
                   <td className="px-4 py-3 font-mono text-xs neon-cyan">{iface.interface_name}</td>
                   <td className="px-4 py-3">
                     <span className="font-mono text-xs px-2 py-0.5 rounded" style={{
@@ -399,13 +416,13 @@ export default function PacketAnalysis() {
                       background: iface.status === 'up' ? 'rgba(0,255,136,0.1)' : 'rgba(255,51,102,0.1)',
                     }}>{iface.status}</span>
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8899bb' }}>
+                  <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                     {formatSpeed(iface.speed)}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00ff88' }}>{formatBytes(iface.traffic_in)}</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#7c3aed' }}>{formatBytes(iface.traffic_out)}</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00d4ff' }}>{formatBytes(iface.totalTraffic)}</td>
-                  <td className="px-4 py-3 font-mono text-xs" style={{ color: iface.packet_errors > 0 ? '#ff3366' : '#8899bb' }}>{iface.packet_errors}</td>
+                  <td className="px-4 py-3 font-mono text-xs" style={{ color: iface.packet_errors > 0 ? '#ff3366' : 'var(--t-muted, #8899bb)' }}>{iface.packet_errors}</td>
                 </tr>
               ))}
             </tbody>

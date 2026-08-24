@@ -177,6 +177,7 @@ class VendorRead(VendorBase):
 # ---------------------------------------------------------------- Device types
 class DeviceTypeBase(BaseModel):
     name: str
+    description: str | None = None
 
 
 class DeviceTypeCreate(DeviceTypeBase):
@@ -185,12 +186,14 @@ class DeviceTypeCreate(DeviceTypeBase):
 
 class DeviceTypeUpdate(BaseModel):
     name: str | None = None
+    description: str | None = None
 
 
 class DeviceTypeRead(DeviceTypeBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    created_at: datetime
 
 
 # ---------------------------------------------------------------- Devices
@@ -206,6 +209,7 @@ class DeviceBase(BaseModel):
     firmware_version: str | None = None
     status: str = "unknown"
     monitoring_status: bool = True
+    topology_metadata: dict | None = None
 
 
 class DeviceCreate(DeviceBase):
@@ -224,6 +228,8 @@ class DeviceUpdate(BaseModel):
     firmware_version: str | None = None
     status: str | None = None
     monitoring_status: bool | None = None
+    vendor_name: str | None = None
+    topology_metadata: dict | None = None
 
 
 class DeviceRead(DeviceBase):
@@ -235,6 +241,15 @@ class DeviceRead(DeviceBase):
     uptime_seconds: int
     downtime_seconds: int
     last_status_change: datetime | None = None
+
+
+class DeviceOptionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    hostname: str
+    ip_address: str
+    status: str
 
 
 # ---------------------------------------------------------------- Device credentials

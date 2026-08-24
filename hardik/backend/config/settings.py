@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_name: str = "NMS Backend"
     environment: str = "development"
-    database_url: str = "postgresql+psycopg://postgres:123456@localhost:5432/NMS_DB"
+    database_url: str = "postgresql+psycopg://postgres:123456@localhost:5432/postgres"
     secret_key: str = "change-this-secret-key"
     access_token_expire_minutes: int = 1440
     credential_encryption_key: str = ""

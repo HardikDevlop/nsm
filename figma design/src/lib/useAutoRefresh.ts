@@ -54,7 +54,10 @@ export function useAutoRefresh<T>(
   // interval polling
   useEffect(() => {
     if (!intervalMs) return
-    const id = setInterval(() => { void refresh() }, intervalMs)
+    const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      void refresh()
+    }, intervalMs)
     return () => clearInterval(id)
   }, [intervalMs, refresh])
 

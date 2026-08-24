@@ -23,7 +23,7 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
 })
 
-const USER_CACHE_KEY = 'nms.user.cache.v1'
+const USER_CACHE_KEY = 'nms.user.cache.v2'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserRecord | null>(null)
@@ -88,7 +88,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // On mount: if token exists in localStorage, fetch user in the background.
+  // On mount: hydrate from cache immediately, then refresh from API so RBAC
+  // changes like newly-seeded permissions show up without manual storage clear.
   useEffect(() => {
     let ignore = false
     void (async () => {
@@ -98,15 +99,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return
       }
       if (ignore) return
-      await hydrateUser(true, false)
+      await hydrateUser(true, true)
     })()
     return () => { ignore = true }
   }, [hydrateUser])
 
   const login = useCallback(async (email: string, password: string) => {
     await apiLogin(email, password)
-    setLoading(false)
-    void hydrateUser(true, false)
+    // Load the user and permissions before protected routes render. Navigating
+    // with only a token set creates a race where the guard sends us back to login.
+    await hydrateUser(true, true)
   }, [hydrateUser])
 
   const logout = useCallback(() => {

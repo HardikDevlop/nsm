@@ -202,7 +202,7 @@ export function useRealtimeDevices(refreshInterval = 5, timeWindow = 30, enabled
 export function useRealtimeMetrics(refreshInterval = 2, timeWindow = 60, enabled = true) {
   const fetchMetrics = useCallback(async () => {
     try {
-      return await listDeviceMetrics()
+      return await listDeviceMetrics(undefined, { limit: 50 })
     } catch (error) {
       if (error instanceof Error && error.message.includes('403')) return []
       throw error

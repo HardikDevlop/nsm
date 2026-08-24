@@ -76,9 +76,13 @@ endpoints on the same backend.
 .\.venv\Scripts\python.exe -m backend.init_db
 ```
 
-Creates the `NMS_DB` database, 20 tables, 73 permissions, 3 roles
-(Admin / Operator / Viewer), and the default admin account.
-Subsequent startups re-seed idempotently via the lifespan hook.
+Initializes the database configured in `DATABASE_URL`, creates the schema,
+applies startup migrations, seeds permissions/roles, and ensures the
+default admin account exists.
+
+Important: this project now uses the existing configured PostgreSQL
+database instead of assuming a separate `NMS_DB` database must be
+created. In the current local setup, that live database is `postgres`.
 
 ## Smoke Test
 

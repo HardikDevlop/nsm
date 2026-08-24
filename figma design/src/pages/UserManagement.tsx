@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import TablePagination from '../components/TablePagination'
+import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listUsers, createUser, updateUser, deleteUser, assignUserRole,
@@ -148,6 +150,8 @@ export default function UserManagement() {
     }
   }
 
+  const pagination = useTablePagination(users)
+
   /* ── render ─────────────────────────────────────────────────────────── */
   if (loading) {
     return (
@@ -199,8 +203,8 @@ export default function UserManagement() {
               </tr>
             </thead>
             <tbody>
-              {users.map(user => {
-                const sc = STATUS_COLORS[user.status] ?? { text: '#8899bb', dot: 'unknown' }
+              {pagination.paginatedItems.map(user => {
+                const sc = STATUS_COLORS[user.status] ?? { text: 'var(--t-muted, #8899bb)', dot: 'unknown' }
                 return (
                   <tr key={user.id} className="transition-colors"
                     style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
@@ -241,7 +245,7 @@ export default function UserManagement() {
                           onChange={e => e.target.value ? void handleRoleChange(user, Number(e.target.value)) : undefined}
                           className="font-mono text-xs rounded-lg px-2 py-1.5 outline-none cursor-pointer"
                           style={{
-                            background: 'rgba(255,255,255,0.04)',
+                            background: 'var(--t-border-light, rgba(255,255,255,0.04))',
                             border: '1px solid var(--t-border-alpha)',
                             color: 'var(--t-text)',
                           }}
@@ -310,6 +314,18 @@ export default function UserManagement() {
             No users found. Create the first one.
           </div>
         )}
+        {users.length > 0 && (
+          <TablePagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            startItem={pagination.startItem}
+            endItem={pagination.endItem}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={(pageSize) => { pagination.setPageSize(pageSize); pagination.setPage(1) }}
+          />
+        )}
       </GlassCard>
 
       {/* ── Create / Edit modal ──────────────────────────────────────────── */}
@@ -335,7 +351,7 @@ export default function UserManagement() {
                 <input value={fName} onChange={e => setFName(e.target.value)}
                   placeholder="John Doe"
                   className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none"
-                  style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
+                  style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
                   onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                   onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}
                 />
@@ -346,7 +362,7 @@ export default function UserManagement() {
                 <input type="email" value={fEmail} onChange={e => setFEmail(e.target.value)}
                   placeholder="user@company.com"
                   className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none"
-                  style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
+                  style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
                   onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                   onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}
                 />
@@ -357,7 +373,7 @@ export default function UserManagement() {
                 <input type="password" value={fPassword} onChange={e => setFPassword(e.target.value)}
                   placeholder={editingUser ? 'Leave blank to keep current' : 'Min 6 characters'}
                   className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none"
-                  style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
+                  style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
                   onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                   onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}
                 />
@@ -369,7 +385,7 @@ export default function UserManagement() {
                   <select value={fRoleId ?? ''}
                     onChange={e => setFRoleId(e.target.value ? Number(e.target.value) : null)}
                     className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none cursor-pointer"
-                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
+                    style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
                     onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                     onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}>
                     <option value="">No Role</option>
@@ -380,7 +396,7 @@ export default function UserManagement() {
                 <FormField label="STATUS">
                   <select value={fStatus} onChange={e => setFStatus(e.target.value)}
                     className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none cursor-pointer"
-                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
+                    style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}
                     onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                     onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}>
                     <option value="active">Active</option>
@@ -394,7 +410,7 @@ export default function UserManagement() {
             <div className="flex gap-2 justify-end mt-6">
               <button onClick={() => setShowModal(false)}
                 className="rounded-lg px-4 py-2.5 font-mono text-xs transition-all hover:opacity-80"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
+                style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>
                 Cancel
               </button>
               <button

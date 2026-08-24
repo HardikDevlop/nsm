@@ -1,7 +1,13 @@
 import { useTheme } from './ThemeContext'
 
 type Alert = { id: number; type: string; msg: string; time: string }
-type Props = { alerts: Alert[]; onClose: () => void; onViewAll?: () => void }
+type Props = {
+  alerts: Alert[]
+  onClose: () => void
+  onViewAll?: () => void
+  onDismiss?: (id: number) => void
+  onClearAll?: () => void
+}
 
 const typeStyle: Record<string, { color: string; bg: string; label: string }> = {
   critical: { color: '#ff3366', bg: 'rgba(255,51,102,0.1)', label: 'CRITICAL' },
@@ -9,7 +15,13 @@ const typeStyle: Record<string, { color: string; bg: string; label: string }> = 
   info: { color: '#00d4ff', bg: 'rgba(0,212,255,0.1)', label: 'INFO' },
 }
 
-export default function NotificationPanel({ alerts, onClose, onViewAll }: Props) {
+export default function NotificationPanel({
+  alerts,
+  onClose,
+  onViewAll,
+  onDismiss,
+  onClearAll,
+}: Props) {
   const { theme } = useTheme()
   const isDark = theme === 'dark'
 
@@ -22,11 +34,22 @@ export default function NotificationPanel({ alerts, onClose, onViewAll }: Props)
           <div className="font-display font-bold text-base tracking-widest neon-cyan">ALERTS</div>
           <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted)' }}>Real-time notifications</div>
         </div>
-        <button onClick={onClose} className="transition-colors" style={{ color: 'var(--t-muted)' }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-2">
+          {alerts.length > 0 && onClearAll && (
+            <button
+              onClick={onClearAll}
+              className="rounded px-2 py-1 font-mono text-[10px] transition-all"
+              style={{ color: '#ff3366', border: '1px solid rgba(255,51,102,0.25)' }}
+            >
+              CLEAR ALL
+            </button>
+          )}
+          <button onClick={onClose} className="transition-colors" style={{ color: 'var(--t-muted)' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -41,6 +64,21 @@ export default function NotificationPanel({ alerts, onClose, onViewAll }: Props)
                 <span className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{a.time} ago</span>
               </div>
               <p className="text-sm leading-snug" style={{ color: 'var(--t-text)' }}>{a.msg}</p>
+              {onDismiss && (
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onDismiss(a.id)
+                    }}
+                    className="rounded px-2 py-1 font-mono text-[10px] transition-all"
+                    style={{ color: s.color, border: `1px solid ${s.color}44` }}
+                  >
+                    DISMISS
+                  </button>
+                </div>
+              )}
             </div>
           )
         })}

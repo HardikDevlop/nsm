@@ -12,7 +12,7 @@
   --color-secondary-foreground: #000000;
   --color-danger: #ff3366;
   --color-warning: #ffaa00;
-  --color-muted: rgba(255, 255, 255, 0.05);
+  --color-muted: var(--t-border-light, rgba(255, 255, 255, 0.05));
   --color-muted-foreground: var(--t-muted, #888888);
   --color-accent: #7c3aed;
   --color-border: var(--t-border-light, rgba(30, 30, 30, 0.8));
@@ -37,6 +37,53 @@ body {
   color: var(--t-text, #e2e8f5);
   font-family: 'Josefin Sans', sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Keep native controls readable when the global theme changes. */
+input,
+select,
+textarea {
+  color: var(--t-text, #e2e8f5);
+  background-color: var(--t-card, #0f0f0f);
+  border-color: var(--t-border-alpha, rgba(30, 30, 30, 0.8));
+  color-scheme: light dark;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--t-muted, #888888);
+  opacity: .85;
+}
+
+option {
+  color: var(--t-text, #e2e8f5);
+  background: var(--t-card, #0f0f0f);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid var(--t-accent-border, rgba(255, 0, 21, .4));
+  outline-offset: 1px;
+}
+
+[data-theme="light"] input,
+[data-theme="light"] select,
+[data-theme="light"] textarea,
+[data-theme="light"] option {
+  color-scheme: light;
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea,
+[data-theme="dark"] option {
+  color-scheme: dark;
+}
+
+::selection {
+  color: var(--t-text, #e2e8f5);
+  background: var(--t-accent-alpha, rgba(255, 0, 21, .2));
 }
 
 /* ===================== SCROLLBAR ===================== */

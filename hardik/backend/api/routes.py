@@ -1,14 +1,14 @@
 from datetime import datetime, timedelta
 from threading import Lock
-from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import case, func, select
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from backend.auth.security import create_access_token, hash_password, verify_password
 from backend.database.session import get_db
+from backend.database.migrations import get_migration_status
 from backend.dependencies import get_current_user, require_permission, require_any_permission
 from backend.models import (
     Alert,
@@ -45,6 +45,7 @@ from backend.schemas.nms import (
     DeviceCredentialUpdate,
     DeviceMetricCreate,
     DeviceMetricRead,
+    DeviceOptionRead,
     DeviceMetricUpdate,
     DeviceRead,
     DeviceStatusHistoryRead,
@@ -132,9 +133,19 @@ def _user_read(user: User) -> UserRead:
 
 
 @router.get("/health")
-def health(db: Session = Depends(get_db)) -> dict[str, str]:
-    db.execute(select(func.now()))
-    return {"status": "ok", "database": "connected"}
+def health(db: Session = Depends(get_db)) -> dict[str, object]:
+    database_now = db.execute(select(func.now())).scalar()
+    current_database = db.execute(select(func.current_database())).scalar()
+    migration_status = get_migration_status(db.get_bind())
+    return {
+        "status": "ok",
+        "database": {
+            "connected": True,
+            "name": current_database,
+            "server_time": database_now.isoformat() if database_now else None,
+        },
+        "migrations": migration_status,
+    }
 
 
 @router.post("/auth/login", response_model=Token)
@@ -459,7 +470,32 @@ def update_device_type(item_id: int, payload: DeviceTypeUpdate, db: Session = De
 
 @router.delete("/device-types/{item_id}")
 def delete_device_type(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("device_types:delete"))):
-    result = device_type_crud.delete(db, item_id)
+    item = device_type_crud.get(db, item_id)
+    active_device_count = (
+        db.query(func.count(Device.id))
+        .filter(Device.device_type_id == item_id, Device.deleted_at.is_(None))
+        .scalar()
+    ) or 0
+    if active_device_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f'Cannot delete device type "{item.name}" because it is assigned to {active_device_count} device(s).',
+        )
+
+    active_threshold_count = (
+        db.query(func.count(Threshold.id))
+        .filter(Threshold.device_type_id == item_id, Threshold.deleted_at.is_(None))
+        .scalar()
+    ) or 0
+    if active_threshold_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f'Cannot delete device type "{item.name}" because it is used by {active_threshold_count} threshold(s).',
+        )
+
+    db.delete(item)
+    db.commit()
+    result = {"detail": f'DeviceType {item_id} deleted'}
     audit(db, current_user.id, "DELETE", "device_types")
     return result
 
@@ -467,7 +503,58 @@ def delete_device_type(item_id: int, db: Session = Depends(get_db), current_user
 # ---------------------------------------------------------------- Devices
 @router.get("/devices", response_model=list[DeviceRead])
 def list_devices(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("devices:read"))):
-    return device_crud.list(db, skip, limit)
+    return (
+        db.query(Device)
+        .options(load_only(
+            Device.id,
+            Device.site_id,
+            Device.hostname,
+            Device.ip_address,
+            Device.mac_address,
+            Device.vendor_id,
+            Device.device_type_id,
+            Device.serial_number,
+            Device.model,
+            Device.firmware_version,
+            Device.status,
+            Device.monitoring_status,
+            Device.last_seen,
+            Device.created_at,
+            Device.uptime_seconds,
+            Device.downtime_seconds,
+            Device.last_status_change,
+            Device.deleted_at,
+        ))
+        .filter(Device.deleted_at.is_(None))
+        .order_by(Device.id)
+        .offset(skip)
+        .limit(min(limit, 500))
+        .all()
+    )
+
+
+@router.get("/devices/options", response_model=list[DeviceOptionRead])
+def list_device_options(
+    skip: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("devices:read")),
+):
+    return (
+        db.query(Device)
+        .options(load_only(
+            Device.id,
+            Device.hostname,
+            Device.ip_address,
+            Device.status,
+            Device.deleted_at,
+        ))
+        .filter(Device.deleted_at.is_(None))
+        .order_by(Device.hostname.asc(), Device.id.asc())
+        .offset(skip)
+        .limit(min(limit, 1000))
+        .all()
+    )
 
 
 @router.post("/devices", response_model=DeviceRead, status_code=status.HTTP_201_CREATED)
@@ -605,7 +692,20 @@ def get_device(item_id: int, db: Session = Depends(get_db), _: User = Depends(re
 
 @router.patch("/devices/{item_id}", response_model=DeviceRead)
 def update_device(item_id: int, payload: DeviceUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:update"))):
-    item = device_crud.update(db, item_id, payload)
+    values = payload.model_dump(exclude_unset=True)
+    vendor_name = values.pop("vendor_name", None)
+    if vendor_name is not None:
+        vendor_name = vendor_name.strip()
+        if vendor_name:
+            vendor = db.query(Vendor).filter(Vendor.vendor_name.ilike(vendor_name)).first()
+            if not vendor:
+                vendor = Vendor(vendor_name=vendor_name)
+                db.add(vendor)
+                db.flush()
+            values["vendor_id"] = vendor.id
+        else:
+            values["vendor_id"] = None
+    item = device_crud.update(db, item_id, values)
     audit(db, current_user.id, "UPDATE", "devices")
     return item
 
@@ -703,7 +803,26 @@ def delete_credential(item_id: int, db: Session = Depends(get_db), current_user:
 # ---------------------------------------------------------------- Interfaces
 @router.get("/interfaces", response_model=list[InterfaceRead])
 def list_interfaces(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("interfaces:read"))):
-    return interface_crud.list(db, skip, limit)
+    return (
+        db.query(Interface)
+        .options(load_only(
+            Interface.id,
+            Interface.device_id,
+            Interface.interface_name,
+            Interface.status,
+            Interface.speed,
+            Interface.traffic_in,
+            Interface.traffic_out,
+            Interface.packet_errors,
+            Interface.last_updated,
+            Interface.deleted_at,
+        ))
+        .filter(Interface.deleted_at.is_(None))
+        .order_by(Interface.id)
+        .offset(skip)
+        .limit(min(limit, 500))
+        .all()
+    )
 
 
 @router.get("/interfaces/{item_id}", response_model=InterfaceRead)
@@ -769,7 +888,18 @@ def delete_monitoring_job(item_id: int, db: Session = Depends(get_db), current_u
 # ---------------------------------------------------------------- Device metrics
 @router.get("/device-metrics", response_model=list[DeviceMetricRead])
 def list_device_metrics(device_id: int | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_any_permission("device_metrics:read", "devices:read"))):
-    query = db.query(DeviceMetric)
+    query = db.query(DeviceMetric).options(load_only(
+        DeviceMetric.id,
+        DeviceMetric.device_id,
+        DeviceMetric.cpu_usage,
+        DeviceMetric.memory_usage,
+        DeviceMetric.disk_usage,
+        DeviceMetric.temperature,
+        DeviceMetric.latency,
+        DeviceMetric.packet_loss,
+        DeviceMetric.bandwidth_usage,
+        DeviceMetric.created_at,
+    ))
     if device_id:
         query = query.filter(DeviceMetric.device_id == device_id)
     return query.order_by(DeviceMetric.created_at.desc()).offset(skip).limit(min(limit, 500)).all()
@@ -832,7 +962,18 @@ def delete_threshold(item_id: int, db: Session = Depends(get_db), current_user: 
 # ---------------------------------------------------------------- Alerts
 @router.get("/alerts", response_model=list[AlertRead])
 def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("alerts:read"))):
-    query = db.query(Alert).filter(Alert.deleted_at.is_(None))
+    query = db.query(Alert).options(load_only(
+        Alert.id,
+        Alert.device_id,
+        Alert.severity,
+        Alert.title,
+        Alert.description,
+        Alert.status,
+        Alert.acknowledged_by,
+        Alert.resolved_at,
+        Alert.created_at,
+        Alert.deleted_at,
+    )).filter(Alert.deleted_at.is_(None))
     if status_filter:
         query = query.filter(Alert.status == status_filter)
     return query.order_by(Alert.created_at.desc()).offset(skip).limit(min(limit, 500)).all()
@@ -898,6 +1039,14 @@ def resolve_alert(item_id: int, db: Session = Depends(get_db), current_user: Use
 def list_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("events:read"))):
     return (
         db.query(Event)
+        .options(load_only(
+            Event.id,
+            Event.device_id,
+            Event.event_type,
+            Event.description,
+            Event.timestamp,
+            Event.deleted_at,
+        ))
         .filter(Event.deleted_at.is_(None))
         .order_by(Event.timestamp.desc())
         .offset(skip)
@@ -1308,19 +1457,23 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_p
             if (now - cached_at).total_seconds() < _DASHBOARD_SUMMARY_TTL_SECONDS:
                 return cached_value
 
-    total_devices = db.query(Device).filter(Device.deleted_at.is_(None)).count()
-    online_devices = db.query(Device).filter(Device.deleted_at.is_(None), Device.status == "online").count()
-    offline_devices = db.query(Device).filter(Device.deleted_at.is_(None), Device.status == "offline").count()
-    active_alerts = db.query(Alert).filter(Alert.status.in_(["open", "acknowledged"])).count()
-    critical_alerts = db.query(Alert).filter(Alert.severity == "critical", Alert.status != "resolved").count()
-    since = datetime.utcnow() - timedelta(hours=24)
-    recent_events = db.query(Event).filter(Event.timestamp >= since).count()
+    device_counts = db.query(
+        func.count(Device.id).label("total_devices"),
+        func.coalesce(func.sum(case((Device.status == "online", 1), else_=0)), 0).label("online_devices"),
+        func.coalesce(func.sum(case((Device.status == "offline", 1), else_=0)), 0).label("offline_devices"),
+    ).filter(Device.deleted_at.is_(None)).one()
+    alert_counts = db.query(
+        func.coalesce(func.sum(case((Alert.status.in_(["open", "acknowledged"]), 1), else_=0)), 0).label("active_alerts"),
+        func.coalesce(func.sum(case(((Alert.severity == "critical") & (Alert.status != "resolved"), 1), else_=0)), 0).label("critical_alerts"),
+    ).one()
+    since = now - timedelta(hours=24)
+    recent_events = db.query(func.count(Event.id)).filter(Event.timestamp >= since).scalar() or 0
     summary = DashboardSummary(
-        total_devices=total_devices,
-        online_devices=online_devices,
-        offline_devices=offline_devices,
-        active_alerts=active_alerts,
-        critical_alerts=critical_alerts,
+        total_devices=int(device_counts.total_devices or 0),
+        online_devices=int(device_counts.online_devices or 0),
+        offline_devices=int(device_counts.offline_devices or 0),
+        active_alerts=int(alert_counts.active_alerts or 0),
+        critical_alerts=int(alert_counts.critical_alerts or 0),
         recent_events=recent_events,
     )
     with _dashboard_summary_lock:
