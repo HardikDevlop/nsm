@@ -29,6 +29,7 @@ from typing import Any
 
 from .credentials import SNMPCredentials
 from .security import AUTH_PROTOCOLS, PRIVACY_PROTOCOLS, protocol_name
+from backend.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ _snmp_executor = concurrent.futures.ThreadPoolExecutor(
 _MAX_WALK_ROWS = 2000
 
 
-def _run_in_thread(coro: Any) -> Any:
+def _run_in_thread(coro: Any, timeout: float) -> Any:
     """
     Run *coro* in a dedicated thread that owns its own event loop.
 
@@ -74,7 +75,11 @@ def _run_in_thread(coro: Any) -> Any:
             loop.close()
 
     future = _snmp_executor.submit(_worker)
-    return future.result(timeout=120)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError as exc:
+        future.cancel()
+        raise TimeoutError(f"SNMP operation exceeded {timeout:.1f}s timeout") from exc
 
 
 class SNMPClient:
@@ -87,12 +92,18 @@ class SNMPClient:
     def __init__(
         self,
         credentials: SNMPCredentials,
-        timeout: float = 5.0,
-        retries: int = 1,
+        timeout: float | None = None,
+        retries: int | None = None,
+        operation_timeout: float | None = None,
     ) -> None:
+        settings = get_settings()
         self.credentials = credentials
-        self.timeout     = timeout
-        self.retries     = retries
+        self.timeout = settings.snmp_request_timeout if timeout is None else timeout
+        self.retries = settings.snmp_retries if retries is None else retries
+        self.operation_timeout = (
+            settings.snmp_operation_timeout
+            if operation_timeout is None else operation_timeout
+        )
 
     # ------------------------------------------------------------------
     # Auth object (rebuilt per-call to avoid sharing state across threads)
@@ -152,7 +163,9 @@ class SNMPClient:
                 *(ObjectType(ObjectIdentity(oid)) for oid in oids),
             )
 
-        errInd, errSt, _errIdx, var_binds = _run_in_thread(_run())
+        errInd, errSt, _errIdx, var_binds = _run_in_thread(
+            _run(), self.operation_timeout
+        )
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
 
         if errInd or errSt:
@@ -255,7 +268,7 @@ class SNMPClient:
 
             return result
 
-        result  = _run_in_thread(_run())
+        result  = _run_in_thread(_run(), self.operation_timeout)
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
         logger.debug(
             "WALK %s root=%s rows=%d ms=%.1f",

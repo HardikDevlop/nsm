@@ -2,7 +2,7 @@ const DEFAULT_API_BASE = "/api/v1"
 const API_BASE = (
   import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE
 ).replace(/\/$/, "")
-const GET_CACHE_TTL_MS = 15_000
+const GET_CACHE_TTL_MS = 30_000
 const GET_CACHE_PREFIX = "nms.api.cache.v1:"
 
 let authToken: string | null = null

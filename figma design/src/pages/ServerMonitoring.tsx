@@ -231,7 +231,7 @@ export default function ServerMonitoring() {
     ({ devices: d, metrics: m, interfaces: i, alerts: a }) => {
       setDevices(d); setMetrics(m); setInterfaces(i); setAlerts(a)
     },
-    15000,
+    30000,
   )
 
   // Build per-device ServerRow objects

@@ -815,9 +815,7 @@ def list_interfaces(skip: int = 0, limit: int = 100, db: Session = Depends(get_d
             Interface.traffic_out,
             Interface.packet_errors,
             Interface.last_updated,
-            Interface.deleted_at,
         ))
-        .filter(Interface.deleted_at.is_(None))
         .order_by(Interface.id)
         .offset(skip)
         .limit(min(limit, 500))
@@ -1449,7 +1447,12 @@ def get_audit_log(item_id: int, db: Session = Depends(get_db), _: User = Depends
 # ---------------------------------------------------------------- Dashboard
 @router.get("/dashboard/summary", response_model=DashboardSummary)
 def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:read"))):
+    from backend.cache.redis_cache import get_json, set_json
+
     now = datetime.utcnow()
+    redis_value = get_json("nms:dashboard:summary:v1")
+    if isinstance(redis_value, dict):
+        return DashboardSummary.model_validate(redis_value)
     with _dashboard_summary_lock:
         cached_at = _dashboard_summary_cache.get("cached_at")
         cached_value = _dashboard_summary_cache.get("value")
@@ -1457,28 +1460,31 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_p
             if (now - cached_at).total_seconds() < _DASHBOARD_SUMMARY_TTL_SECONDS:
                 return cached_value
 
-    device_counts = db.query(
-        func.count(Device.id).label("total_devices"),
-        func.coalesce(func.sum(case((Device.status == "online", 1), else_=0)), 0).label("online_devices"),
-        func.coalesce(func.sum(case((Device.status == "offline", 1), else_=0)), 0).label("offline_devices"),
-    ).filter(Device.deleted_at.is_(None)).one()
-    alert_counts = db.query(
-        func.coalesce(func.sum(case((Alert.status.in_(["open", "acknowledged"]), 1), else_=0)), 0).label("active_alerts"),
-        func.coalesce(func.sum(case(((Alert.severity == "critical") & (Alert.status != "resolved"), 1), else_=0)), 0).label("critical_alerts"),
-    ).one()
     since = now - timedelta(hours=24)
-    recent_events = db.query(func.count(Event.id)).filter(Event.timestamp >= since).scalar() or 0
+    summary_counts = db.query(
+        db.query(func.count(Device.id)).filter(Device.deleted_at.is_(None)).scalar_subquery().label("total_devices"),
+        db.query(func.count(Device.id)).filter(Device.deleted_at.is_(None), Device.status == "online").scalar_subquery().label("online_devices"),
+        db.query(func.count(Device.id)).filter(Device.deleted_at.is_(None), Device.status == "offline").scalar_subquery().label("offline_devices"),
+        db.query(func.count(Alert.id)).filter(
+            Alert.status.in_(["open", "acknowledged"]), Alert.deleted_at.is_(None)
+        ).scalar_subquery().label("active_alerts"),
+        db.query(func.count(Alert.id)).filter(
+            Alert.severity == "critical", Alert.status != "resolved"
+        ).scalar_subquery().label("critical_alerts"),
+        db.query(func.count(Event.id)).filter(Event.timestamp >= since).scalar_subquery().label("recent_events"),
+    ).one()
     summary = DashboardSummary(
-        total_devices=int(device_counts.total_devices or 0),
-        online_devices=int(device_counts.online_devices or 0),
-        offline_devices=int(device_counts.offline_devices or 0),
-        active_alerts=int(alert_counts.active_alerts or 0),
-        critical_alerts=int(alert_counts.critical_alerts or 0),
-        recent_events=recent_events,
+        total_devices=int(summary_counts.total_devices or 0),
+        online_devices=int(summary_counts.online_devices or 0),
+        offline_devices=int(summary_counts.offline_devices or 0),
+        active_alerts=int(summary_counts.active_alerts or 0),
+        critical_alerts=int(summary_counts.critical_alerts or 0),
+        recent_events=int(summary_counts.recent_events or 0),
     )
     with _dashboard_summary_lock:
         _dashboard_summary_cache["cached_at"] = now
         _dashboard_summary_cache["value"] = summary
+    set_json("nms:dashboard:summary:v1", summary.model_dump())
     return summary
 
 

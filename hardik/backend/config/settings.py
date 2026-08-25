@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_use_tls: bool = True
     alert_email_recipients: str = ""
+    snmp_request_timeout: float = 3.0
+    snmp_retries: int = 1
+    snmp_operation_timeout: float = 120.0
+    redis_url: str = "redis://localhost:6379/0"
+    redis_cache_ttl_seconds: int = 10
 
     @property
     def cors_origins(self) -> list[str]:

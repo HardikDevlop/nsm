@@ -98,7 +98,7 @@ export default function PacketAnalysis() {
     ({ interfaces: i, alerts: a, devices: d, metrics: m, liveDevices: ld }) => {
       setInterfaces(i); setAlerts(a); setDevices(d); setMetrics(m); setLiveDevices(ld)
     },
-    15000,
+    30000,
   )
 
   // Device map for IP lookups

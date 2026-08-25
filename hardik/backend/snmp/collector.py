@@ -134,10 +134,11 @@ class SNMPService:
     def __init__(
         self,
         credentials: SNMPCredentials,
-        timeout: float = 2.0,
-        retries: int = 1,
+        timeout: float | None = None,
+        retries: int | None = None,
+        operation_timeout: float | None = None,
     ) -> None:
-        self.client      = SNMPClient(credentials, timeout, retries)
+        self.client = SNMPClient(credentials, timeout, retries, operation_timeout)
         self.credentials = credentials
         self._normalizer = NormalizationLayer()
         self._detector   = VendorDetector()
@@ -224,6 +225,8 @@ class SNMPService:
             try:
                 resp = collector.collect(device, registry, registry.profile)
                 c_ms = round((time.perf_counter() - c_t0) * 1000, 1)
+                from backend.observability import record_collector_duration  # noqa: PLC0415
+                record_collector_duration(c_ms)
 
                 collectors_out[collector.name] = resp.to_dict()
 
@@ -251,6 +254,8 @@ class SNMPService:
 
             except Exception as exc:
                 c_ms = round((time.perf_counter() - c_t0) * 1000, 1)
+                from backend.observability import record_collector_duration  # noqa: PLC0415
+                record_collector_duration(c_ms)
                 logger.error(
                     "  %-16s ERROR   ms=%-6.1f %s: %s",
                     collector.name, c_ms,
@@ -315,9 +320,15 @@ class SNMPService:
 
         device   = self._normalizer.normalize(raw, vendor=vendor, device_type=device_type)
         registry = build_registry(vendor=vendor, walk=raw)
+        c_t0 = time.perf_counter()
         try:
-            return collector.collect(device, registry, registry.profile).to_dict()
+            result = collector.collect(device, registry, registry.profile).to_dict()
+            from backend.observability import record_collector_duration  # noqa: PLC0415
+            record_collector_duration((time.perf_counter() - c_t0) * 1000)
+            return result
         except Exception as exc:
+            from backend.observability import record_collector_duration  # noqa: PLC0415
+            record_collector_duration((time.perf_counter() - c_t0) * 1000)
             return {"supported": False, "reason": str(exc)}
 
     @staticmethod

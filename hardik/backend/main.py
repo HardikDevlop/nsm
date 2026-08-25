@@ -13,6 +13,7 @@ from backend.api.monitoring_data_routes import router as monitoring_data_router
 from backend.config.settings import get_settings
 from backend.database.migrations import run_migrations
 from backend.database.session import Base, SessionLocal, engine
+from backend.observability import install_db_timing, request_timing_middleware
 from backend.seed import seed_rbac, seed_ouis_and_products
 from backend.services.snmp_polling import get_polling_scheduler, shutdown_polling_scheduler
 from logging_config import configure_logging
@@ -37,7 +38,9 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 configure_logging()
+install_db_timing(engine)
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.middleware("http")(request_timing_middleware)
 
 app.add_middleware(
     CORSMiddleware,

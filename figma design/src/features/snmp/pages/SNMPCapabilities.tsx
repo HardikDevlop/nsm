@@ -2,32 +2,22 @@ import { useParams, useNavigate } from 'react-router'
 import { useEffect, useState } from 'react'
 import GlassCard from '../../../components/GlassCard'
 import { useDeviceCapabilities } from '../modules/useSNMPModules'
-import { listSNMPDevices, type DeviceRecord } from '../../../lib/api'
+import { useSNMPDevices } from '../hooks/useSnmpQueries'
 
 export default function SNMPCapabilities() {
   const { deviceId } = useParams<{ deviceId: string }>()
   const navigate = useNavigate()
   const id = Number(deviceId)
   
-  const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(id || null)
+  const { data: deviceData } = useSNMPDevices({ page: 1, page_size: 200 })
+  const devices = deviceData?.items || []
   
   const { data: capabilities, isLoading, error } = useDeviceCapabilities(selectedDeviceId)
   
   useEffect(() => {
-    const loadDevices = async () => {
-      try {
-        const devs = await listSNMPDevices()
-        setDevices(devs)
-        if (!selectedDeviceId && devs.length > 0) {
-          setSelectedDeviceId(devs[0].id)
-        }
-      } catch (err) {
-        console.error('Failed to load devices:', err)
-      }
-    }
-    void loadDevices()
-  }, [selectedDeviceId])
+    if (!selectedDeviceId && devices.length > 0) setSelectedDeviceId(devices[0].id)
+  }, [devices, selectedDeviceId])
 
   const handleDeviceChange = (devId: number) => {
     setSelectedDeviceId(devId)

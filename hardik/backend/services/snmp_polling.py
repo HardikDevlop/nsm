@@ -167,6 +167,7 @@ class SNMPPoller:
     async def poll(self, job: PollJob) -> dict[str, Any]:
         """Execute a single poll for the job."""
         from backend.models import Device
+        from backend.services.snmp_poll_guard import poll_guard
         device = self.db.query(Device).filter(Device.id == job.device_id).first()
         if not device:
             return {"success": False, "error": "Device not found"}
@@ -185,11 +186,18 @@ class SNMPPoller:
         collector_name = MODULE_COLLECTOR_MAP.get(job.module_name, job.module_name)
         started = time.perf_counter()
 
+        guard = poll_guard(job.device_id, job.module_name, blocking=False)
+        acquired = guard.__enter__()
+        if not acquired:
+            guard.__exit__(None, None, None)
+            logger.info("Skipping duplicate poll for %s", job.job_id)
+            return {"success": True, "skipped": True, "in_progress": True, "duration_ms": 0}
+
         try:
             # collect_domain is synchronous and performs network I/O. Running it
             # directly here blocks the asyncio scheduler and serializes all jobs.
             # Keep the event loop free so independent devices/modules poll in parallel.
-            service = SNMPService(credentials=credentials, timeout=2.0, retries=0)
+            service = SNMPService(credentials=credentials)
             result = await asyncio.to_thread(service.collect_domain, ip, collector_name)
             duration_ms = round((time.perf_counter() - started) * 1000, 1)
 
@@ -198,7 +206,7 @@ class SNMPPoller:
 
             # Persist latest values and history
             self.db = SessionLocal()
-            await self._persist_results(job, data, supported)
+            await self._persist_results(job, data, supported, duration_ms)
 
             return {
                 "success": True,
@@ -215,8 +223,16 @@ class SNMPPoller:
                 "error": str(exc),
                 "duration_ms": duration_ms,
             }
+        finally:
+            guard.__exit__(None, None, None)
 
-    async def _persist_results(self, job: PollJob, data: dict, supported: bool) -> None:
+    async def _persist_results(
+        self,
+        job: PollJob,
+        data: dict,
+        supported: bool,
+        duration_ms: float | None = None,
+    ) -> None:
         """Persist poll results to latest-value tables and history."""
         module = job.module_name
         device_id = job.device_id
@@ -258,7 +274,7 @@ class SNMPPoller:
             self._evaluate_alerts(device_id, module, data)
 
             # Always persist to history tables
-            await self._persist_history(device_id, module, data, supported, now)
+            await self._persist_history(device_id, module, data, supported, now, duration_ms)
 
             self.db.commit()
         except Exception as exc:
@@ -564,14 +580,22 @@ class SNMPPoller:
             )
             self.db.add(hist)
 
-    async def _persist_history(self, device_id: int, module: str, data: dict, supported: bool, now: datetime) -> None:
+    async def _persist_history(
+        self,
+        device_id: int,
+        module: str,
+        data: dict,
+        supported: bool,
+        now: datetime,
+        duration_ms: float | None = None,
+    ) -> None:
         """Persist to polling_history for audit trail."""
         status = PollStatus.SUCCESS.value if supported else PollStatus.NOT_SUPPORTED.value
         self.db.add(PollingHistory(
             device_id=device_id,
             collector=module,
             status=status,
-            duration_ms=0,  # Will be updated by caller
+            duration_ms=duration_ms if duration_ms is not None else 0,
             error=None if supported else "Module not supported",
             created_at=now,
         ))

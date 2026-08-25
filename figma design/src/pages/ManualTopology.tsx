@@ -6,6 +6,7 @@ import {
   getLatestManualTopologySnapshot,
   getSNMPInterfaces,
   listSNMPDevicesOptimized,
+  pingIps,
   reconcileManualTopology,
   resolveManualTopologyChange,
   type ManualTopologyChange,
@@ -13,6 +14,7 @@ import {
   updateDevice,
   updateManualTopologySnapshot,
 } from "../lib/api"
+import { toast } from "../lib/swal"
 
 type Device = {
   id: string
@@ -87,6 +89,7 @@ const isVirtualPort = (name: string, type?: string) => {
 
 const STORAGE_KEY = "nms.manual-topology.workspace.v2"
 const LEGACY_STORAGE_KEY = "nms.manual-topology.workspace.v1"
+const OFFLINE_ALERT_KEY = "nms.device-health.offline-alerts.v1"
 const tones = [
   "#f97316",
   "#ff3366",
@@ -656,6 +659,7 @@ export default function ManualTopology() {
   } | null>(null)
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
   const [realDevices, setRealDevices] = useState<SNMPDeviceListItem[]>([])
+  const [deviceHealth, setDeviceHealth] = useState<Record<number, boolean>>({})
   const [realDeviceId, setRealDeviceId] = useState("")
   const [portsLoading, setPortsLoading] = useState(false)
   const [portsError, setPortsError] = useState<string | null>(null)
@@ -687,6 +691,20 @@ export default function ManualTopology() {
   const [checked, setChecked] = useState<boolean[]>(
     checklistItems.map(() => false),
   )
+  const alertedOfflineIps = useRef(new Set<string>())
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(
+        window.sessionStorage.getItem(OFFLINE_ALERT_KEY) || "[]",
+      )
+      if (Array.isArray(saved)) {
+        alertedOfflineIps.current = new Set(saved.filter((ip) => typeof ip === "string"))
+      }
+    } catch {
+      // Optional session-only alert state.
+    }
+  }, [])
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace))
@@ -739,10 +757,92 @@ export default function ManualTopology() {
     return () => window.clearInterval(timer)
   }, [snapshotId])
   useEffect(() => {
+    let cancelled = false
     void listSNMPDevicesOptimized({ page: 1, page_size: 200 })
-      .then((response) => setRealDevices(response.items))
-      .catch(() => setRealDevices([]))
+      .then((response) => {
+        if (cancelled) return
+        setRealDevices(response.items)
+        const activeIds = new Set(response.items.map((device) => device.id))
+        setWorkspace((current) => {
+          const devices = current.devices.filter(
+            (device) => !device.backendId || activeIds.has(device.backendId),
+          )
+          if (devices.length === current.devices.length) return current
+          const deviceIds = new Set(devices.map((device) => device.id))
+          return {
+            devices,
+            links: current.links.filter(
+              (link) => deviceIds.has(link.from) && deviceIds.has(link.to),
+            ),
+          }
+        })
+      })
+      .catch(() => {
+        if (!cancelled) setRealDevices([])
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
+
+  useEffect(() => {
+    if (realDevices.length === 0) return
+    let cancelled = false
+    const checkDeviceHealth = async () => {
+      try {
+        const results = await pingIps(
+          realDevices.map((device) => device.ip_address).filter(Boolean),
+          1000,
+        )
+        if (cancelled) return
+        const byIp = new Map(results.results.map((result) => [result.ip, result]))
+        const nextHealth: Record<number, boolean> = {}
+        const offline: SNMPDeviceListItem[] = []
+        realDevices.forEach((device) => {
+          const result = byIp.get(device.ip_address)
+          const reachable = result?.reachable === true
+          nextHealth[device.id] = reachable
+          if (!reachable) offline.push(device)
+          if (reachable) alertedOfflineIps.current.delete(device.ip_address)
+        })
+        setDeviceHealth(nextHealth)
+        const newOffline = offline.filter((device) => {
+          if (alertedOfflineIps.current.has(device.ip_address)) return false
+          alertedOfflineIps.current.add(device.ip_address)
+          return true
+        })
+        if (newOffline.length > 0) {
+          try {
+            window.sessionStorage.setItem(
+              OFFLINE_ALERT_KEY,
+              JSON.stringify([...alertedOfflineIps.current]),
+            )
+          } catch {
+            // Optional session-only alert state.
+          }
+          toast.error(
+            `Device unreachable: ${newOffline
+              .map((device) => `${device.ip_address} (${device.hostname || device.name || "unknown"})`)
+              .join(", ")}`,
+          )
+        }
+      } catch (error) {
+        if (!cancelled) {
+          toast.warning(
+            error instanceof Error
+              ? `Device health check failed: ${error.message}`
+              : "Device health check failed",
+          )
+        }
+      }
+    }
+    void checkDeviceHealth()
+    const timer = window.setInterval(checkDeviceHealth, 120000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [realDevices])
 
   useEffect(() => {
     if (realDevices.length === 0) return
@@ -757,10 +857,16 @@ export default function ManualTopology() {
           ...device,
           name: real.hostname || real.name || real.ip_address,
           subtitle: device.ipAddress || real.ip_address,
+          status:
+            deviceHealth[real.id] === undefined
+              ? device.status
+              : deviceHealth[real.id]
+                ? "online"
+                : "offline",
         }
       }),
     }))
-  }, [realDevices])
+  }, [realDevices, deviceHealth])
 
   const selected = workspace.devices.find((device) => device.id === selectedId)
   const selectedPorts = Array.isArray(selected?.ports)

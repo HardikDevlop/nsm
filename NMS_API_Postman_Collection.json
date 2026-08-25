@@ -1,0 +1,128 @@
+{
+  "info": {
+    "_postman_id": "nms-api-collection-v1",
+    "name": "NMS API Collection",
+    "description": "Postman collection for NMS API v1. Set baseUrl, email and password before running.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000/api/v1" },
+    { "key": "email", "value": "admin@example.com" },
+    { "key": "password", "value": "" },
+    { "key": "accessToken", "value": "" },
+    { "key": "deviceId", "value": "1" },
+    { "key": "interfaceId", "value": "1" },
+    { "key": "module", "value": "system" },
+    { "key": "ipAddress", "value": "192.168.100.1" },
+    { "key": "hours", "value": "24" },
+    { "key": "pageSize", "value": "25" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login - save access token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" },
+            "url": "{{baseUrl}}/auth/login"
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Login succeeded', function () { pm.expect(pm.response.code).to.be.oneOf([200, 201]); });",
+              "const body = pm.response.json();",
+              "if (body.access_token) pm.collectionVariables.set('accessToken', body.access_token);"
+            ] }
+          }]
+        },
+        { "name": "Current user", "request": { "method": "GET", "url": "{{baseUrl}}/auth/me" } }
+      ]
+    },
+    {
+      "name": "Core Devices",
+      "item": [
+        { "name": "List devices", "request": { "method": "GET", "url": "{{baseUrl}}/devices" } },
+        { "name": "Device options", "request": { "method": "GET", "url": "{{baseUrl}}/devices/options" } },
+        { "name": "Get device", "request": { "method": "GET", "url": "{{baseUrl}}/devices/{{deviceId}}" } },
+        { "name": "Device status history", "request": { "method": "GET", "url": "{{baseUrl}}/devices/{{deviceId}}/status-history" } },
+        { "name": "Create device", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"hostname\": \"test-device\",\n  \"ip_address\": \"192.168.100.10\",\n  \"status\": \"unknown\"\n}" }, "url": "{{baseUrl}}/devices" } },
+        { "name": "Update device", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"hostname\": \"updated-device\"\n}" }, "url": "{{baseUrl}}/devices/{{deviceId}}" } },
+        { "name": "Delete device", "request": { "method": "DELETE", "url": "{{baseUrl}}/devices/{{deviceId}}" } },
+        { "name": "Device metrics", "request": { "method": "GET", "url": "{{baseUrl}}/device-metrics?device_id={{deviceId}}&limit=200" } },
+        { "name": "Device history", "request": { "method": "GET", "url": "{{baseUrl}}/discovery/device-history/{{ipAddress}}?hours={{hours}}" } }
+      ]
+    },
+    {
+      "name": "SNMP Devices",
+      "item": [
+        { "name": "SNMP device list", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices?page=1&page_size={{pageSize}}&sort_by=id&sort_order=asc" } },
+        { "name": "Search SNMP device by IP", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices?page=1&page_size={{pageSize}}&search={{ipAddress}}" } },
+        { "name": "SNMP device details", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}" } },
+        { "name": "SNMP overview", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/overview" } },
+        { "name": "SNMP monitoring configs", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/monitoring" } },
+        { "name": "SNMP latest metrics", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/metrics/latest" } },
+        { "name": "SNMP identity", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/identity" } },
+        { "name": "SNMP capabilities", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/capabilities" } },
+        { "name": "SNMP system", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/system" } },
+        { "name": "SNMP CPU", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/cpu" } },
+        { "name": "SNMP memory", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/memory" } },
+        { "name": "SNMP storage", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/storage" } },
+        { "name": "SNMP interfaces", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/interfaces" } },
+        { "name": "SNMP environment", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/environment" } },
+        { "name": "SNMP VLANs", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/vlans" } },
+        { "name": "SNMP LLDP", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/lldp" } },
+        { "name": "SNMP routing", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/routing" } },
+        { "name": "SNMP MAC table", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/mac-table" } },
+        { "name": "SNMP ARP", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/arp" } },
+        { "name": "SNMP polling history", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/polling-history?hours={{hours}}" } },
+        { "name": "SNMP polling statistics", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/polling-stats" } },
+        { "name": "SNMP topology", "request": { "method": "GET", "url": "{{baseUrl}}/snmp/topology?device_id={{deviceId}}" } },
+        { "name": "Live SNMP poll", "request": { "method": "POST", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/poll" } },
+        { "name": "Test SNMP connection", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"timeout_seconds\": 5\n}" }, "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/test-snmp" } },
+        { "name": "Run SNMP discovery", "request": { "method": "POST", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/discover" } }
+      ]
+    },
+    {
+      "name": "Discovery And Monitoring",
+      "item": [
+        { "name": "Detect local subnet", "request": { "method": "GET", "url": "{{baseUrl}}/discovery/local-subnet" } },
+        { "name": "SNMP discovery", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"ips\": [\"{{ipAddress}}\"],\n  \"snmp_version\": \"v2c\",\n  \"communities\": [\"public\"],\n  \"timeout_seconds\": 3\n}" }, "url": "{{baseUrl}}/discovery/snmp" } },
+        { "name": "Ping IPs", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"ips\": [\"{{ipAddress}}\"],\n  \"timeout_ms\": 1000\n}" }, "url": "{{baseUrl}}/discovery/icmp" } },
+        { "name": "Monitoring status", "request": { "method": "GET", "url": "{{baseUrl}}/discovery/monitoring/status" } },
+        { "name": "Start module monitoring", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"module_name\": \"{{module}}\",\n  \"interval_seconds\": 60\n}" }, "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/monitoring/{{module}}/start" } },
+        { "name": "Stop module monitoring", "request": { "method": "POST", "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/monitoring/{{module}}/stop" } },
+        { "name": "Update module monitoring", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"interval_seconds\": 60\n}" }, "url": "{{baseUrl}}/snmp/devices/{{deviceId}}/monitoring/{{module}}" } },
+        { "name": "Start monitoring all", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"devices\": []\n}" }, "url": "{{baseUrl}}/discovery/monitoring/start-all" } },
+        { "name": "Stop monitoring all", "request": { "method": "POST", "url": "{{baseUrl}}/discovery/monitoring/stop-all" } }
+      ]
+    },
+    {
+      "name": "Dashboard And Reports",
+      "item": [
+        { "name": "Dashboard summary", "request": { "method": "GET", "url": "{{baseUrl}}/dashboard/summary" } },
+        { "name": "Overview", "request": { "method": "GET", "url": "{{baseUrl}}/overview?hours={{hours}}" } },
+        { "name": "Alerts", "request": { "method": "GET", "url": "{{baseUrl}}/alerts" } },
+        { "name": "Events", "request": { "method": "GET", "url": "{{baseUrl}}/events" } },
+        { "name": "Notifications", "request": { "method": "GET", "url": "{{baseUrl}}/notifications" } },
+        { "name": "Organizations", "request": { "method": "GET", "url": "{{baseUrl}}/organizations" } },
+        { "name": "Sites", "request": { "method": "GET", "url": "{{baseUrl}}/sites" } },
+        { "name": "Vendors", "request": { "method": "GET", "url": "{{baseUrl}}/vendors" } },
+        { "name": "Users", "request": { "method": "GET", "url": "{{baseUrl}}/users" } },
+        { "name": "Roles", "request": { "method": "GET", "url": "{{baseUrl}}/roles" } },
+        { "name": "Permissions", "request": { "method": "GET", "url": "{{baseUrl}}/permissions" } },
+        { "name": "Reports", "request": { "method": "GET", "url": "{{baseUrl}}/reports" } },
+        { "name": "Daily report", "request": { "method": "GET", "url": "{{baseUrl}}/reports/daily" } },
+        { "name": "Audit logs", "request": { "method": "GET", "url": "{{baseUrl}}/audit-logs" } },
+        { "name": "Service states", "request": { "method": "GET", "url": "{{baseUrl}}/monitoring/services" } }
+      ]
+    }
+  ]
+}

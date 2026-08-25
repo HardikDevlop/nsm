@@ -39,12 +39,14 @@ POST /api/v1/devices/manual           — add device manually with SNMP creds
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 
 from backend.database.session import get_db
@@ -56,6 +58,7 @@ from backend.models.snmp import DeviceInterface, LatestInterface, MonitoringStat
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["SNMP Device Monitoring"])
+MAX_SNMP_TABLE_ROWS = 500
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -109,6 +112,7 @@ def _live_collect(device: Device, cred: DeviceCredential | None, domain: str | N
     from backend.snmp.collector import SNMPService  # noqa: PLC0415
     from backend.snmp.credentials import SNMPCredentials  # noqa: PLC0415
     from backend.utils.crypto import decrypt_secret  # noqa: PLC0415
+    from backend.observability import record_snmp_duration  # noqa: PLC0415
 
     if not cred:
         raise HTTPException(
@@ -148,14 +152,21 @@ def _live_collect(device: Device, cred: DeviceCredential | None, domain: str | N
         privacy_password=priv_pass,
         security_level=cred.security_level,
     )
-    service = SNMPService(credentials=credentials, timeout=3.0, retries=1)
+    service = SNMPService(credentials=credentials)
+    snmp_started = time.perf_counter()
     if not domain:
-        return service.collect(device.ip_address)
+        try:
+            return service.collect(device.ip_address)
+        finally:
+            record_snmp_duration((time.perf_counter() - snmp_started) * 1000)
 
     # collect_domain returns the collector payload directly, while the HTTP
     # routes use the same stable envelope as a full collection. Keep the
     # envelope here so every module route can read its real data consistently.
-    domain_result = service.collect_domain(device.ip_address, domain)
+    try:
+        domain_result = service.collect_domain(device.ip_address, domain)
+    finally:
+        record_snmp_duration((time.perf_counter() - snmp_started) * 1000)
     return {
         "api_version": "2.0",
         "ip": device.ip_address,
@@ -868,15 +879,26 @@ def get_device_capabilities(
 @router.post("/snmp/devices/{device_id}/poll")
 def poll_device_now(
     device_id: int,
+    module: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: Any = Depends(require_permission("devices:update")),
 ) -> dict[str, Any]:
-    """Trigger a full live SNMP collect and return the raw result."""
+    """Trigger a full poll, or one requested module, and return the result."""
+    from backend.services.snmp_poll_guard import poll_guard
+
     device = _get_device_or_404(device_id, db)
     cred   = _get_credentials(device_id, db)
-    result = _live_collect(device, cred)
-    _persist_collect_result(device_id, result, db)
-    return result
+    guard = poll_guard(device_id, module or "__full__", blocking=False)
+    acquired = guard.__enter__()
+    if not acquired:
+        guard.__exit__(None, None, None)
+        raise HTTPException(status_code=409, detail="Poll already in progress for this device and module")
+    try:
+        result = _live_collect(device, cred, domain=module or None)
+        _persist_collect_result(device_id, result, db)
+        return result
+    finally:
+        guard.__exit__(None, None, None)
 
 
 @router.get("/snmp/devices/{device_id}/overview")
@@ -886,8 +908,13 @@ def get_snmp_overview(
     _: Any = Depends(require_permission("devices:read")),
 ) -> dict[str, Any]:
     """Device overview: identity + health + capabilities + last-poll summary."""
+    from backend.cache.redis_cache import get_json, set_json
     from backend.models.identity import DeviceIdentity, DeviceCapabilities  # noqa
     from backend.models.snmp import PollingHistory  # noqa
+    cache_key = f"nms:snmp:device:{device_id}:overview:v1"
+    cached = get_json(cache_key)
+    if isinstance(cached, dict):
+        return cached
     device = _get_device_or_404(device_id, db)
     di = db.query(DeviceIdentity).filter(DeviceIdentity.device_id == device_id).first()
     dc = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
@@ -913,7 +940,7 @@ def get_snmp_overview(
                 "status":   "supported" if detail.get("supported") else "unsupported",
             })
 
-    return {
+    payload = {
         "device_id":    device_id,
         "hostname":     device.hostname,
         "ip_address":   device.ip_address,
@@ -928,6 +955,8 @@ def get_snmp_overview(
         "status":       device.status,
         "identity_confidence": di.identity_confidence if di else None,
     }
+    set_json(cache_key, payload)
+    return payload
 
 
 @router.get("/snmp/devices/{device_id}/system")
@@ -1088,21 +1117,33 @@ def get_snmp_storage(device_id: int, db: Session = Depends(get_db), _: Any = Dep
 
 
 @router.get("/snmp/devices/{device_id}/interfaces")
-def get_snmp_interfaces(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_interfaces(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="interfaces")
     col      = _collector_data(result, "interfaces")
     col_data = col.get("data") or {}
     live_interfaces = col_data.get("interfaces", [])
     previous_by_index = {
         row.if_index: row
-        for row in db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
+        for row in db.query(LatestInterface).options(load_only(
+            LatestInterface.interface_id,
+            LatestInterface.if_index,
+            LatestInterface.speed_bps,
+            LatestInterface.rx_octets,
+            LatestInterface.tx_octets,
+            LatestInterface.rx_packets,
+            LatestInterface.tx_packets,
+            LatestInterface.utilization_percent,
+            LatestInterface.errors,
+            LatestInterface.discards,
+            LatestInterface.polled_at,
+        )).filter(LatestInterface.device_id == device_id).all()
         if row.if_index is not None
     }
     from zoneinfo import ZoneInfo
     now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
     enriched_interfaces = []
-    for iface in live_interfaces:
+    for iface in live_interfaces[:limit]:
         if not isinstance(iface, dict):
             enriched_interfaces.append(iface)
             continue
@@ -1218,12 +1259,12 @@ def get_snmp_environment(device_id: int, db: Session = Depends(get_db), _: Any =
 
 
 @router.get("/snmp/devices/{device_id}/lldp")
-def get_snmp_lldp(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_lldp(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="lldp")
     col      = _collector_data(result, "lldp")
     col_data = col.get("data") or {}
-    neighbors = _enrich_lldp_neighbors(db, device, col_data.get("neighbors", []))
+    neighbors = _enrich_lldp_neighbors(db, device, (col_data.get("neighbors") or [])[:limit])
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -1243,15 +1284,15 @@ def get_snmp_lldp(device_id: int, db: Session = Depends(get_db), _: Any = Depend
         "data": {
             "neighbor_count": len(neighbors),
             "neighbors":      neighbors,
-            "local_ports":    col_data.get("local_ports", {}),
+            "local_ports":    dict(list((col_data.get("local_ports") or {}).items())[:limit]),
         },
     }
 
 
 @router.get("/snmp/devices/{device_id}/routing")
-def get_snmp_routing(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_routing(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="routing")
     col      = _collector_data(result, "routing")
     col_data = col.get("data") or {}
     return {
@@ -1273,13 +1314,13 @@ def get_snmp_routing(device_id: int, db: Session = Depends(get_db), _: Any = Dep
         "data": {
             "route_count":       col_data.get("route_count", 0),
             "protocol_summary":  col_data.get("protocol_summary", {}),
-            "routes":            col_data.get("routes", []),
+            "routes":            (col_data.get("routes") or [])[:limit],
         },
     }
 
 
 @router.get("/snmp/devices/{device_id}/vlans")
-def get_snmp_vlans(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_vlans(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     result = _live_collect(device, _get_credentials(device_id, db), domain="vlan")
     col      = _collector_data(result, "vlan")
@@ -1302,7 +1343,7 @@ def get_snmp_vlans(device_id: int, db: Session = Depends(get_db), _: Any = Depen
         "reason":        col.get("reason"),
         "data": {
             "vlan_count": col_data.get("vlan_count", 0),
-            "vlans":      col_data.get("vlans", []),
+            "vlans":      (col_data.get("vlans") or [])[:limit],
         },
     }
 
@@ -1337,45 +1378,42 @@ def get_snmp_cdp(device_id: int, db: Session = Depends(get_db), _: Any = Depends
 
 
 @router.get("/snmp/devices/{device_id}/arp")
-def get_snmp_arp(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_arp(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db), domain="arp")
-    col      = _collector_data(result, "arp")
-    col_data = col.get("data") or {}
-    stored_cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    cred = _get_credentials(device_id, db)
+    stored_cap = db.query(DeviceCapabilities).options(load_only(
+        DeviceCapabilities.capability_detail,
+    )).filter(DeviceCapabilities.device_id == device_id).first()
     stored_arp = ((stored_cap.capability_detail or {}).get("arp") or {}) if stored_cap else {}
     stored_data = stored_arp.get("data") or {}
-    current_entries = col_data.get("entries") or []
-    entries = current_entries or (stored_data.get("entries") or [])
-    if current_entries:
-        _persist_domain_result(device_id, result, "arp", db)
-        db.commit()
+    entries = stored_data.get("entries") or []
+    returned_entries = entries[:limit]
     return {
-        "api_version":   result.get("api_version", "2.0"),
-        "ip":            result.get("ip"),
-        "reachable":     result.get("reachable"),
-        "snmp_version":  result.get("snmp_version"),
-        "vendor":        result.get("vendor"),
-        "device_type":   result.get("device_type"),
-        "hostname":      result.get("hostname"),
-        "collection_ms": result.get("collection_ms"),
+        "api_version":   "2.0",
+        "ip":            device.ip_address,
+        "reachable":     None,
+        "snmp_version":  cred.snmp_version if cred else None,
+        "vendor":        device.vendor.vendor_name if device.vendor else None,
+        "device_type":   device.device_type.name if device.device_type else None,
+        "hostname":      device.hostname,
+        "collection_ms": None,
         "device_id":     device_id,
         "collector":     "arp",
-        "supported":     col.get("supported", False),
-        "timestamp":     col.get("timestamp"),
-        "missing":       col.get("missing", []),
-        "warnings":      col.get("warnings", []),
-        "reason":        col.get("reason"),
+        "supported":     stored_arp.get("supported", False),
+        "timestamp":     stored_arp.get("timestamp"),
+        "missing":       stored_arp.get("missing", []),
+        "warnings":      stored_arp.get("warnings", []),
+        "reason":        stored_arp.get("reason"),
         "data": {
-            "entry_count": len(entries),
-            "entries":     entries,
-            "port_groups": col_data.get("port_groups", []),
+            "entry_count": len(returned_entries),
+            "entries":     returned_entries,
+            "port_groups": (stored_data.get("port_groups") or [])[:limit],
         },
     }
 
 
 @router.get("/snmp/devices/{device_id}/mac-table")
-def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_mac_table(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
     cred = _get_credentials(device_id, db)
     result = _live_collect(device, cred, domain="mac_table")
@@ -1384,7 +1422,9 @@ def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = D
     arp_data = (_collector_data(result, "arp").get("data") or {})
     # Keep the last successful ARP mapping so a transient/empty ARP walk does
     # not make previously known device IPs disappear from the MAC table.
-    stored_cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    stored_cap = db.query(DeviceCapabilities).options(load_only(
+        DeviceCapabilities.capability_detail,
+    )).filter(DeviceCapabilities.device_id == device_id).first()
     stored_arp = ((stored_cap.capability_detail or {}).get("arp") or {}).get("data") or {} if stored_cap else {}
     current_arp_entries = arp_data.get("entries") or []
     arp_entries = current_arp_entries or (stored_arp.get("entries") or [])
@@ -1407,7 +1447,7 @@ def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = D
         if mac and ip:
             arp_by_mac.setdefault(mac, []).append(str(ip))
     port_groups = []
-    for group in col_data.get("port_groups", []):
+    for group in (col_data.get("port_groups") or [])[:limit]:
         enriched = dict(group)
         ips = list(group.get("ip_addresses") or group.get("ips") or [])
         for mac_value in group.get("macs", []):
@@ -1416,7 +1456,7 @@ def get_snmp_mac_table(device_id: int, db: Session = Depends(get_db), _: Any = D
         enriched["ip_addresses"] = list(dict.fromkeys(ips))
         port_groups.append(enriched)
     enriched_entries = []
-    for entry in col_data.get("entries", []):
+    for entry in (col_data.get("entries") or [])[:limit]:
         enriched_entry = dict(entry)
         mac_key = "".join(ch for ch in str(entry.get("mac") or "").lower() if ch.isalnum())
         mapped_ips = arp_by_mac.get(mac_key, [])
@@ -1889,6 +1929,7 @@ def start_module_monitoring(
 ) -> dict[str, Any]:
     """Start monitoring a specific module on a device."""
     from backend.services.snmp_polling import get_polling_scheduler, ALLOWED_INTERVALS
+    from backend.services.snmp_poll_guard import poll_guard
     import asyncio
 
     if payload.interval_seconds not in ALLOWED_INTERVALS:
@@ -1902,8 +1943,16 @@ def start_module_monitoring(
         if not cap_map.get(module, False):
             raise HTTPException(status_code=400, detail=f"Module {module} not supported by this device")
 
-    scheduler = asyncio.run(get_polling_scheduler())
-    config = asyncio.run(scheduler.add_job(device_id, module, payload.interval_seconds))
+    guard = poll_guard(device_id, module, blocking=False)
+    acquired = guard.__enter__()
+    if not acquired:
+        guard.__exit__(None, None, None)
+        raise HTTPException(status_code=409, detail="Poll or monitoring start already in progress for this device and module")
+    try:
+        scheduler = asyncio.run(get_polling_scheduler())
+        config = asyncio.run(scheduler.add_job(device_id, module, payload.interval_seconds))
+    finally:
+        guard.__exit__(None, None, None)
     return {
         "device_id": config.device_id,
         "module_name": config.module_name,
@@ -2005,80 +2054,151 @@ def get_latest_metrics(
     _: Any = Depends(require_permission("devices:read")),
 ) -> dict[str, Any]:
     """Get all latest metrics for a device (from latest-value tables)."""
-    from backend.models.snmp import LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment
+    from backend.cache.redis_cache import get_json, set_json
+    cache_key = f"nms:snmp:device:{device_id}:metrics-latest:v1"
+    cached = get_json(cache_key)
+    if isinstance(cached, dict):
+        return cached
+    # These tables intentionally remain separate, but one read-only statement
+    # avoids five independent round trips for the same device.
+    metrics = db.execute(text("""
+        SELECT
+            (
+                SELECT row_to_json(cpu_row)
+                FROM (
+                    SELECT utilization_percent, per_core, load_avg, polled_at
+                    FROM latest_cpu
+                    WHERE device_id = :device_id
+                    LIMIT 1
+                ) AS cpu_row
+            ) AS cpu,
+            (
+                SELECT row_to_json(memory_row)
+                FROM (
+                    SELECT total_bytes, used_bytes, free_bytes, cached_bytes,
+                           buffer_bytes, swap_total, swap_free,
+                           utilization_percent, polled_at
+                    FROM latest_memory
+                    WHERE device_id = :device_id
+                    LIMIT 1
+                ) AS memory_row
+            ) AS memory,
+            COALESCE(
+                (
+                    SELECT json_agg(row_to_json(storage_row))
+                    FROM (
+                        SELECT volume_id, mount_name, total_bytes, used_bytes,
+                               free_bytes, utilization_percent, type_label, polled_at
+                        FROM latest_storage
+                        WHERE device_id = :device_id
+                    ) AS storage_row
+                ),
+                '[]'::json
+            ) AS storage,
+            COALESCE(
+                (
+                    SELECT json_agg(row_to_json(interface_row))
+                    FROM (
+                        SELECT interface_id, if_index, name, oper_status,
+                               admin_status, speed_bps, rx_mbps, tx_mbps,
+                               rx_octets, tx_octets, rx_packets, tx_packets,
+                               errors, discards, utilization_percent, polled_at
+                        FROM latest_interface
+                        WHERE device_id = :device_id
+                    ) AS interface_row
+                ),
+                '[]'::json
+            ) AS interfaces,
+            COALESCE(
+                (
+                    SELECT json_agg(row_to_json(environment_row))
+                    FROM (
+                        SELECT sensor_id, sensor_name, sensor_type, value,
+                               unit, status, polled_at
+                        FROM latest_environment
+                        WHERE device_id = :device_id
+                    ) AS environment_row
+                ),
+                '[]'::json
+            ) AS environment
+    """)).mappings().one()
+    cpu = metrics["cpu"]
+    mem = metrics["memory"]
+    storage = metrics["storage"] or []
+    interfaces = metrics["interfaces"] or []
+    env = metrics["environment"] or []
 
-    cpu = db.query(LatestCPU).filter(LatestCPU.device_id == device_id).first()
-    mem = db.query(LatestMemory).filter(LatestMemory.device_id == device_id).first()
-    storage = db.query(LatestStorage).filter(LatestStorage.device_id == device_id).all()
-    interfaces = db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
-    env = db.query(LatestEnvironment).filter(LatestEnvironment.device_id == device_id).all()
+    def _iso(value: Any) -> str | None:
+        return value.isoformat() if hasattr(value, "isoformat") else value
 
-    return {
+    payload = {
         "device_id": device_id,
         "cpu": {
-            "utilization_percent": cpu.utilization_percent if cpu else None,
-            "per_core": cpu.per_core if cpu else {},
-            "load_avg": cpu.load_avg if cpu else {},
-            "polled_at": cpu.polled_at.isoformat() if cpu and cpu.polled_at else None,
+            "utilization_percent": cpu.get("utilization_percent"),
+            "per_core": cpu.get("per_core"),
+            "load_avg": cpu.get("load_avg"),
+            "polled_at": _iso(cpu.get("polled_at")),
         } if cpu else None,
         "memory": {
-            "total_bytes": mem.total_bytes if mem else None,
-            "used_bytes": mem.used_bytes if mem else None,
-            "free_bytes": mem.free_bytes if mem else None,
-            "cached_bytes": mem.cached_bytes if mem else None,
-            "buffer_bytes": mem.buffer_bytes if mem else None,
-            "swap_total": mem.swap_total if mem else None,
-            "swap_free": mem.swap_free if mem else None,
-            "utilization_percent": mem.utilization_percent if mem else None,
-            "polled_at": mem.polled_at.isoformat() if mem and mem.polled_at else None,
+            "total_bytes": mem.get("total_bytes"),
+            "used_bytes": mem.get("used_bytes"),
+            "free_bytes": mem.get("free_bytes"),
+            "cached_bytes": mem.get("cached_bytes"),
+            "buffer_bytes": mem.get("buffer_bytes"),
+            "swap_total": mem.get("swap_total"),
+            "swap_free": mem.get("swap_free"),
+            "utilization_percent": mem.get("utilization_percent"),
+            "polled_at": _iso(mem.get("polled_at")),
         } if mem else None,
         "storage": [
             {
-                "volume_id": s.volume_id,
-                "mount_name": s.mount_name,
-                "total_bytes": s.total_bytes,
-                "used_bytes": s.used_bytes,
-                "free_bytes": s.free_bytes,
-                "utilization_percent": s.utilization_percent,
-                "type_label": s.type_label,
-                "polled_at": s.polled_at.isoformat() if s.polled_at else None,
+                "volume_id": s["volume_id"],
+                "mount_name": s["mount_name"],
+                "total_bytes": s["total_bytes"],
+                "used_bytes": s["used_bytes"],
+                "free_bytes": s["free_bytes"],
+                "utilization_percent": s["utilization_percent"],
+                "type_label": s["type_label"],
+                "polled_at": _iso(s["polled_at"]),
             }
             for s in storage
         ],
         "interfaces": [
             {
-                "interface_id": i.interface_id,
-                "if_index": i.if_index,
-                "name": i.name,
-                "oper_status": i.oper_status,
-                "admin_status": i.admin_status,
-                "speed_bps": i.speed_bps,
-                "rx_mbps": i.rx_mbps,
-                "tx_mbps": i.tx_mbps,
-                "rx_octets": i.rx_octets,
-                "tx_octets": i.tx_octets,
-                "rx_packets": i.rx_packets,
-                "tx_packets": i.tx_packets,
-                "errors": i.errors,
-                "discards": i.discards,
-                "utilization_percent": i.utilization_percent,
-                "polled_at": i.polled_at.isoformat() if i.polled_at else None,
+                "interface_id": i["interface_id"],
+                "if_index": i["if_index"],
+                "name": i["name"],
+                "oper_status": i["oper_status"],
+                "admin_status": i["admin_status"],
+                "speed_bps": i["speed_bps"],
+                "rx_mbps": i["rx_mbps"],
+                "tx_mbps": i["tx_mbps"],
+                "rx_octets": i["rx_octets"],
+                "tx_octets": i["tx_octets"],
+                "rx_packets": i["rx_packets"],
+                "tx_packets": i["tx_packets"],
+                "errors": i["errors"],
+                "discards": i["discards"],
+                "utilization_percent": i["utilization_percent"],
+                "polled_at": _iso(i["polled_at"]),
             }
             for i in interfaces
         ],
         "environment": [
             {
-                "sensor_id": e.sensor_id,
-                "sensor_name": e.sensor_name,
-                "sensor_type": e.sensor_type,
-                "value": e.value,
-                "unit": e.unit,
-                "status": e.status,
-                "polled_at": e.polled_at.isoformat() if e.polled_at else None,
+                "sensor_id": e["sensor_id"],
+                "sensor_name": e["sensor_name"],
+                "sensor_type": e["sensor_type"],
+                "value": e["value"],
+                "unit": e["unit"],
+                "status": e["status"],
+                "polled_at": _iso(e["polled_at"]),
             }
             for e in env
         ],
     }
+    set_json(cache_key, payload)
+    return payload
 
 
 @router.get("/snmp/devices/{device_id}/cpu/latest")
@@ -2260,7 +2380,7 @@ def list_snmp_devices_optimized(
     _: Any = Depends(require_permission("devices:read")),
 ) -> dict[str, Any]:
     """Optimized paginated device list with all info needed for the device list page."""
-    from backend.models.identity import DeviceIdentity, DeviceCapabilities
+    from backend.models.identity import DeviceIdentity
     from backend.models.snmp import MonitoringConfig
     from sqlalchemy import or_
 
@@ -2337,26 +2457,48 @@ def list_snmp_devices_optimized(
     total = query.count()
     devices = query.offset((page - 1) * page_size).limit(page_size).all()
     device_ids = [device.id for device in devices]
-    credentials_by_device = _get_credentials_map(device_ids, db)
+    credential_rows = (
+        db.query(DeviceCredential)
+        .options(load_only(
+            DeviceCredential.id,
+            DeviceCredential.device_id,
+            DeviceCredential.snmp_version,
+        ))
+        .filter(DeviceCredential.device_id.in_(device_ids))
+        .order_by(DeviceCredential.id.asc())
+        .all()
+        if device_ids else []
+    )
+    credentials_by_device: dict[int, DeviceCredential] = {}
+    for row in credential_rows:
+        credentials_by_device.setdefault(row.device_id, row)
 
     identities = {
         row.device_id: row
-        for row in db.query(DeviceIdentity).filter(DeviceIdentity.device_id.in_(device_ids)).all()
-    } if device_ids else {}
-    capabilities = {
-        row.device_id: row
-        for row in db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id.in_(device_ids)).all()
+        for row in db.query(DeviceIdentity)
+        .options(load_only(
+            DeviceIdentity.device_id,
+            DeviceIdentity.vendor,
+            DeviceIdentity.hostname,
+            DeviceIdentity.sys_name,
+        ))
+        .filter(DeviceIdentity.device_id.in_(device_ids)).all()
     } if device_ids else {}
     configs_by_device: dict[int, list[MonitoringConfig]] = {}
     if device_ids:
-        for config in db.query(MonitoringConfig).filter(MonitoringConfig.device_id.in_(device_ids)).all():
+        configs = db.query(MonitoringConfig).options(load_only(
+            MonitoringConfig.device_id,
+            MonitoringConfig.enabled,
+            MonitoringConfig.status,
+            MonitoringConfig.last_poll_at,
+        )).filter(MonitoringConfig.device_id.in_(device_ids)).all()
+        for config in configs:
             configs_by_device.setdefault(config.device_id, []).append(config)
 
     # Build response with all needed data
     items = []
     for d in devices:
         di = identities.get(d.id)
-        dc = capabilities.get(d.id)
         configs = configs_by_device.get(d.id, [])
         modules_monitored = sum(1 for c in configs if c.enabled and c.status == "running")
 
@@ -2412,7 +2554,7 @@ def get_device_details(
 ) -> dict[str, Any]:
     """Get complete device details from DB (no live SNMP)."""
     from backend.models.identity import DeviceIdentity, DeviceCapabilities
-    from backend.models.snmp import MonitoringConfig, SNMPCredential, LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment, PollingHistory
+    from backend.models.snmp import MonitoringConfig, LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment, PollingHistory
     from backend.models import Interface, Vendor, DeviceType
 
     device = (
@@ -2472,9 +2614,9 @@ def get_device_details(
         .all()
     )
     cred = (
-        db.query(SNMPCredential)
-        .options(load_only(SNMPCredential.device_id, SNMPCredential.version))
-        .filter(SNMPCredential.device_id == device_id)
+        db.query(DeviceCredential)
+        .options(load_only(DeviceCredential.device_id, DeviceCredential.snmp_version))
+        .filter(DeviceCredential.device_id == device_id)
         .first()
     )
 
@@ -2484,6 +2626,20 @@ def get_device_details(
     storage = db.query(LatestStorage).filter(LatestStorage.device_id == device_id).all()
     interfaces = db.query(LatestInterface).filter(LatestInterface.device_id == device_id).all()
     env = db.query(LatestEnvironment).filter(LatestEnvironment.device_id == device_id).all()
+    capabilities = dict(dc.to_map() if dc else {})
+    # Persisted latest data is authoritative for modules already collected.
+    # Keep capability metadata as-is, but do not hide available stored data
+    # when a previous live probe marked a module as unsupported.
+    if cpu:
+        capabilities["cpu"] = True
+    if mem:
+        capabilities["memory"] = True
+    if storage:
+        capabilities["storage"] = True
+    if interfaces:
+        capabilities["interfaces"] = True
+    if env:
+        capabilities["environment"] = True
 
     # Polling history (last 10)
     poll_history = db.query(PollingHistory).filter(
@@ -2511,12 +2667,12 @@ def get_device_details(
             "uptime_seconds": device.uptime_seconds,
         },
         "snmp": {
-            "version": cred.version if cred else None,
+            "version": cred.snmp_version if cred else None,
             "port": 161,
             "status": "verified" if di and di.vendor else "unknown",
             "last_test_at": None,
         },
-        "capabilities": dc.to_map() if dc else {},
+        "capabilities": capabilities,
         "monitoring": [
             {
                 "module_name": c.module_name,

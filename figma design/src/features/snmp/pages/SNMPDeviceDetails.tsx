@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router'
 import GlassCard from '../../../components/GlassCard'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
 import SNMPHealthIndicator from '../components/SNMPHealthIndicator'
-import { useSNMPDeviceDetails, useStartModuleMonitoring, useStopModuleMonitoring, useUpdateModuleMonitoring, useInvalidateDeviceQueries } from '../hooks/useSnmpQueries'
+import { useSNMPDeviceDetails, useStartModuleMonitoring, useStopModuleMonitoring, useUpdateModuleMonitoring } from '../hooks/useSnmpQueries'
 import { 
   getSupportedModuleConfigs, 
   getModuleConfig,
@@ -149,8 +149,6 @@ export default function SNMPDeviceDetails() {
   const { deviceId } = useParams<{ deviceId: string }>()
   const navigate = useNavigate()
   const id = Number(deviceId)
-  const invalidateDevice = useInvalidateDeviceQueries()
-
   const startMonitoring = useStartModuleMonitoring()
   const stopMonitoring = useStopModuleMonitoring()
   const updateMonitoring = useUpdateModuleMonitoring()
@@ -170,7 +168,6 @@ export default function SNMPDeviceDetails() {
     try {
       await startMonitoring.mutateAsync({ deviceId: id, module, intervalSeconds })
       setErrorMessage(null)
-      invalidateDevice(id)
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to start monitoring')
     }
@@ -180,7 +177,6 @@ export default function SNMPDeviceDetails() {
     try {
       await stopMonitoring.mutateAsync({ deviceId: id, module })
       setErrorMessage(null)
-      invalidateDevice(id)
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to stop monitoring')
     }

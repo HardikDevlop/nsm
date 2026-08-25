@@ -31,7 +31,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy.orm import Session
+from sqlalchemy import case
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from backend.database.session import get_db
 from backend.dependencies import require_permission
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["Overview & Service Control"])
 _OVERVIEW_CACHE_TTL_SECONDS = 10
+_OVERVIEW_HISTORY_MAX_ROWS = 5000
 _overview_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 _overview_cache_lock = Lock()
 
@@ -59,6 +61,7 @@ def get_overview(
     All data comes from PostgreSQL — no live SNMP, no ping.
     Frontend caches this and never calls individual list endpoints.
     """
+    from backend.cache.redis_cache import get_json, set_json  # noqa: PLC0415
     from backend.models import (  # noqa: PLC0415
         Alert, Device, DeviceMetric, DeviceType, Event, Interface,
         Vendor, DeviceCredential,
@@ -71,6 +74,10 @@ def get_overview(
     )
 
     now_ts = datetime.utcnow().timestamp()
+    redis_key = f"nms:overview:v1:hours:{hours}"
+    redis_value = get_json(redis_key)
+    if isinstance(redis_value, dict):
+        return redis_value
     with _overview_cache_lock:
         cached = _overview_cache.get(hours)
         if cached and now_ts - cached[0] < _OVERVIEW_CACHE_TTL_SECONDS:
@@ -81,10 +88,22 @@ def get_overview(
     # ── devices (with vendor and type joined) ──────────────────────────────
     device_rows = (
         db.query(Device)
+        .options(
+            load_only(
+                Device.id, Device.hostname, Device.ip_address, Device.mac_address,
+                Device.status, Device.monitoring_status, Device.vendor_id,
+                Device.device_type_id, Device.model, Device.serial_number,
+                Device.firmware_version, Device.uptime_seconds, Device.last_seen,
+                Device.created_at, Device.site_id,
+            ),
+            joinedload(Device.vendor).load_only(Vendor.id, Vendor.vendor_name),
+            joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
+        )
         .filter(Device.deleted_at.is_(None))
         .order_by(Device.hostname)
         .all()
     )
+    device_ids = [device.id for device in device_rows]
 
     # ── latest metric per device (one query) ──────────────────────────────
     from sqlalchemy import func  # noqa: PLC0415
@@ -101,30 +120,32 @@ def get_overview(
     )
     latest_metrics_raw = (
         db.query(DeviceMetric)
+        .options(load_only(
+            DeviceMetric.device_id, DeviceMetric.cpu_usage, DeviceMetric.memory_usage,
+            DeviceMetric.temperature, DeviceMetric.latency, DeviceMetric.packet_loss,
+            DeviceMetric.created_at,
+        ))
         .join(sub, DeviceMetric.id == sub.c.max_id)
+        .filter(DeviceMetric.device_id.in_(device_ids))
         .all()
     )
-    metric_by_device: dict[int, DeviceMetric] = {m.device_id: m for m in latest_metrics_raw}
+    metric_by_device: dict[int, DeviceMetric] = {m.device_id: m for m in latest_metrics_raw} if device_ids else {}
 
     # ── interface counts per device ────────────────────────────────────────
     # Keep this query simple and portable. The previous cast-based aggregate
     # broke on SQLite/PostgreSQL type handling and was unused anyway.
-    iface_raw2 = db.query(Interface.device_id, Interface.status).all()
-    iface_total: dict[int, int] = {}
-    iface_up: dict[int, int] = {}
-    for row in iface_raw2:
-        iface_total[row.device_id] = iface_total.get(row.device_id, 0) + 1
-        if row.status == "up":
-            iface_up[row.device_id] = iface_up.get(row.device_id, 0) + 1
-
-    # ── vendor lookup ──────────────────────────────────────────────────────
-    vendors = {v.id: v.vendor_name for v in db.query(Vendor).all()}
-    dtypes  = {t.id: t.name for t in db.query(DeviceType).all()}
+    iface_counts = db.query(
+        Interface.device_id,
+        func.count(Interface.id).label("total"),
+        func.coalesce(func.sum(case((Interface.status == "up", 1), else_=0)), 0).label("up"),
+    ).filter(Interface.device_id.in_(device_ids)).group_by(Interface.device_id).all() if device_ids else []
+    iface_counts_by_device = {row.device_id: row for row in iface_counts}
 
     # ── SNMP credential versions ───────────────────────────────────────────
     cred_versions: dict[int, str] = {
         c.device_id: c.snmp_version or ""
-        for c in db.query(DeviceCredential.device_id, DeviceCredential.snmp_version).all()
+        for c in db.query(DeviceCredential.device_id, DeviceCredential.snmp_version)
+        .filter(DeviceCredential.device_id.in_(device_ids)).all()
     }
 
     # ── build device list ──────────────────────────────────────────────────
@@ -136,6 +157,7 @@ def get_overview(
         elif dev.status == "offline": offline += 1
 
         met = metric_by_device.get(dev.id)
+        interface_count = iface_counts_by_device.get(dev.id)
         devices_out.append({
             "id":               dev.id,
             "hostname":         dev.hostname,
@@ -143,8 +165,8 @@ def get_overview(
             "mac_address":      dev.mac_address,
             "status":           dev.status,
             "monitoring_status": dev.monitoring_status,
-            "vendor":           vendors.get(dev.vendor_id or 0),
-            "device_type":      dtypes.get(dev.device_type_id or 0),
+            "vendor":           dev.vendor.vendor_name if dev.vendor else None,
+            "device_type":      dev.device_type.name if dev.device_type else None,
             "model":            dev.model,
             "serial_number":    dev.serial_number,
             "firmware_version": dev.firmware_version,
@@ -153,8 +175,8 @@ def get_overview(
             "created_at":       dev.created_at.isoformat() if dev.created_at else None,
             "site_id":          dev.site_id,
             "snmp_version":     cred_versions.get(dev.id),
-            "interface_count":  iface_total.get(dev.id, 0),
-            "interfaces_up":    iface_up.get(dev.id, 0),
+            "interface_count":  int(interface_count.total or 0) if interface_count else 0,
+            "interfaces_up":    int(interface_count.up or 0) if interface_count else 0,
             "cpu_usage":        met.cpu_usage if met else None,
             "memory_usage":     met.memory_usage if met else None,
             "temperature":      met.temperature if met else None,
@@ -166,6 +188,10 @@ def get_overview(
     # ── alerts ─────────────────────────────────────────────────────────────
     alert_rows = (
         db.query(Alert)
+        .options(load_only(
+            Alert.id, Alert.device_id, Alert.severity, Alert.title,
+            Alert.description, Alert.status, Alert.created_at,
+        ))
         .filter(Alert.status.in_(["open", "acknowledged"]), Alert.deleted_at.is_(None))
         .order_by(Alert.created_at.desc())
         .limit(50)
@@ -190,6 +216,10 @@ def get_overview(
     # ── recent events ──────────────────────────────────────────────────────
     event_rows = (
         db.query(Event)
+        .options(load_only(
+            Event.id, Event.device_id, Event.event_type,
+            Event.description, Event.timestamp,
+        ))
         .filter(Event.timestamp >= since_24h, Event.deleted_at.is_(None))
         .order_by(Event.timestamp.desc())
         .limit(20)
@@ -208,13 +238,44 @@ def get_overview(
 
     # Normalized SNMP data is read from latest_* and history tables. This
     # endpoint never polls devices, so dashboard refreshes cannot create jobs.
-    latest_cpu = {row.device_id: row for row in db.query(LatestCPU).all()}
-    latest_memory = {row.device_id: row for row in db.query(LatestMemory).all()}
-    latest_storage = db.query(LatestStorage).all()
-    latest_interfaces = db.query(LatestInterface).all()
-    latest_environment = db.query(LatestEnvironment).all()
-    interface_stats = db.query(InterfaceStatistic).filter(InterfaceStatistic.created_at >= since_24h).order_by(InterfaceStatistic.created_at.asc()).all()
-    polling_rows = db.query(PollingHistory).filter(PollingHistory.created_at >= since_24h).order_by(PollingHistory.created_at.desc()).all()
+    latest_cpu = {
+        row.device_id: row for row in db.query(LatestCPU).options(load_only(
+            LatestCPU.device_id, LatestCPU.utilization_percent, LatestCPU.load_avg,
+        )).filter(LatestCPU.device_id.in_(device_ids)).all()
+    } if device_ids else {}
+    latest_memory = {
+        row.device_id: row for row in db.query(LatestMemory).options(load_only(
+            LatestMemory.device_id, LatestMemory.utilization_percent,
+        )).filter(LatestMemory.device_id.in_(device_ids)).all()
+    } if device_ids else {}
+    latest_storage = db.query(LatestStorage).options(load_only(
+        LatestStorage.device_id, LatestStorage.mount_name,
+        LatestStorage.utilization_percent, LatestStorage.polled_at,
+    )).filter(LatestStorage.device_id.in_(device_ids)).all() if device_ids else []
+    latest_interfaces = db.query(LatestInterface).options(load_only(
+        LatestInterface.device_id, LatestInterface.interface_id, LatestInterface.name,
+        LatestInterface.oper_status, LatestInterface.admin_status, LatestInterface.speed_bps,
+        LatestInterface.rx_mbps, LatestInterface.tx_mbps, LatestInterface.errors,
+        LatestInterface.discards, LatestInterface.rx_packets, LatestInterface.tx_packets,
+        LatestInterface.utilization_percent, LatestInterface.polled_at,
+    )).filter(LatestInterface.device_id.in_(device_ids)).all() if device_ids else []
+    latest_environment = db.query(LatestEnvironment).options(load_only(
+        LatestEnvironment.device_id, LatestEnvironment.sensor_name,
+        LatestEnvironment.sensor_type, LatestEnvironment.value,
+        LatestEnvironment.unit, LatestEnvironment.status, LatestEnvironment.polled_at,
+    )).filter(LatestEnvironment.device_id.in_(device_ids)).all() if device_ids else []
+    interface_stats = db.query(InterfaceStatistic).options(load_only(
+        InterfaceStatistic.device_id, InterfaceStatistic.rx_mbps,
+        InterfaceStatistic.tx_mbps, InterfaceStatistic.utilization_percent,
+        InterfaceStatistic.created_at,
+    )).filter(InterfaceStatistic.created_at >= since_24h).order_by(
+        InterfaceStatistic.created_at.desc()
+    ).limit(_OVERVIEW_HISTORY_MAX_ROWS).all()
+    interface_stats.reverse()
+    polling_rows = db.query(PollingHistory).options(load_only(
+        PollingHistory.device_id, PollingHistory.created_at,
+        PollingHistory.status, PollingHistory.collector, PollingHistory.error,
+    )).filter(PollingHistory.created_at >= since_24h).order_by(PollingHistory.created_at.desc()).all()
     device_by_id = {device.id: device for device in device_rows}
 
     storage_by_device: dict[int, list[dict[str, Any]]] = {}
@@ -258,8 +319,17 @@ def get_overview(
     alert_counts = {severity: sum(1 for alert in alert_rows if alert.severity == severity) for severity in ("critical", "high", "medium", "low", "warning", "info")}
     type_counts: dict[str, int] = {}
     for device in device_rows:
-        type_name = dtypes.get(device.device_type_id or 0) or "Other"
+        type_name = device.device_type.name if device.device_type else "Other"
         type_counts[type_name] = type_counts.get(type_name, 0) + 1
+    dashboard_counts = db.query(
+        db.query(func.count(MonitoringConfig.id)).filter(MonitoringConfig.enabled.is_(True)).scalar_subquery().label("active_jobs"),
+        db.query(func.count(OIDCache.id)).filter(OIDCache.supported.is_(False)).scalar_subquery().label("unsupported_oids"),
+    ).one()
+    network_counts = db.query(
+        db.query(func.count(LLDPNeighbor.id)).scalar_subquery().label("lldp_neighbors"),
+        db.query(func.count(VLANInformation.id)).scalar_subquery().label("vlan_count"),
+        db.query(func.count(RoutingEntry.id)).scalar_subquery().label("routing_entries"),
+    ).one()
     normalized = {
         "devices": {
             str(device.id): {
@@ -289,9 +359,9 @@ def get_overview(
             "failure": sum(1 for row in polling_rows if row.status != "success"),
             "last_success": next((row.created_at.isoformat() for row in polling_rows if row.status == "success" and row.created_at), None),
             "last_failure": next((row.created_at.isoformat() for row in polling_rows if row.status != "success" and row.created_at), None),
-            "active_jobs": db.query(MonitoringConfig).filter(MonitoringConfig.enabled.is_(True)).count(),
+            "active_jobs": dashboard_counts.active_jobs,
             "collector_failures": sum(1 for row in polling_rows if row.status not in ("success", "no_data")),
-            "unsupported_oids": db.query(OIDCache).filter(OIDCache.supported.is_(False)).count(),
+            "unsupported_oids": dashboard_counts.unsupported_oids,
         },
         "interface_summary": {
             "total": len(interface_rows),
@@ -303,9 +373,9 @@ def get_overview(
         "alerts_by_severity": alert_counts,
         "device_types": type_counts,
         "network": {
-            "lldp_neighbors": db.query(LLDPNeighbor).count(),
-            "vlan_count": db.query(VLANInformation).count(),
-            "routing_entries": db.query(RoutingEntry).count(),
+            "lldp_neighbors": network_counts.lldp_neighbors,
+            "vlan_count": network_counts.vlan_count,
+            "routing_entries": network_counts.routing_entries,
             "arp_entries": None, "mac_entries": None, "topology_nodes": len(device_rows),
         },
     }
@@ -332,6 +402,7 @@ def get_overview(
     }
     with _overview_cache_lock:
         _overview_cache[hours] = (now_ts, payload)
+    set_json(redis_key, payload)
     return payload
 
 

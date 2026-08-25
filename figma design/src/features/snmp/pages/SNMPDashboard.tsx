@@ -3,10 +3,7 @@ import { useParams, useNavigate } from 'react-router'
 import GlassCard from '../../../components/GlassCard'
 import SNMPHealthIndicator from '../components/SNMPHealthIndicator'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
-import {
-  listSNMPDevices,
-  type DeviceRecord,
-} from '../../../lib/api'
+import { useSNMPDevices } from '../hooks/useSnmpQueries'
 
 // Module icons mapping
 const moduleIcons: Record<string, string> = {
@@ -40,41 +37,15 @@ export default function SNMPDashboard() {
   const { deviceId } = useParams<{ deviceId: string }>()
   const navigate = useNavigate()
   
-  const [devices, setDevices] = useState<DeviceRecord[]>([])
-  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(Number(deviceId) || null)
+  const { data, isLoading: loading, error: queryError } = useSNMPDevices({ page: 1, page_size: 200 })
+  const devices = data?.items || []
+  const error = queryError instanceof Error ? queryError.message : queryError ? 'Failed to load devices' : null
 
-  // Load device list and their monitoring data
   useEffect(() => {
-    let ignore = false
-    const loadDevices = async () => {
-      try {
-        const devs = await listSNMPDevices()
-        if (!ignore) {
-          setDevices(devs)
-          setLoading(false)
-          
-          // Auto-select first device or from URL
-          if (deviceId) {
-            setSelectedDeviceId(Number(deviceId))
-          } else if (devs.length > 0) {
-            setSelectedDeviceId(devs[0].id)
-          }
-        }
-      } catch (err) {
-        if (!ignore) {
-          setError(err instanceof Error ? err.message : 'Failed to load devices')
-        }
-      }
-    }
-    void loadDevices()
-    return () => { ignore = true }
-  }, [deviceId])
-  useEffect(() => {
-    if (!selectedDeviceId) return
-    setLoading(false)
-  }, [selectedDeviceId])
+    if (deviceId) setSelectedDeviceId(Number(deviceId))
+    else if (!selectedDeviceId && devices.length > 0) setSelectedDeviceId(devices[0].id)
+  }, [deviceId, devices, selectedDeviceId])
 
   const handleDeviceChange = (devId: number) => {
     setSelectedDeviceId(devId)

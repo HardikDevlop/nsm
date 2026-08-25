@@ -1,6 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import GlassCard from '../components/GlassCard'
-import { listDevices, requestJson, updateDevice, type DeviceRecord } from '../lib/api'
+import { listDevices, pingIps, requestJson, updateDevice, type DeviceRecord } from '../lib/api'
 import { useNavigate } from 'react-router'
 
 type DeviceType = 'gateway' | 'router' | 'firewall' | 'switch' | 'access-point' | 'server' | 'endpoint' | 'unknown'
@@ -613,12 +613,13 @@ function layoutGraph(nodes: GraphNode[], links: GraphLink[]): Layout {
 
 export default function Topology() {
   const navigate = useNavigate()
-  const cached = readCache()
-  const [layout, setLayout] = useState<Layout | null>(cached.layout || null)
-  const hasLayoutRef = useRef(Boolean(cached.layout))
+  // A cached layout can contain deleted or offline devices. Rebuild from the
+  // current reachable inventory before rendering topology nodes.
+  const [layout, setLayout] = useState<Layout | null>(null)
+  const hasLayoutRef = useRef(false)
   const topologyRequestRef = useRef(false)
-  const [lastUpdated, setLastUpdated] = useState(cached.updated ? new Date(cached.updated) : null)
-  const [loading, setLoading] = useState(!cached.layout)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -656,8 +657,17 @@ export default function Topology() {
         requestJson<any>(`/snmp/topology${forceRefresh ? '?refresh=true' : ''}`),
         listDevices(),
       ])
-      const inventory = Array.isArray(inventoryResult) ? inventoryResult : []
-      const topologyNodes = Array.isArray(topologyResult?.devices) ? topologyResult.devices : []
+      const storedInventory = Array.isArray(inventoryResult) ? inventoryResult : []
+      const health = await pingIps(
+        storedInventory.map((device) => device.ip_address).filter(Boolean),
+        1000,
+      )
+      const reachableIps = new Set(
+        health.results.filter((result) => result.reachable).map((result) => result.ip),
+      )
+      const inventory = storedInventory.filter((device) => reachableIps.has(device.ip_address))
+      const topologyNodes = (Array.isArray(topologyResult?.devices) ? topologyResult.devices : [])
+        .filter((node: any) => Boolean(node?.ip_address) && reachableIps.has(node.ip_address))
       const topologyLinks = Array.isArray(topologyResult?.links) ? topologyResult.links : []
       const infrastructureSources = [
         ...inventory.map((device, index) => makeNode(device, `inventory-${index}`)),

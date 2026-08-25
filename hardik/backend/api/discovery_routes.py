@@ -403,14 +403,25 @@ def discovery_snmp(payload: IpsRequest):
             interface_rows = interface_payload.get("interfaces", []) if isinstance(interface_payload, dict) else interface_payload
             interface_rows = interface_rows if isinstance(interface_rows, list) else []
             # Upsert IF-MIB interface rows — match by device_id + interface_name
+            interface_names = {
+                str(row.get("name") or f"ifIndex-{row.get('ifIndex', 'unknown')}")
+                for row in interface_rows
+                if isinstance(row, dict)
+            }
+            existing_interfaces = db.query(Interface).filter(
+                Interface.device_id == device.id,
+                Interface.interface_name.in_(interface_names),
+            ).all() if interface_names else []
+            interfaces_by_name = {
+                interface.interface_name: interface
+                for interface in existing_interfaces
+            }
+            new_interfaces = []
             for row in interface_rows:
                 if not isinstance(row, dict):
                     continue
                 iface_name = str(row.get("name") or f"ifIndex-{row.get('ifIndex', 'unknown')}")
-                existing_iface = db.query(Interface).filter(
-                    Interface.device_id == device.id,
-                    Interface.interface_name == iface_name,
-                ).first()
+                existing_iface = interfaces_by_name.get(iface_name)
                 if existing_iface:
                     existing_iface.status = str(row.get("operStatus") or "unknown").lower()
                     existing_iface.speed = str(row.get("speed") or "Not Supported")
@@ -418,7 +429,7 @@ def discovery_snmp(payload: IpsRequest):
                     existing_iface.traffic_out = float(row.get("outOctets") or 0)
                     existing_iface.packet_errors = int(row.get("errors") or 0)
                 else:
-                    db.add(Interface(
+                    existing_iface = Interface(
                         device_id=device.id,
                         interface_name=iface_name,
                         status=str(row.get("operStatus") or "unknown").lower(),
@@ -426,9 +437,13 @@ def discovery_snmp(payload: IpsRequest):
                         traffic_in=float(row.get("inOctets") or 0),
                         traffic_out=float(row.get("outOctets") or 0),
                         packet_errors=int(row.get("errors") or 0),
-                    ))
+                    )
+                    interfaces_by_name[iface_name] = existing_iface
+                    new_interfaces.append(existing_iface)
                 if not device.mac_address and row.get("mac") not in (None, "", "Not Supported"):
                     device.mac_address = str(row["mac"])
+            if new_interfaces:
+                db.add_all(new_interfaces)
             device.uptime_seconds = int(result.get("uptime_seconds") or 0)
             device.status = "online"
             device.monitoring_status = True
