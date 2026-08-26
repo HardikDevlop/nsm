@@ -658,6 +658,23 @@ export default function Topology() {
         listDevices(),
       ])
       const storedInventory = Array.isArray(inventoryResult) ? inventoryResult : []
+      if (storedInventory.length === 0) {
+        setLayout({ nodes: [], links: [], positions: new Map(), width: 1200, height: 650 })
+        setSelectedNode(null)
+        setSelectedLink(null)
+        setSelectedNodeDetails(null)
+        setConnectedNodeDetails({})
+        setSelectedNodeLoading(false)
+        setSelectedNodeError(null)
+        hasLayoutRef.current = true
+        setLastUpdated(new Date())
+        try {
+          sessionStorage.removeItem(CACHE_KEY)
+        } catch {
+          /* optional cache only */
+        }
+        return
+      }
       const health = await pingIps(
         storedInventory.map((device) => device.ip_address).filter(Boolean),
         1000,
@@ -952,6 +969,18 @@ export default function Topology() {
         <text x={x + 14} y={y + 59} className="font-mono" style={{ fill: '#8ca0bb', fontSize: 10 }}>{node.ip || (node.port ? `Port ${node.port}` : 'IP UNKNOWN')}</text>
         <text x={x + 14} y={y + 74} className="font-mono" style={{ fill: '#64748b', fontSize: 8 }}>{detail}</text>
       </g>
+    )
+  }
+
+  if (layout && layout.nodes.length === 0) {
+    return (
+      <div className="p-3 md:p-5 space-y-3 h-full flex flex-col" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(34,211,238,.06), transparent 48%)' }}>
+        <GlassCard className="p-8 text-center">
+          <div className="font-display font-bold text-base" style={{ color: '#8899bb' }}>
+            No devices found. Add a device to start monitoring.
+          </div>
+        </GlassCard>
+      </div>
     )
   }
 

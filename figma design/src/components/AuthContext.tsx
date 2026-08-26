@@ -50,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!ignoreMissingToken) setLoading(false)
       return null
     }
+    setLoading(true)
     try {
       const cached = JSON.parse(window.sessionStorage.getItem(USER_CACHE_KEY) || 'null') as UserRecord | null
       if (cached) {
@@ -69,19 +70,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // optional cache only
       }
       return u
-    } catch {
-      try {
-        const cached = JSON.parse(window.sessionStorage.getItem(USER_CACHE_KEY) || 'null') as UserRecord | null
-        if (cached) {
-          setUser(cached)
-          return cached
-        }
-      } catch {
-        // fall through to clear auth
-      }
+    } catch (error) {
       window.localStorage.removeItem('nms_access_token')
       window.sessionStorage.removeItem(USER_CACHE_KEY)
       setUser(null)
+      // A forced refresh is the source of truth. Never authenticate with a
+      // stale cached user when the current token cannot be validated.
+      if (forceRefresh) throw error
       return null
     } finally {
       setLoading(false)
@@ -99,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return
       }
       if (ignore) return
-      await hydrateUser(true, true)
+      await hydrateUser(true, true).catch(() => undefined)
     })()
     return () => { ignore = true }
   }, [hydrateUser])
@@ -108,7 +103,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await apiLogin(email, password)
     // Load the user and permissions before protected routes render. Navigating
     // with only a token set creates a race where the guard sends us back to login.
-    await hydrateUser(true, true)
+    const currentUser = await hydrateUser(true, true)
+    if (!currentUser) throw new Error('Unable to load your account. Please try again.')
   }, [hydrateUser])
 
   const logout = useCallback(() => {

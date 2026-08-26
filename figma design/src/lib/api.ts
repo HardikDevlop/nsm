@@ -87,19 +87,72 @@ function invalidateGetCache() {
   clearRequestCache()
 }
 
+export function clearNmsClientState() {
+  authToken = null
+  authPromise = null
+  clearRequestCache()
+}
+
+function friendlyApiMessage(status: number, detail: string): string {
+  const normalized = detail.trim()
+  if (status === 401) return "Invalid email or password, or your session has expired."
+  if (status === 403) return "You do not have permission to perform this action."
+  if (status === 400) {
+    if (/ips\[\]/i.test(normalized) || /ip(?:s)?\[\] is required/i.test(normalized)) {
+      return "Please provide the required device information."
+    }
+    return "Please provide the required device information."
+  }
+  if (status === 404) return "Device not found."
+  if (status === 409) return "This item is already being processed."
+  if (status === 422) return "The submitted data is incomplete or invalid."
+  if (status >= 500) return "Something went wrong on the server. Please try again."
+  return normalized || "Request failed."
+}
+
+function networkMessage(error: unknown): string {
+  if (error instanceof DOMException && error.name === "AbortError") return "Request was cancelled."
+  return "Unable to connect to the server."
+}
+
 /** Explicit login — stores token in memory + localStorage. */
 export async function login(email: string, password: string): Promise<string> {
-  const response = await fetch(buildUrl("/auth/login"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  })
-  if (!response.ok) {
-    const detail = await response.json().catch(() => null)
-    throw new Error(detail?.detail ?? "Invalid credentials")
+  // A new login must never inherit a previous user's cached API/session data.
+  authToken = null
+  authPromise = null
+  window.localStorage.removeItem("nms_access_token")
+  window.sessionStorage.removeItem("nms.user.cache.v2")
+  clearRequestCache()
+
+  let response: Response
+  try {
+    response = await fetch(buildUrl("/auth/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    })
+  } catch (error) {
+    throw new Error(networkMessage(error))
   }
-  const payload = await response.json()
-  authToken = (payload.access_token as string)
+  if (!response.ok) {
+    let detail = ""
+    try {
+      const body = (await response.json()) as { detail?: string }
+      detail = body.detail ?? ""
+    } catch {
+      // Non-JSON responses still get a safe status-based message.
+    }
+    throw new Error(
+      response.status === 401
+        ? "Invalid email or password."
+        : friendlyApiMessage(response.status, detail),
+    )
+  }
+  const payload = (await response.json()) as { access_token?: unknown }
+  if (typeof payload.access_token !== "string" || !payload.access_token) {
+    throw new Error("The server returned an invalid login response.")
+  }
+  authToken = payload.access_token
   window.localStorage.setItem("nms_access_token", authToken)
   return authToken
 }
@@ -115,6 +168,7 @@ export function logout() {
 export async function requestJson<T>(
   path: string,
   init: RequestInit = {},
+  retryUnauthorized = true,
 ): Promise<T> {
   const token = await ensureAuth()
   const method = (init.method ?? "GET").toUpperCase()
@@ -145,7 +199,8 @@ export async function requestJson<T>(
       authToken = null
       window.localStorage.removeItem("nms_access_token")
       clearRequestCache()
-      return requestJson<T>(path, init)
+      if (retryUnauthorized) return requestJson<T>(path, init, false)
+      throw new Error(friendlyApiMessage(response.status, ""))
     }
 
     if (!response.ok) {
@@ -161,14 +216,18 @@ export async function requestJson<T>(
       } catch {
         /* non-JSON error */
       }
-      throw new Error(
-        detail
-          ? `Request failed: ${response.status} — ${detail}`
-          : `Request failed: ${response.status}`,
-      )
+      throw new Error(friendlyApiMessage(response.status, detail))
     }
 
     return response.json() as Promise<T>
+  }).catch((error) => {
+    // Browser fetch failures are TypeError instances; do not leak browser or
+    // runtime implementation text into the UI.
+    if (error instanceof Error) {
+      if (error.name === "TypeError") throw new Error(networkMessage(error))
+      throw error
+    }
+    throw new Error(networkMessage(error))
   })
 
   if (canCache) inflightRequests.set(key, request as Promise<unknown>)
@@ -196,6 +255,7 @@ export interface DeviceRecord {
   hostname: string
   ip_address: string
   snmp_version?: string | null
+  vendor?: string | null
   mac_address?: string | null
   status: string
   monitoring_status: boolean
@@ -209,6 +269,8 @@ export interface DeviceRecord {
   serial_number?: string | null
   model?: string | null
   firmware_version?: string | null
+  vendor_name?: string | null
+  device_type?: string | null
   last_status_change?: string | null
   topology_metadata?: {
     port?: string
@@ -222,7 +284,28 @@ export interface DeviceOptionRecord {
   id: number
   hostname: string
   ip_address: string
+  mac_address?: string | null
+  model?: string | null
+  vendor_name?: string | null
+  device_type?: string | null
   status: string
+}
+
+export interface SiteRecord {
+  id: number
+  organization_id: number
+  name: string
+  city?: string | null
+  state?: string | null
+  latitude?: number | null
+  longitude?: number | null
+}
+
+export interface DeviceTypeRecord {
+  id: number
+  name: string
+  description?: string | null
+  created_at: string
 }
 
 export interface DeviceMetricRecord {
@@ -332,6 +415,15 @@ export interface ChunkedDiscoveryJobStatus {
 export interface AddDiscoveredDevicesPayload {
   devices: Record<string, unknown>[]
   site_id?: number | null
+  discovery_source?: "icmp" | "snmp" | null
+  snmp_version?: "v2c" | "v3"
+  communities?: string[]
+  username?: string | null
+  auth_protocol?: string | null
+  auth_password?: string | null
+  privacy_protocol?: string | null
+  privacy_password?: string | null
+  security_level?: string | null
 }
 
 export interface MonitorDevicePayload {
@@ -345,6 +437,99 @@ export interface MonitorDevicePayload {
 
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   return requestJson<DashboardSummary>("/dashboard/summary")
+}
+
+export interface ReportManagementFilters {
+  device_type_id?: number | null
+  device_id?: number | null
+  site_id?: number | null
+  protocol?: "all" | "snmp" | "icmp"
+  period?: "weekly" | "monthly" | "yearly" | "custom"
+  start_date?: string | null
+  end_date?: string | null
+}
+
+export interface ReportManagementRecord {
+  device_id: number
+  hostname: string
+  ip_address: string
+  site_name?: string | null
+  device_type_name?: string | null
+  protocol: string
+  availability_pct: number
+  downtime_seconds: number
+  snmp_success_rate?: number | null
+  icmp_success_rate?: number | null
+  snmp_health: string
+  performance_score?: number | null
+  interface_count?: number | null
+  interface_down_count?: number | null
+  avg_cpu_percent?: number | null
+  avg_memory_percent?: number | null
+  avg_latency_ms?: number | null
+  packet_loss_pct?: number | null
+  sla_status: string
+  period_start: string
+  period_end: string
+}
+
+export interface ReportManagementSection {
+  title: string
+  count: number
+  average?: number | null
+  maximum?: number | null
+  minimum?: number | null
+}
+
+export interface ReportManagementSummary {
+  filters: ReportManagementFilters
+  period_start: string
+  period_end: string
+  total_devices: number
+  total_records: number
+  availability_pct: number
+  downtime_seconds: number
+  avg_snmp_health?: number | null
+  avg_performance_score?: number | null
+  sla_met_pct: number
+  snmp_devices: number
+  icmp_devices: number
+  sections: Record<string, ReportManagementSection>
+  records: ReportManagementRecord[]
+}
+
+function appendQueryParams(query: URLSearchParams, filters: Record<string, unknown>) {
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value))
+  })
+}
+
+export async function getReportManagement(filters: ReportManagementFilters): Promise<ReportManagementSummary> {
+  const query = new URLSearchParams()
+  appendQueryParams(query, filters)
+  const suffix = query.size ? `?${query.toString()}` : ""
+  return requestJson<ReportManagementSummary>(`/reports/management${suffix}`)
+}
+
+export async function getReportManagementOptions(): Promise<{
+  device_types: DeviceTypeRecord[]
+  sites: SiteRecord[]
+  devices: DeviceOptionRecord[]
+}> {
+  return requestJson("/reports/management/options")
+}
+
+export async function downloadReportManagementCSV(filters: ReportManagementFilters): Promise<Blob> {
+  const query = new URLSearchParams()
+  appendQueryParams(query, { ...filters, format: "csv" })
+  const token = await ensureAuth()
+  const response = await fetch(buildUrl(`/reports/management/export?${query.toString()}`), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`)
+  }
+  return response.blob()
 }
 
 export async function detectLocalSubnet(): Promise<{
@@ -1063,11 +1248,16 @@ export interface SNMPDeviceOverview {
 export interface SNMPSystemInfo {
   hostname?: string
   description?: string
+  mac_address?: string | null
   uptime_seconds?: number
   uptime_display?: string
   contact?: string
   location?: string
   services?: number
+  data?: {
+    uptime?: { seconds?: number | null; ticks?: number | null; display?: string | null }
+    [key: string]: unknown
+  }
   supported: boolean
 }
 
@@ -2060,7 +2250,7 @@ export async function listSNMPDevicesOptimized(params: {
   hostname?: string
   sort_by?: string
   sort_order?: string
-}): Promise<SNMPDevicesResponse> {
+}, signal?: AbortSignal): Promise<SNMPDevicesResponse> {
   const query = new URLSearchParams()
   if (params.page) query.set("page", String(params.page))
   if (params.page_size) query.set("page_size", String(params.page_size))
@@ -2075,13 +2265,19 @@ export async function listSNMPDevicesOptimized(params: {
   if (params.hostname) query.set("hostname", params.hostname)
   if (params.sort_by) query.set("sort_by", params.sort_by)
   if (params.sort_order) query.set("sort_order", params.sort_order)
-  return requestJson<SNMPDevicesResponse>(`/snmp/devices?${query.toString()}`)
+  return requestJson<SNMPDevicesResponse>(`/snmp/devices?${query.toString()}`, {
+    signal,
+  })
 }
 
 export async function getSNMPDeviceDetails(
   deviceId: number,
 ): Promise<SNMPDeviceDetails> {
-  return requestJson<SNMPDeviceDetails>(`/snmp/devices/${deviceId}`)
+  // Manual refreshes must observe current persisted capabilities/metrics,
+  // not the shared short-lived GET cache.
+  return requestJson<SNMPDeviceDetails>(`/snmp/devices/${deviceId}`, {
+    signal: new AbortController().signal,
+  })
 }
 
 export async function getSNMPDeviceMonitoringConfigs(
@@ -2916,3 +3112,49 @@ export async function deleteDeviceMetric(
 ): Promise<{ detail: string }> {
   return requestJson(`/device-metrics/${id}`, { method: "DELETE" })
 }
+
+export interface LinuxServerRecord { id: number; uuid: string; hostname: string; ip_address: string; display_name?: string | null; os_name?: string | null; os_version?: string | null; architecture?: string | null; snmp_available?: boolean | null; snmp_version?: string | null; ssh_port: number; status: string; enabled: boolean; last_seen_at?: string | null; last_error?: string | null; created_at: string; updated_at: string }
+export interface LinuxServerDetail extends LinuxServerRecord { interfaces: Array<{ id: number; interface_name: string; mac_address?: string | null; state?: string | null; speed_mbps?: number | null; mtu?: number | null }>; disks: Array<{ id: number; device?: string | null; mount_point: string; filesystem?: string | null; total_bytes?: number | null; used_bytes?: number | null; available_bytes?: number | null; usage_percent?: number | null }>; monitoring_config?: { enabled: boolean; interval_seconds: number } | null }
+export interface LinuxDetectedData { ip_address: string; hostname: string; os_name?: string | null; os_version?: string | null; architecture?: string | null; snmp_available?: boolean | null; snmp_version?: string | null; interfaces: LinuxServerDetail['interfaces']; disks: LinuxServerDetail['disks']; status: string }
+export interface LinuxDetectionResponse { success: boolean; status: string; message: string; data?: LinuxDetectedData | null; warnings: string[]; ssh_valid?: boolean; snmp_valid?: boolean; ssh_error?: string | null; snmp_error?: string | null }
+export interface LinuxSecurityEvent { id: number; linux_server_id: number; event_timestamp: string; source_ip?: string | null; destination_ip?: string | null; destination_port?: number | null; event_type: string; severity?: string | null; raw_message: string; event_hash: string; created_at: string }
+export interface LinuxMonitoringStatus { server_id: number; enabled: boolean; status: 'running' | 'stopped' | 'failed'; interval_seconds: number; last_run_at?: string | null; last_success_at?: string | null; last_error?: string | null }
+export interface LinuxRetentionStatus { retention_hours: number; last_cleanup_at?: string | null; last_cleanup_error?: string | null }
+export async function listLinuxServers(): Promise<LinuxServerRecord[]> { return requestJson('/linux-servers') }
+export async function getLinuxRetentionStatus(): Promise<LinuxRetentionStatus> { return requestJson('/linux-servers/retention/status') }
+export async function detectLinuxServer(data: Record<string, unknown>): Promise<LinuxDetectionResponse> { return requestJson('/linux-servers/detect', { method: 'POST', body: JSON.stringify(data) }) }
+export async function validateLinuxSSH(data: Record<string, unknown>): Promise<LinuxDetectionResponse> { return requestJson('/linux-servers/detect/ssh', { method: 'POST', body: JSON.stringify(data) }) }
+export async function validateLinuxSNMP(data: Record<string, unknown>): Promise<LinuxDetectionResponse> { return requestJson('/linux-servers/detect/snmp', { method: 'POST', body: JSON.stringify(data) }) }
+export async function addLinuxServer(data: Record<string, unknown>): Promise<LinuxServerDetail> { return requestJson('/linux-servers', { method: 'POST', body: JSON.stringify(data) }) }
+export async function getLinuxServer(id: number): Promise<LinuxServerDetail> { return requestJson(`/linux-servers/${id}`) }
+export async function updateLinuxServer(id: number, data: Record<string, unknown>): Promise<LinuxServerRecord> { return requestJson(`/linux-servers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }) }
+export async function deleteLinuxServer(id: number): Promise<{ detail: string }> { return requestJson(`/linux-servers/${id}`, { method: 'DELETE' }) }
+export async function listLinuxMonitoringStatus(): Promise<LinuxMonitoringStatus[]> { return requestJson('/linux-servers/monitoring/status') }
+export async function startLinuxMonitoring(id: number, data: Record<string, string>): Promise<LinuxMonitoringStatus> { return requestJson(`/linux-servers/${id}/monitoring/start`, { method: 'POST', body: JSON.stringify(data) }) }
+export async function stopLinuxMonitoring(id: number): Promise<LinuxMonitoringStatus> { return requestJson(`/linux-servers/${id}/monitoring/stop`, { method: 'POST' }) }
+
+export interface LinuxMetricSnapshot {
+  id: number
+  linux_server_id: number
+  collected_at: string
+  cpu_percent?: number | null
+  memory_percent?: number | null
+  swap_percent?: number | null
+  disk_percent?: number | null
+  disk_io_read_bytes_per_sec?: number | null
+  disk_io_write_bytes_per_sec?: number | null
+  load_1m?: number | null
+  load_5m?: number | null
+  load_15m?: number | null
+  uptime_seconds?: number | null
+  network_rx_bytes_per_sec?: number | null
+  network_tx_bytes_per_sec?: number | null
+  packets_per_sec?: number | null
+  interface_errors?: number | null
+  interface_drops?: number | null
+  details?: Record<string, unknown>
+}
+export async function getLinuxCurrentMetrics(id: number): Promise<LinuxMetricSnapshot> { return requestJson(`/linux-servers/${id}/metrics/latest`) }
+export async function getLinuxMetricHistory(id: number, since?: string): Promise<LinuxMetricSnapshot[]> { return requestJson(`/linux-servers/${id}/metrics/history${since ? `?since=${encodeURIComponent(since)}` : ''}`) }
+export async function listLinuxSecurityEvents(id: number): Promise<LinuxSecurityEvent[]> { return requestJson(`/linux-servers/${id}/security/events`) }
+export async function collectLinuxSecurity(id: number, data: Record<string, unknown>): Promise<{ success: boolean; status: string; message: string; collected_events: number; warnings: string[]; events: LinuxSecurityEvent[] }> { return requestJson(`/linux-servers/${id}/security/collect`, { method: 'POST', body: JSON.stringify(data) }) }

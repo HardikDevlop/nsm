@@ -54,6 +54,51 @@ def create_offline_alert(db: Session, device_id: int, hostname: str, ip_address:
     return alert
 
 
+def create_device_added_alert(
+    db: Session,
+    device_id: int,
+    hostname: str,
+    ip_address: str,
+    discovery_method: str,
+    status: str,
+    mac_address: str | None = None,
+    snmp_version: str | None = None,
+) -> Alert | None:
+    """Create one active informational alert when discovery adds a device."""
+    title = f"New Device Added: {hostname}"
+    existing = db.query(Alert).filter(
+        Alert.device_id == device_id,
+        Alert.title == title,
+        Alert.status.in_(("open", "acknowledged")),
+        Alert.deleted_at.is_(None),
+    ).first()
+    if existing:
+        return None
+
+    details = [
+        f"IP address: {ip_address}",
+        f"Discovery method: {discovery_method}",
+        f"Status: {status}",
+    ]
+    if mac_address:
+        details.append(f"MAC address: {mac_address}")
+    if snmp_version:
+        details.append(f"SNMP version: {snmp_version}")
+
+    alert = Alert(
+        device_id=device_id,
+        severity="info",
+        title=title,
+        description="A new device was added to the inventory.\n" + "\n".join(details),
+        status="open",
+        created_at=now_ist(),
+    )
+    db.add(alert)
+    db.flush()
+    _notify(db, alert)
+    return alert
+
+
 def create_threshold_alert(db: Session, device_id: int, title: str, description: str, severity: str) -> Alert | None:
     """Persist and notify one active alert for a metric condition."""
     existing = db.query(Alert).filter(

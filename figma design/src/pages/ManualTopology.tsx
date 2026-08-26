@@ -41,8 +41,21 @@ type Link = {
   label: string
   fromPort?: string
   toPort?: string
+  geometry?: "straight" | "curved"
 }
 type Workspace = { devices: Device[] links: Link[] }
+const FALLBACK_PORT = "Port 1"
+
+function linkUsesPort(link: Link, deviceId: string, port: string) {
+  return (
+    (link.from === deviceId && link.fromPort === port) ||
+    (link.to === deviceId && link.toPort === port)
+  )
+}
+
+function isPortOccupied(links: Link[], deviceId: string, port: string, exceptLinkId?: string) {
+  return links.some((link) => link.id !== exceptLinkId && linkUsesPort(link, deviceId, port))
+}
 
 const portLabel = (interfaceName: string, _index?: number) =>
   interfaceName || "INTERFACE NOT SET"
@@ -99,6 +112,9 @@ const tones = [
   "#00ff88",
   "#facc15",
 ]
+const PEN_COLOR = "#f4f1ea"
+const PEN_SURFACE = "rgba(244,241,234,.10)"
+const PEN_BORDER = "rgba(244,241,234,.58)"
 
 const initialWorkspace: Workspace = {
   devices: [
@@ -287,6 +303,38 @@ function wrapDeviceName(name: string, maxChars: number) {
     : lines
 }
 
+function parallelLinkGeometry(
+  from: Device,
+  to: Device,
+  lane: number,
+  laneCount: number,
+  geometryMode?: Link["geometry"],
+) {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const length = Math.hypot(dx, dy) || 1
+  const offset = geometryMode === "straight"
+    ? 0
+    : geometryMode === "curved"
+      ? (lane - (laneCount - 1) / 2) * 30 || 30
+      : (lane - (laneCount - 1) / 2) * 30
+  const normalX = -dy / length
+  const normalY = dx / length
+  const midX = (from.x + to.x) / 2
+  const midY = (from.y + to.y) / 2
+  const controlX = midX + normalX * offset
+  const controlY = midY + normalY * offset
+  const curveMidX = (from.x + 2 * controlX + to.x) / 4
+  const curveMidY = (from.y + 2 * controlY + to.y) / 4
+
+  return {
+    d: offset === 0
+      ? `M ${from.x} ${from.y} L ${to.x} ${to.y}`
+      : `M ${from.x} ${from.y} Q ${controlX} ${controlY} ${to.x} ${to.y}`,
+    midpoint: { x: curveMidX, y: curveMidY },
+  }
+}
+
 function NodeCard({
   device,
   selected,
@@ -318,10 +366,11 @@ function NodeCard({
   showTargetPorts: boolean
   warning: boolean
 }) {
-  const ports = Array.isArray(device.ports) ? device.ports : ["interface-1"]
-  const width = device.width ?? 210
-  const height = device.height ?? 68
-  const interfacePanelWidth = Math.max(width, 320)
+  const ports = Array.isArray(device.ports) && device.ports.length > 0 ? device.ports : [FALLBACK_PORT]
+  // Keep saved cards visually consistent while preserving a small resize range.
+  const width = Math.max(260, Math.min(300, device.width ?? 280))
+  const height = Math.max(72, Math.min(88, device.height ?? 76))
+  const interfacePanelWidth = width
   const interfaceColumnWidth = (interfacePanelWidth - 18) / 2
   const portRows = Math.ceil(ports.length / 2)
   const panelHeight = ports.length > 0 ? portRows * 17 + 12 : 32
@@ -340,7 +389,10 @@ function NodeCard({
   const downCount = ports.filter((port) => portStatus(port) === "down").length
   const controlCenterX = width - 21
   const labelEndX = width - 39
-  const nameLines = wrapDeviceName(device.name, Math.max(16, Math.floor((width - 112) / 5.6)))
+  const displayName = ["", "(none)", "null", "unknown", "unknown device"].includes(device.name.trim().toLowerCase())
+    ? "Network device"
+    : device.name.trim()
+  const nameLines = wrapDeviceName(displayName, Math.max(16, Math.floor((width - 112) / 5.6)))
   const subtitleMaxLength = Math.max(18, Math.floor((width - 58) / 5))
   const typeLabel = device.type.trim().toUpperCase() || "DEVICE"
   const typeTextLength = Math.min(58, Math.max(32, width - 108))
@@ -522,21 +574,21 @@ function NodeCard({
                     width={interfaceColumnWidth - 4}
                     height="14"
                     rx="3"
-                    fill={active ? "rgba(0,255,136,.16)" : "var(--t-bg)"}
-                    stroke={active ? "#00ff88" : "var(--t-border-light)"}
+                    fill={active ? PEN_SURFACE : "var(--t-bg)"}
+                    stroke={active ? PEN_BORDER : "var(--t-border-light)"}
                   />
                   {active || portStatus(port) ? (
                     <circle
                       cx="7"
                       cy="7"
                       r="2"
-                      fill={active ? "#00ff88" : statusColor(port)}
+                      fill={active ? PEN_COLOR : statusColor(port)}
                     />
                   ) : null}
                   <text
                     x="12"
                     y="10"
-                    fill={active ? "#00ff88" : "var(--t-muted)"}
+                    fill={active ? PEN_COLOR : "var(--t-muted)"}
                     fontSize="6.5"
                     fontFamily="JetBrains Mono, monospace"
                   >
@@ -660,13 +712,15 @@ export default function ManualTopology() {
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
   const [realDevices, setRealDevices] = useState<SNMPDeviceListItem[]>([])
   const [deviceHealth, setDeviceHealth] = useState<Record<number, boolean>>({})
-  const [realDeviceId, setRealDeviceId] = useState("")
   const [portsLoading, setPortsLoading] = useState(false)
   const [portsError, setPortsError] = useState<string | null>(null)
   const [portsReload, setPortsReload] = useState(0)
   const interfaceRefreshDevice = useRef<number | null>(null)
   const loadedInterfaceDevices = useRef(new Set<number>())
   const svgRef = useRef<SVGSVGElement | null>(null)
+  const workspaceGridRef = useRef<HTMLDivElement | null>(null)
+  const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false)
+  const [canvasZoom, setCanvasZoom] = useState(1)
   const [dragState, setDragState] = useState<{
     id: string
     offsetX: number
@@ -714,8 +768,6 @@ export default function ManualTopology() {
       .then((snapshot) => {
         if (!snapshot) return
         setSnapshotId(snapshot.id)
-        if (workspace.devices.length === 0 && snapshot.payload?.devices?.length)
-          setWorkspace(normalizeWorkspace(snapshot.payload))
         setTopologyChanges(snapshot.changes ?? [])
       })
       .catch(() => undefined)
@@ -758,11 +810,38 @@ export default function ManualTopology() {
   }, [snapshotId])
   useEffect(() => {
     let cancelled = false
-    void listSNMPDevicesOptimized({ page: 1, page_size: 200 })
+    // Bypass the short-lived GET cache: this page is also responsible for
+    // removing deleted devices from its persisted topology workspace.
+    void listSNMPDevicesOptimized(
+      { page: 1, page_size: 200 },
+      new AbortController().signal,
+    )
       .then((response) => {
         if (cancelled) return
         setRealDevices(response.items)
         const activeIds = new Set(response.items.map((device) => device.id))
+        if (activeIds.size === 0) {
+          const emptyWorkspace: Workspace = { devices: [], links: [] }
+          setWorkspace(emptyWorkspace)
+          setSelectedId(null)
+          setSelectedLinkId(null)
+          setEditing(null)
+          setConnectFrom(null)
+          setConnectMode(false)
+          setSourcePort(null)
+          setDeviceHealth({})
+          window.localStorage.removeItem(STORAGE_KEY)
+          window.sessionStorage.removeItem(OFFLINE_ALERT_KEY)
+
+          // Remove the server-side baseline as well. Otherwise a fresh
+          // reload could resurrect deleted devices from the latest snapshot.
+          void getLatestManualTopologySnapshot().then((snapshot) => {
+            if (snapshot) {
+              void updateManualTopologySnapshot(snapshot.id, emptyWorkspace)
+            }
+          }).catch(() => undefined)
+          return
+        }
         setWorkspace((current) => {
           const devices = current.devices.filter(
             (device) => !device.backendId || activeIds.has(device.backendId),
@@ -869,9 +948,9 @@ export default function ManualTopology() {
   }, [realDevices, deviceHealth])
 
   const selected = workspace.devices.find((device) => device.id === selectedId)
-  const selectedPorts = Array.isArray(selected?.ports)
+  const selectedPorts = Array.isArray(selected?.ports) && selected.ports.length > 0
     ? selected.ports
-    : ["interface-1"]
+    : [FALLBACK_PORT]
   const completed = checked.filter(Boolean).length
   const deviceById = useMemo(
     () => new Map(workspace.devices.map((device) => [device.id, device])),
@@ -883,11 +962,11 @@ export default function ManualTopology() {
     const ports =
       Array.isArray(device.ports) && device.ports.length > 0
         ? device.ports
-        : ["interface-1"]
+        : [FALLBACK_PORT]
     const index = Math.max(0, ports.indexOf(rawPort))
-    const width = device.width ?? 210
-    const height = device.height ?? 68
-    const panelWidth = Math.max(width, 320)
+    const width = Math.max(260, Math.min(300, device.width ?? 280))
+    const height = Math.max(72, Math.min(88, device.height ?? 76))
+    const panelWidth = width
     const columnWidth = (panelWidth - 18) / 2
     return {
       x: device.x - width / 2 + 6 + (index % 2) * columnWidth + 7,
@@ -1065,16 +1144,13 @@ export default function ManualTopology() {
           })
           .filter(Boolean)
         if (cancelled) return
-        if (portNames.length === 0) {
-          setPortsError(
-            "No interface data found. Run SNMP polling/discovery for this device first.",
-          )
-        }
+        const effectivePortNames = portNames.length > 0 ? portNames : [FALLBACK_PORT]
+        if (portNames.length === 0) setPortsError(null)
         setWorkspace((current) => ({
           ...current,
           devices: current.devices.map((device) =>
             device.id === selected.id
-              ? { ...device, ports: portNames, portStatuses }
+              ? { ...device, ports: effectivePortNames, portStatuses }
               : device,
           ),
         }))
@@ -1094,8 +1170,7 @@ export default function ManualTopology() {
     }
   }, [portsReload, selected?.backendId, selected?.id])
 
-  const importRealDevice = () => {
-    const raw = realDevices.find((device) => String(device.id) === realDeviceId)
+  const importAvailableDevice = (raw: SNMPDeviceListItem | undefined) => {
     if (!raw) return
     const id = `real-${raw.id}`
     setWorkspace((current) => ({
@@ -1123,10 +1198,9 @@ export default function ManualTopology() {
           ],
     }))
     setSelectedId(id)
-    setRealDeviceId("")
   }
 
-  const startNew = () => {
+  const startNew = (deviceType = "Switch") => {
     const index = workspace.devices.length
     setEditing({
       id: `device-${Date.now()}`,
@@ -1135,7 +1209,7 @@ export default function ManualTopology() {
       ipAddress: "",
       macAddress: "",
       location: "",
-      type: "Switch",
+      type: deviceType,
       tone: tones[index % tones.length],
       x: 150 + (index % 4) * 220,
       y: 120 + Math.floor(index / 4) * 120,
@@ -1174,6 +1248,12 @@ export default function ManualTopology() {
 
   const saveDevice = () => {
     if (!editing || !editing.name.trim()) return
+    if (sourcePort && isPortOccupied(workspace.links, sourcePort.deviceId, sourcePort.port)) {
+      toast.warning("This port is already connected to another device.")
+      setSourcePort(null)
+      setConnectMode(false)
+      return
+    }
     const nextDevice = {
       ...editing,
       name: editing.name.trim(),
@@ -1247,6 +1327,17 @@ export default function ManualTopology() {
     setSelectedLinkId(null)
   }
 
+  const toggleLinkGeometry = (linkId: string) => {
+    setWorkspace((current) => ({
+      ...current,
+      links: current.links.map((link) =>
+        link.id === linkId
+          ? { ...link, geometry: link.geometry === "straight" ? "curved" : "straight" }
+          : link,
+      ),
+    }))
+  }
+
   const resolveChange = async (
     change: ManualTopologyChange,
     action: "accept_real_change" | "keep_manual",
@@ -1312,40 +1403,47 @@ export default function ManualTopology() {
 
   const selectPort = (deviceId: string, port: string) => {
     if (!connectMode) {
+      if (isPortOccupied(workspace.links, deviceId, port)) {
+        toast.warning("This port is already connected to another device.")
+        return
+      }
       setConnectMode(true)
       setConnectFrom(deviceId)
       setConnectionPointer(interfacePoint(deviceId, port))
       return setSourcePort({ deviceId, port })
     }
     if (!sourcePort) return setSourcePort({ deviceId, port })
-    if (sourcePort.deviceId === deviceId)
+    if (sourcePort.deviceId === deviceId) {
+      if (sourcePort.port !== port && isPortOccupied(workspace.links, deviceId, port)) {
+        toast.warning("This port is already connected to another device.")
+        return
+      }
       return setSourcePort({ deviceId, port })
-    const exists = workspace.links.some(
-      (link) =>
-        (link.from === sourcePort.deviceId &&
-          link.to === deviceId &&
-          link.fromPort === sourcePort.port &&
-          link.toPort === port) ||
-        (link.from === deviceId &&
-          link.to === sourcePort.deviceId &&
-          link.fromPort === port &&
-          link.toPort === sourcePort.port),
-    )
-    if (!exists)
-      setWorkspace((current) => ({
+    }
+    if (isPortOccupied(workspace.links, deviceId, port) ||
+        isPortOccupied(workspace.links, sourcePort.deviceId, sourcePort.port)) {
+      toast.warning("This port is already connected to another device.")
+      return
+    }
+    setWorkspace((current) => {
+      // Re-check inside the state update so the same endpoint cannot be
+      // consumed twice even when two pointer events arrive back-to-back.
+      if (isPortOccupied(current.links, deviceId, port) ||
+          isPortOccupied(current.links, sourcePort.deviceId, sourcePort.port)) {
+        return current
+      }
+      return {
         ...current,
-        links: [
-          ...current.links,
-          {
-            id: `link-${Date.now()}`,
-            from: sourcePort.deviceId,
-            to: deviceId,
-            fromPort: sourcePort.port,
-            toPort: port,
-            label: `${displayPort(sourcePort.deviceId, sourcePort.port)} → ${displayPort(deviceId, port)}`,
-          },
-        ],
-      }))
+        links: [...current.links, {
+          id: `link-${Date.now()}`,
+          from: sourcePort.deviceId,
+          to: deviceId,
+          fromPort: sourcePort.port,
+          toPort: port,
+          label: `${displayPort(sourcePort.deviceId, sourcePort.port)} → ${displayPort(deviceId, port)}`,
+        }],
+      }
+    })
     setSourcePort(null)
     setConnectFrom(null)
     setConnectMode(false)
@@ -1353,6 +1451,11 @@ export default function ManualTopology() {
   }
 
   const beginPortConnection = (deviceId: string, port: string) => {
+    if (isPortOccupied(workspace.links, deviceId, port) &&
+        !(sourcePort?.deviceId === deviceId && sourcePort.port === port)) {
+      toast.warning("This port is already connected to another device.")
+      return
+    }
     if (!connectMode || !sourcePort || sourcePort.deviceId === deviceId) {
       setConnectMode(true)
       setConnectFrom(deviceId)
@@ -1361,90 +1464,105 @@ export default function ManualTopology() {
     }
   }
 
+  const toggleCanvasFullscreen = async () => {
+    if (!workspaceGridRef.current) return
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+      } else {
+        await workspaceGridRef.current.requestFullscreen()
+      }
+    } catch {
+      // Fullscreen is optional on browsers that do not allow the API.
+      setIsCanvasFullscreen((value) => !value)
+    }
+  }
+
+  useEffect(() => {
+    const handleFullscreenChange = () => setIsCanvasFullscreen(document.fullscreenElement === workspaceGridRef.current)
+    document.addEventListener("fullscreenchange", handleFullscreenChange)
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange)
+  }, [])
+
   return (
-    <main className="min-h-full overflow-y-auto p-4 md:p-6 lg:p-8 grid-bg">
-      <div className="max-w-[1500px] mx-auto space-y-6">
-        <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+    <main className="min-h-full overflow-y-auto grid-bg">
+      <div className="w-full max-w-[2400px] mx-auto space-y-4 p-3 md:p-5 2xl:p-7">
+        <header
+          className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 rounded-xl px-4 py-3"
+          style={{
+            background: "var(--t-card)",
+            border: "1px solid var(--t-border-alpha)",
+            boxShadow: "0 16px 50px rgba(0,0,0,.12)",
+          }}
+        >
           <div>
             <div
-              className="font-mono text-xs tracking-[.24em] uppercase"
+              className="font-mono text-[10px] tracking-[.24em] uppercase"
               style={{ color: "var(--t-accent)" }}
             >
-              Network documentation / editable workspace
+              Network workspace / manual design board
             </div>
             <h1
-              className="font-display text-3xl md:text-4xl font-semibold tracking-wide mt-2"
+              className="font-display text-2xl md:text-3xl font-semibold tracking-wide mt-1"
               style={{ color: "var(--t-text)" }}
             >
-              Manual Topology
+              Manual Topology <span style={{ color: "var(--t-muted)" }}>·</span>{" "}
+              <span style={{ color: "var(--t-accent)" }}>Design Board</span>
             </h1>
             <p
-              className="font-display mt-2 max-w-2xl"
+              className="font-mono text-[10px] mt-1 max-w-2xl"
               style={{ color: "var(--t-muted)" }}
             >
-              Import real devices, load their live interface names and connect
-              interface-to-interface.
+              Arrange devices, connect physical ports, and keep a clean network
+              record with live health context.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={startNew}
-            className="px-4 py-2 rounded-lg font-mono text-xs font-semibold"
-            style={{ color: "var(--t-bg)", background: "var(--t-accent)" }}
-          >
-            + ADD DEVICE
-          </button>
-        </header>
-
-        <GlassCard className="p-4">
-          <div className="flex flex-col md:flex-row md:items-center gap-3">
-            <div className="flex-1">
-              <div
-                className="font-mono text-[10px] uppercase tracking-widest"
-                style={{ color: "var(--t-muted)" }}
-              >
-                Import real monitored device
-              </div>
-              <select
-                value={realDeviceId}
-                onChange={(event) => setRealDeviceId(event.target.value)}
-                className="mt-2 w-full rounded-md px-3 py-2 font-display text-sm outline-none"
-                style={{
-                  color: "var(--t-text)",
-                  background: "var(--t-bg)",
-                  border: "1px solid var(--t-border-alpha)",
-                }}
-              >
-                <option value="">Select a real switch/router/firewall</option>
-                {realDevices.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.hostname} · {device.ip_address}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button
-              type="button"
-              onClick={importRealDevice}
-              disabled={!realDeviceId}
-              className="px-4 py-2 rounded-md font-mono text-xs"
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="px-2.5 py-1.5 rounded-md font-mono text-[10px] uppercase"
               style={{
-                color: "var(--t-bg)",
-                background: "var(--t-accent)",
-                opacity: realDeviceId ? 1 : 0.45,
+                color: "#00ff88",
+                background: "rgba(0,255,136,.08)",
+                border: "1px solid rgba(0,255,136,.24)",
               }}
             >
-              IMPORT DEVICE + PORTS
+              {workspace.devices.length} devices
+            </span>
+            <span
+              className="px-2.5 py-1.5 rounded-md font-mono text-[10px] uppercase"
+              style={{
+                color: "var(--t-accent)",
+                background: "var(--t-accent-alpha)",
+                border: "1px solid var(--t-accent-border)",
+              }}
+            >
+              {workspace.links.length} links
+            </span>
+            <button
+              type="button"
+              onClick={startNew}
+              className="px-3 py-2 rounded-md font-mono text-[10px] font-semibold"
+              style={{ color: "var(--t-bg)", background: "var(--t-accent)" }}
+            >
+              + ADD DEVICE
             </button>
           </div>
-          <div
-            className="font-mono text-[10px] mt-2"
-            style={{ color: "var(--t-muted)" }}
-          >
-            The device must have SNMP interface data available. Ports are loaded
-            from the live monitoring API.
+        </header>
+
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg px-4 py-2.5"
+          style={{
+            background: "var(--t-card)",
+            border: "1px solid var(--t-border-alpha)",
+          }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: "#00ff88", boxShadow: "0 0 10px #00ff88" }} />
+            <span className="font-mono text-[10px] uppercase tracking-widest" style={{ color: "var(--t-muted)" }}>Canvas ready</span>
+            <span className="font-mono text-[10px] truncate" style={{ color: "var(--t-text)" }}>Drag an available device from Library to import it</span>
           </div>
-        </GlassCard>
+          <span className="font-mono text-[9px] uppercase" style={{ color: "var(--t-muted)" }}>Auto-save enabled</span>
+        </div>
 
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
@@ -1567,7 +1685,56 @@ export default function ManualTopology() {
           </GlassCard>
         )}
 
-        <GlassCard className="overflow-hidden">
+        <div
+          ref={workspaceGridRef}
+          className={isCanvasFullscreen
+            ? "fixed inset-0 z-50 grid lg:grid-cols-[150px_minmax(0,1fr)_320px] gap-3 items-stretch p-4 md:p-6 overflow-hidden"
+            : "grid lg:grid-cols-[112px_minmax(0,1fr)_300px] gap-3 items-stretch"}
+          style={isCanvasFullscreen ? { background: "var(--t-bg, #080a0d)" } : undefined}
+        >
+          <aside
+            className={isCanvasFullscreen ? "flex flex-col rounded-xl p-2 gap-1.5 min-h-0 overflow-y-auto" : "hidden lg:flex flex-col rounded-xl p-2 gap-1.5"}
+            style={{
+              background: "var(--t-card)",
+              border: "1px solid var(--t-border-alpha)",
+            }}
+          >
+            <div className="font-mono text-[9px] uppercase tracking-widest px-2 py-2" style={{ color: "var(--t-muted)" }}>
+              Library
+            </div>
+            {realDevices.length > 0 ? realDevices.map((device, index) => {
+              const label = device.hostname || device.name || device.ip_address
+              const type = device.device_type || "Network device"
+              const imported = workspace.devices.some((item) => item.backendId === device.id)
+              return (
+                <button
+                  type="button"
+                  key={device.id}
+                  onClick={() => importAvailableDevice(device)}
+                  className="flex flex-col items-center gap-1 rounded-lg px-1 py-2.5 transition-colors hover:bg-white/5"
+                  title={imported ? `${label} is already on canvas` : `Import ${label}`}
+                  style={{ opacity: imported ? 0.55 : 1 }}
+                >
+                  <svg width="22" height="22" viewBox="0 0 48 48"><DeviceGlyph type={type} tone={tones[index % tones.length]} /></svg>
+                  <span className="font-mono text-[9px] text-center leading-tight line-clamp-2" style={{ color: "var(--t-text)" }}>{label}</span>
+                  <span className="font-mono text-[8px] truncate max-w-full" style={{ color: "var(--t-muted)" }}>{imported ? "IMPORTED" : device.ip_address}</span>
+                </button>
+              )
+            }) : (
+              <div className="px-2 py-4 text-center font-mono text-[9px]" style={{ color: "var(--t-muted)" }}>No available devices</div>
+            )}
+            <div className="mt-auto pt-2 border-t" style={{ borderColor: "var(--t-border-light)" }}>
+              <button type="button" onClick={() => setConnectMode((value) => !value)} className="w-full rounded-lg px-1 py-2.5" style={{ color: connectMode ? PEN_COLOR : "var(--t-muted)", background: connectMode ? PEN_SURFACE : "transparent" }}>
+                <svg className="mx-auto" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 12h12M12 6v12" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="12" r="3" /></svg>
+                <span className="font-mono text-[9px] block mt-1">{connectMode ? "Cancel" : "Wire"}</span>
+              </button>
+            </div>
+          </aside>
+
+        <div
+          className="min-w-0 min-h-0"
+        >
+        <GlassCard className="overflow-hidden min-w-0 h-full">
           <div
             className="flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 md:px-6 py-4"
             style={{ borderBottom: "1px solid var(--t-border-light)" }}
@@ -1593,6 +1760,19 @@ export default function ManualTopology() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={() => void toggleCanvasFullscreen()}
+                className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase"
+                style={{ color: "var(--t-accent)", border: "1px solid var(--t-accent-border)", background: "var(--t-accent-alpha)" }}
+              >
+                {isCanvasFullscreen ? "EXIT FULL SCREEN" : "FULL SCREEN"}
+              </button>
+              <div className="flex items-center gap-1 rounded-md p-1" style={{ border: "1px solid var(--t-border-alpha)", background: "var(--t-bg)" }}>
+                <button type="button" onClick={() => setCanvasZoom((value) => Math.max(0.6, Number((value - 0.1).toFixed(1))))} className="w-7 h-6 rounded font-mono text-xs" style={{ color: "var(--t-text)" }} aria-label="Zoom out">−</button>
+                <button type="button" onClick={() => setCanvasZoom(1)} className="px-1.5 h-6 rounded font-mono text-[9px]" style={{ color: "var(--t-muted)" }} aria-label="Reset zoom">{Math.round(canvasZoom * 100)}%</button>
+                <button type="button" onClick={() => setCanvasZoom((value) => Math.min(1.8, Number((value + 0.1).toFixed(1))))} className="w-7 h-6 rounded font-mono text-xs" style={{ color: "var(--t-text)" }} aria-label="Zoom in">+</button>
+              </div>
+              <button
+                type="button"
                 onClick={() => {
                   if (connectMode) {
                     setConnectMode(false)
@@ -1608,10 +1788,10 @@ export default function ManualTopology() {
                 disabled={!selectedId && !connectMode}
                 className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase"
                 style={{
-                  color: connectMode ? "#00ff88" : "var(--t-accent)",
+                  color: connectMode ? PEN_COLOR : "var(--t-accent)",
                   border: "1px solid var(--t-accent-border)",
                   background: connectMode
-                    ? "rgba(0,255,136,.1)"
+                    ? PEN_SURFACE
                     : "transparent",
                 }}
               >
@@ -1643,9 +1823,9 @@ export default function ManualTopology() {
                   onClick={() => setConnectMode(true)}
                   className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase"
                   style={{
-                    color: "#00ff88",
-                    border: "1px solid #00ff88",
-                    background: "rgba(0,255,136,.1)",
+                    color: PEN_COLOR,
+                    border: `1px solid ${PEN_BORDER}`,
+                    background: PEN_SURFACE,
                   }}
                 >
                   DRAW CONNECTION · {sourcePort.port}
@@ -1663,6 +1843,20 @@ export default function ManualTopology() {
                   }}
                 >
                   DISCONNECT SELECTED LINK
+                </button>
+              )}
+              {selectedLinkId && (
+                <button
+                  type="button"
+                  onClick={() => toggleLinkGeometry(selectedLinkId)}
+                  className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase"
+                  style={{
+                    color: "var(--t-text)",
+                    border: "1px solid var(--t-border-alpha)",
+                    background: "var(--t-card)",
+                  }}
+                >
+                  CHANGE TO {workspace.links.find((link) => link.id === selectedLinkId)?.geometry === "straight" ? "CURVED" : "STRAIGHT"}
                 </button>
               )}
               <button
@@ -1719,15 +1913,16 @@ export default function ManualTopology() {
             </div>
           </div>
           {activeView === "physical" ? (
-            <div className="overflow-x-auto p-3 md:p-6">
+            <div className={isCanvasFullscreen ? "overflow-auto p-3 md:p-5 flex-1 min-h-0" : "overflow-auto p-3 md:p-6"}>
               <svg
                 ref={svgRef}
-                viewBox="0 0 960 570"
-                className="w-full min-w-[720px] h-auto grid-bg rounded-lg"
+                viewBox={`${480 - 480 / canvasZoom} ${285 - 285 / canvasZoom} ${960 / canvasZoom} ${570 / canvasZoom}`}
+                className={isCanvasFullscreen ? "w-full h-full min-h-[520px] rounded-lg" : "w-full min-w-[720px] h-auto min-h-[520px] 2xl:min-h-[680px] rounded-lg"}
                 style={{
                   touchAction: "none",
+                  background: "#101114",
                   cursor: connectMode
-                    ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M4 20l4-1L20 7l-3-3L5 16z' fill='%2300d4ff' stroke='%23000'/%3E%3C/svg%3E\") 2 22, crosshair"
+                    ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M4 20l4-1L20 7l-3-3L5 16z' fill='%23f4f1ea' stroke='%23101318'/%3E%3C/svg%3E\") 2 22, crosshair"
                     : "default",
                 }}
                 onPointerMove={moveCanvasItem}
@@ -1739,6 +1934,10 @@ export default function ManualTopology() {
                   setDragState(null)
                   setResizeState(null)
                 }}
+                onWheel={(event) => {
+                  event.preventDefault()
+                  setCanvasZoom((value) => Math.max(0.6, Math.min(1.8, Number((value + (event.deltaY < 0 ? 0.1 : -0.1)).toFixed(1)))))
+                }}
                 role="img"
                 aria-label="Editable manual network topology"
               >
@@ -1749,19 +1948,16 @@ export default function ManualTopology() {
                     height="24"
                     patternUnits="userSpaceOnUse"
                   >
-                    <path
-                      d="M 24 0 L 0 0 0 24"
-                      fill="none"
-                      stroke="var(--t-border-light)"
-                      strokeWidth=".7"
-                    />
+                    <circle cx="2" cy="2" r="1.15" fill="var(--t-muted)" opacity=".48" />
                   </pattern>
                 </defs>
                 <rect
-                  width="960"
-                  height="570"
+                  x="0"
+                  y="0"
+                  width="100%"
+                  height="100%"
                   fill="url(#manual-topology-grid)"
-                  opacity=".7"
+                  opacity=".82"
                 />
                 {workspace.devices.length === 0 && (
                   <g>
@@ -1791,17 +1987,28 @@ export default function ManualTopology() {
                   const from = deviceById.get(link.from)
                   const to = deviceById.get(link.to)
                   if (!from || !to) return null
+                  const pairKey = [link.from, link.to].sort().join("::")
+                  const parallelLinks = workspace.links.filter(
+                    (candidate) => [candidate.from, candidate.to].sort().join("::") === pairKey,
+                  )
+                  const lane = parallelLinks.findIndex((candidate) => candidate.id === link.id)
+                  const geometry = parallelLinkGeometry(from, to, lane, parallelLinks.length, link.geometry)
                   return (
                     <g
                       key={link.id}
                       onClick={() => setSelectedLinkId(link.id)}
                       className="cursor-pointer"
                     >
-                      <line
-                        x1={from.x}
-                        y1={from.y}
-                        x2={to.x}
-                        y2={to.y}
+                      <path
+                        d={geometry.d}
+                        fill="none"
+                        stroke="transparent"
+                        strokeWidth="12"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d={geometry.d}
+                        fill="none"
                         stroke={
                           selectedLinkId === link.id
                             ? "#ff3366"
@@ -1813,8 +2020,8 @@ export default function ManualTopology() {
                         strokeLinejoin="round"
                       />
                       <circle
-                        cx={(from.x + to.x) / 2}
-                        cy={(from.y + to.y) / 2}
+                        cx={geometry.midpoint.x}
+                        cy={geometry.midpoint.y}
                         r="4"
                         fill={selectedLinkId === link.id ? "#ff3366" : "#00ff88"}
                       >
@@ -1847,7 +2054,7 @@ export default function ManualTopology() {
                       }
                       x2={connectionPointer.x}
                       y2={connectionPointer.y}
-                      stroke="#00ff88"
+                      stroke={PEN_COLOR}
                       strokeWidth="2.5"
                       strokeDasharray="7 5"
                       opacity=".95"
@@ -1857,7 +2064,7 @@ export default function ManualTopology() {
                       cy={connectionPointer.y}
                       r="5"
                       fill="none"
-                      stroke="#00ff88"
+                      stroke={PEN_COLOR}
                       strokeWidth="2"
                     >
                       <animate
@@ -1930,6 +2137,8 @@ export default function ManualTopology() {
                   const toLabelY = to.y - dy * toScale + (dy < 0 ? -8 : 8)
                   const fromPort = displayPort(link.from, link.fromPort)
                   const toPort = displayPort(link.to, link.toPort)
+                  const fromLabelWidth = Math.max(54, fromPort.length * 5.5 + 16)
+                  const toLabelWidth = Math.max(54, toPort.length * 5.5 + 16)
                   const labelStyle = {
                     fill: "var(--t-card, #101318)",
                     stroke:
@@ -1941,9 +2150,9 @@ export default function ManualTopology() {
                     <g key={`${link.id}-ports`} pointerEvents="none">
                       <g transform={`translate(${fromLabelX}, ${fromLabelY})`}>
                         <rect
-                          x="-27"
+                          x={-fromLabelWidth / 2}
                           y="-11"
-                          width="54"
+                          width={fromLabelWidth}
                           height="16"
                           rx="4"
                           {...labelStyle}
@@ -1968,9 +2177,9 @@ export default function ManualTopology() {
                       </g>
                       <g transform={`translate(${toLabelX}, ${toLabelY})`}>
                         <rect
-                          x="-27"
+                          x={-toLabelWidth / 2}
                           y="-11"
-                          width="54"
+                          width={toLabelWidth}
                           height="16"
                           rx="4"
                           {...labelStyle}
@@ -2048,6 +2257,115 @@ export default function ManualTopology() {
             </div>
           )}
         </GlassCard>
+        </div>
+
+          <aside
+            className="rounded-xl p-4 min-h-[420px]"
+            style={{
+              background: "var(--t-card)",
+              border: "1px solid var(--t-border-alpha)",
+            }}
+          >
+            {selected ? (
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-3 border-b pb-3" style={{ borderColor: "var(--t-border-light)" }}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: `${selected.tone}18`, border: `1px solid ${selected.tone}55` }}>
+                      <svg width="22" height="22" viewBox="0 0 48 48"><DeviceGlyph type={selected.type} tone={selected.tone} /></svg>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-display font-semibold text-sm truncate" style={{ color: "var(--t-text)" }}>{selected.name}</div>
+                      <div className="font-mono text-[10px] uppercase" style={{ color: selected.tone }}>{selected.type}</div>
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setSelectedId(null)} className="font-mono text-xs" style={{ color: "var(--t-muted)" }}>×</button>
+                </div>
+
+                {editing?.id === selected.id && (
+                  <div className="space-y-2 rounded-lg p-3" style={{ background: "var(--t-bg)", border: "1px solid var(--t-accent-border)" }}>
+                    <div className="font-mono text-[9px] uppercase tracking-widest" style={{ color: "var(--t-accent)" }}>Edit device</div>
+                    {([
+                      ["name", "Device name"],
+                      ["ipAddress", "Device IP"],
+                      ["macAddress", "MAC address"],
+                      ["location", "Location"],
+                      ["type", "Device type"],
+                    ] as const).map(([field, label]) => (
+                      <label key={field} className="block">
+                        <span className="font-mono text-[9px] uppercase" style={{ color: "var(--t-muted)" }}>{label}</span>
+                        <input
+                          value={editing[field] ?? ""}
+                          onChange={(event) => setEditing({ ...editing, [field]: event.target.value })}
+                          className="mt-1 w-full rounded-md px-2.5 py-2 font-mono text-[11px] outline-none"
+                          style={{ color: "var(--t-text)", background: "var(--t-card)", border: "1px solid var(--t-border-alpha)" }}
+                        />
+                      </label>
+                    ))}
+                    <label className="block">
+                      <span className="font-mono text-[9px] uppercase" style={{ color: "var(--t-muted)" }}>Ports (comma separated)</span>
+                      <input
+                        value={editing.ports?.join(", ") ?? ""}
+                        onChange={(event) => setEditing({ ...editing, ports: event.target.value.split(",").map((port) => port.trim()).filter(Boolean) })}
+                        className="mt-1 w-full rounded-md px-2.5 py-2 font-mono text-[11px] outline-none"
+                        style={{ color: "var(--t-text)", background: "var(--t-card)", border: "1px solid var(--t-border-alpha)" }}
+                      />
+                    </label>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button type="button" onClick={() => setEditing(null)} className="rounded-md py-2 font-mono text-[10px] uppercase" style={{ color: "var(--t-muted)", border: "1px solid var(--t-border-alpha)" }}>Cancel</button>
+                      <button type="button" onClick={saveDevice} className="rounded-md py-2 font-mono text-[10px] uppercase" style={{ color: "var(--t-bg)", background: "var(--t-accent)" }}>Save changes</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: selected.status === "offline" ? "rgba(255,51,102,.08)" : "rgba(0,255,136,.07)", border: `1px solid ${selected.status === "offline" ? "rgba(255,51,102,.25)" : "rgba(0,255,136,.2)"}` }}>
+                  <span className="font-mono text-[10px] uppercase" style={{ color: "var(--t-muted)" }}>Health status</span>
+                  <span className="font-mono text-[10px] uppercase" style={{ color: selected.status === "offline" ? "#ff3366" : "#00ff88" }}>{selected.status || "manual"}</span>
+                </div>
+
+                <div className="space-y-2">
+                  {[
+                    ["Device IP", selected.ipAddress || selected.subtitle || "Not set"],
+                    ["MAC address", selected.macAddress || "Not set"],
+                    ["Location", selected.location || "Not set"],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <div className="font-mono text-[9px] uppercase mb-1" style={{ color: "var(--t-muted)" }}>{label}</div>
+                      <div className="rounded-md px-2.5 py-2 font-mono text-[11px] truncate" style={{ color: "var(--t-text)", background: "var(--t-bg)", border: "1px solid var(--t-border-alpha)" }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-mono text-[9px] uppercase" style={{ color: "var(--t-muted)" }}>Interfaces</span>
+                    <span className="font-mono text-[10px]" style={{ color: "var(--t-accent)" }}>{selectedPorts.length}</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                    {selectedPorts.slice(0, 12).map((port) => (
+                      <button key={port} type="button" onClick={() => selectPort(selected.id, port)} className="w-full flex items-center justify-between rounded-md px-2.5 py-2 text-left" style={{ background: "var(--t-bg)", border: "1px solid var(--t-border-alpha)" }}>
+                        <span className="font-mono text-[10px] truncate" style={{ color: "var(--t-text)" }}>{portLabel(port)}</span>
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: selected.portStatuses?.[port]?.toLowerCase() === "up" ? "#00ff88" : selected.portStatuses?.[port]?.toLowerCase() === "down" ? "#ff3366" : "var(--t-muted)" }} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={editSelectedDevice} className="rounded-md py-2 font-mono text-[10px] uppercase" style={{ color: "var(--t-accent)", border: "1px solid var(--t-accent-border)" }}>Edit device</button>
+                  <button type="button" onClick={() => { setConnectMode(true); setConnectFrom(selected.id) }} className="rounded-md py-2 font-mono text-[10px] uppercase" style={{ color: "#00ff88", border: "1px solid rgba(0,255,136,.3)" }}>Connect</button>
+                </div>
+              </div>
+            ) : (
+              <div className="h-full min-h-[420px] flex flex-col items-center justify-center text-center">
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style={{ color: "var(--t-accent)", background: "var(--t-accent-alpha)", border: "1px solid var(--t-accent-border)" }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 3v18M3 12h18" /><circle cx="12" cy="12" r="8" /></svg>
+                </div>
+                <div className="font-display text-sm" style={{ color: "var(--t-text)" }}>Select a device</div>
+                <div className="font-mono text-[10px] mt-1 max-w-[190px]" style={{ color: "var(--t-muted)" }}>Choose a node on the canvas to inspect ports, health, and connection actions.</div>
+              </div>
+            )}
+          </aside>
+        </div>
 
         {selected && (
           <GlassCard className="p-5">
@@ -2167,14 +2485,7 @@ export default function ManualTopology() {
                   </button>
                 ))}
               </div>
-            ) : (
-              <div
-                className="font-mono text-xs mt-4"
-                style={{ color: "var(--t-muted)" }}
-              >
-                No physical interfaces found. Virtual interfaces are hidden.
-              </div>
-            )}
+            ) : null}
           </GlassCard>
         )}
 

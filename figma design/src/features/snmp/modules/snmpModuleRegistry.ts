@@ -41,7 +41,7 @@ export const SNMP_MODULES: Record<string, SNMPModuleConfig> = {
     apiEndpoint: '/snmp/devices/{deviceId}/system',
     queryKey: ['snmp', 'system'],
     supportedCheck: (caps) => caps.system !== false,
-    summaryFields: ['hostname', 'description', 'uptime', 'contact', 'location'],
+    summaryFields: ['hostname', 'description', 'mac_address', 'contact', 'location'],
   },
   cpu: {
     id: 'cpu',

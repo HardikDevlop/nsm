@@ -291,6 +291,9 @@ export default function DeviceMonitoringList() {
                       {device.ip_address}
                       {device.mac_address ? ` · ${device.mac_address}` : ''}
                     </div>
+                    <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-muted, #667799)' }}>
+                      {device.vendor_name ? `Vendor: ${device.vendor_name} · ` : ''}{device.device_type ? `Type: ${device.device_type} · ` : ''}{device.model ? `Model: ${device.model}` : ''}
+                    </div>
                   </div>
 
                   {/* Live stats */}

@@ -27,6 +27,7 @@ from typing import Iterable
 _DASH_RANGE_RE = re.compile(
     r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s*-\s*(\d{1,3}(?:\.\d{1,3}){3}|\d{1,3})\s*$"
 )
+_MAX_HOSTS = 255
 
 
 @dataclass
@@ -41,13 +42,16 @@ class NetworkRange:
         spec = (self.spec or "").strip()
         if not spec:
             raise ValueError("empty range specification")
+        limit = min(max(1, self.max_hosts), _MAX_HOSTS)
 
         # 1) Comma-separated list
         if "," in spec:
             out: list[str] = []
             for chunk in spec.split(","):
-                out.extend(NetworkRange(chunk, max_hosts=self.max_hosts).expand())
-            return out[: self.max_hosts]
+                out.extend(NetworkRange(chunk, max_hosts=limit).expand())
+                if len(out) > limit:
+                    raise ValueError("IP range cannot contain more than 255 addresses")
+            return out
 
         # 2) CIDR notation
         if "/" in spec:
@@ -56,7 +60,9 @@ class NetworkRange:
             except ValueError as exc:
                 raise ValueError(f"invalid CIDR: {spec!r}") from exc
             hosts = [str(ip) for ip in network.hosts()] or [str(network.network_address)]
-            return hosts[: self.max_hosts]
+            if len(hosts) > limit:
+                raise ValueError("IP range cannot contain more than 255 addresses")
+            return hosts
 
         # 3) Dash range
         match = _DASH_RANGE_RE.match(spec)
@@ -71,12 +77,16 @@ class NetworkRange:
             if int(end) < int(start):
                 raise ValueError(f"end {end_s} is before start {start_s}")
             hosts = [str(ipaddress.ip_address(i)) for i in range(int(start), int(end) + 1)]
-            return hosts[: self.max_hosts]
+            if len(hosts) > limit:
+                raise ValueError("IP range cannot contain more than 255 addresses")
+            return hosts
 
         # 4) Single host
         try:
-            ipaddress.ip_address(spec)
-            return [spec]
+            address = ipaddress.ip_address(spec)
+            if address.version != 4:
+                raise ValueError("IPv4 addresses only")
+            return [str(address)]
         except ValueError as exc:
             raise ValueError(f"unrecognised range spec: {spec!r}") from exc
 

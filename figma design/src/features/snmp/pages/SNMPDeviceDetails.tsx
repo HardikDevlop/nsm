@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router'
 import GlassCard from '../../../components/GlassCard'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
 import SNMPHealthIndicator from '../components/SNMPHealthIndicator'
-import { useSNMPDeviceDetails, useStartModuleMonitoring, useStopModuleMonitoring, useUpdateModuleMonitoring } from '../hooks/useSnmpQueries'
+import { useSNMPDeviceDetails, useSNMPSystemInfo, useStartModuleMonitoring, useStopModuleMonitoring, useUpdateModuleMonitoring } from '../hooks/useSnmpQueries'
 import { 
   getSupportedModuleConfigs, 
   getModuleConfig,
@@ -69,6 +69,7 @@ function CollectorDataCard({ name, collector }: { name: string; collector: any }
   const color = collector?.supported ? (config?.color || '#00d4ff') : '#ff3366'
   const rows = findRows(collector?.data)
   const summary = getSummaryItems(collector?.data)
+    .filter(([key]) => !config?.summaryFields || config.summaryFields.includes(key))
   const columns = rows.length > 0
     ? Array.from(new Set(rows.flatMap(row => Object.keys(row || {})))).slice(0, 10)
     : []
@@ -154,9 +155,11 @@ export default function SNMPDeviceDetails() {
   const updateMonitoring = useUpdateModuleMonitoring()
 
   const { data, isLoading, error, refetch } = useSNMPDeviceDetails(id)
+  const { data: liveSystem } = useSNMPSystemInfo(id)
 
   const monitoringList = Array.isArray(data?.monitoring) ? data.monitoring : []
   const latestMetrics = data?.latest_metrics ?? data?.latestMetrics ?? null
+  const liveUptimeSeconds = liveSystem?.data?.uptime?.seconds ?? liveSystem?.uptime_seconds
   const mergedCaps = { ...(data?.capabilities || {}) }
   const supportedModules = useMemo(() => getSupportedModuleConfigs(mergedCaps), [mergedCaps])
   const allModuleConfigs = useMemo(() => MODULE_ORDER.map(moduleId => getModuleConfig(moduleId)).filter(Boolean), [])
@@ -375,20 +378,12 @@ export default function SNMPDeviceDetails() {
                     <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{device.model || 'Unknown'}</div>
                   </div>
                   <div>
-                    <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>Serial</div>
-                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{device.serial_number || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>Firmware</div>
-                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{device.firmware || '—'}</div>
-                  </div>
-                  <div>
                     <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>MAC</div>
                     <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{device.mac_address || '—'}</div>
                   </div>
                   <div>
                     <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>Uptime</div>
-                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{formatUptimeLocal(device.uptime_seconds)}</div>
+                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{formatUptimeLocal(liveUptimeSeconds ?? device.uptime_seconds)}</div>
                   </div>
                 </div>
               </div>

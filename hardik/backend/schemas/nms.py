@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from typing import Literal
 
 
 class Token(BaseModel):
@@ -241,6 +242,9 @@ class DeviceRead(DeviceBase):
     uptime_seconds: int
     downtime_seconds: int
     last_status_change: datetime | None = None
+    vendor_name: str | None = None
+    device_type: str | None = None
+    snmp_version: str | None = None
 
 
 class DeviceOptionRead(BaseModel):
@@ -249,6 +253,10 @@ class DeviceOptionRead(BaseModel):
     id: int
     hostname: str
     ip_address: str
+    mac_address: str | None = None
+    model: str | None = None
+    vendor_name: str | None = None
+    device_type: str | None = None
     status: str
 
 
@@ -529,6 +537,79 @@ class DeviceStatusHistoryRead(BaseModel):
     new_status: str
     change_reason: str | None = None
     timestamp: datetime
+
+
+class ReportManagementFilters(BaseModel):
+    device_type_id: int | None = None
+    device_id: int | None = None
+    site_id: int | None = None
+    protocol: Literal["all", "snmp", "icmp"] = "all"
+    period: Literal["weekly", "monthly", "yearly", "custom"] = "weekly"
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+
+
+class ReportManagementOptionsItem(BaseModel):
+    id: int
+    name: str
+
+
+class ReportManagementDeviceOption(BaseModel):
+    id: int
+    hostname: str
+    ip_address: str
+    device_type_id: int | None = None
+    site_id: int | None = None
+    status: str
+
+
+class ReportManagementRecord(BaseModel):
+    device_id: int
+    hostname: str
+    ip_address: str
+    site_name: str | None = None
+    device_type_name: str | None = None
+    protocol: str
+    availability_pct: float
+    downtime_seconds: int
+    snmp_success_rate: float | None = None
+    icmp_success_rate: float | None = None
+    snmp_health: str
+    performance_score: float | None = None
+    interface_count: int | None = None
+    interface_down_count: int | None = None
+    avg_cpu_percent: float | None = None
+    avg_memory_percent: float | None = None
+    avg_latency_ms: float | None = None
+    packet_loss_pct: float | None = None
+    sla_status: str
+    period_start: datetime
+    period_end: datetime
+
+
+class ReportManagementSection(BaseModel):
+    title: str
+    count: int
+    average: float | None = None
+    maximum: float | None = None
+    minimum: float | None = None
+
+
+class ReportManagementSummary(BaseModel):
+    filters: ReportManagementFilters
+    period_start: datetime
+    period_end: datetime
+    total_devices: int
+    total_records: int
+    availability_pct: float
+    downtime_seconds: int
+    avg_snmp_health: float | None = None
+    avg_performance_score: float | None = None
+    sla_met_pct: float
+    snmp_devices: int
+    icmp_devices: int
+    sections: dict[str, ReportManagementSection]
+    records: list[ReportManagementRecord]
 
 
 # ---------------------------------------------------------------- Dashboard / operations

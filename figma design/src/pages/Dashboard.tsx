@@ -25,6 +25,14 @@ const C = {
 }
 const fmt = (n: number | null | undefined, suffix = "") =>
   n == null || Number.isNaN(n) ? "N/A" : `${n.toFixed(n < 10 ? 1 : 0)}${suffix}`
+const formatTraffic = (n: number | null | undefined) => {
+  if (n == null || !Number.isFinite(Number(n))) return "N/A"
+  const mbps = Number(n)
+  const absolute = Math.abs(mbps)
+  if (absolute >= 1000) return `${(mbps / 1000).toFixed(2)} Gbps`
+  if (absolute >= 1) return `${mbps.toFixed(2)} Mbps`
+  return `${(mbps * 1000).toFixed(2)} Kbps`
+}
 const clock = (s?: string | null) =>
   s
     ? new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -258,8 +266,36 @@ export default function Dashboard() {
         .filter((x) => x.cpu != null || x.memory != null),
     [devices, n],
   )
-  const chart =
-    n?.traffic_history.map((x) => ({ ...x, label: clock(x.timestamp) })) ?? []
+  const chart = useMemo(() => {
+    const buckets = new Map<number, { timestamp: string; rx_mbps: number; tx_mbps: number }>()
+
+    for (const sample of n?.traffic_history ?? []) {
+      if (!sample.timestamp) continue
+      const timestamp = new Date(sample.timestamp).getTime()
+      if (!Number.isFinite(timestamp)) continue
+
+      const rx = sample.rx_mbps == null ? null : Number(sample.rx_mbps)
+      const tx = sample.tx_mbps == null ? null : Number(sample.tx_mbps)
+      // Ignore the initial counter sample, which has no calculated rate yet.
+      if (rx == null && tx == null) continue
+
+      // One poll creates a row per interface. Aggregate the rows into a
+      // one-minute point so the chart represents total network traffic.
+      const bucketTimestamp = Math.floor(timestamp / 60_000) * 60_000
+      const current = buckets.get(bucketTimestamp) ?? {
+        timestamp: new Date(bucketTimestamp).toISOString(),
+        rx_mbps: 0,
+        tx_mbps: 0,
+      }
+      if (Number.isFinite(rx)) current.rx_mbps += rx as number
+      if (Number.isFinite(tx)) current.tx_mbps += tx as number
+      buckets.set(bucketTimestamp, current)
+    }
+
+    return [...buckets.values()]
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+      .map((point) => ({ ...point, label: clock(point.timestamp) }))
+  }, [n?.traffic_history])
   return (
     <div
       className="p-4 md:p-6 space-y-5"
@@ -585,10 +621,10 @@ export default function Dashboard() {
                     className="font-mono text-[10px]"
                     style={{ color: C.muted }}
                   >
-                    RX Mbps
+                    RX Traffic
                   </div>
                   <div className="font-display text-2xl neon-green">
-                    {fmt(n?.traffic.rx_mbps, " Mbps")}
+                    {formatTraffic(n?.traffic.rx_mbps)}
                   </div>
                 </div>
                 <div>
@@ -596,10 +632,10 @@ export default function Dashboard() {
                     className="font-mono text-[10px]"
                     style={{ color: C.muted }}
                   >
-                    TX Mbps
+                    TX Traffic
                   </div>
                   <div className="font-display text-2xl neon-cyan">
-                    {fmt(n?.traffic.tx_mbps, " Mbps")}
+                    {formatTraffic(n?.traffic.tx_mbps)}
                   </div>
                 </div>
               </div>
@@ -615,20 +651,25 @@ export default function Dashboard() {
                       tick={{ fill: C.muted, fontSize: 10 }}
                     />
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                    <Tooltip />
+                    <Tooltip
+                      formatter={(value, name) => [
+                        formatTraffic(Number(value)),
+                        name,
+                      ]}
+                    />
                     <Area
                       type="monotone"
                       dataKey="rx_mbps"
                       stroke={C.green}
                       fill={`${C.green}22`}
-                      name="RX Mbps"
+                      name="RX Traffic"
                     />
                     <Area
                       type="monotone"
                       dataKey="tx_mbps"
                       stroke={C.cyan}
                       fill="transparent"
-                      name="TX Mbps"
+                      name="TX Traffic"
                     />
                   </AreaChart>
                 </ResponsiveContainer>

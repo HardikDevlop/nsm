@@ -55,7 +55,10 @@ export default function SNMPCollectorDataCard({ name, collector, arpEntries = []
   const config = getModuleConfig(name)
   const color = collector?.supported ? (config?.color || '#00d4ff') : '#ff3366'
   const rows = findRows(collector?.data)
-  const summary = getSummaryItems(collector?.data).filter(([, value]) => !isEmptyValue(value))
+  const configuredSummaryFields = config?.summaryFields
+  const summary = getSummaryItems(collector?.data)
+    .filter(([key]) => !configuredSummaryFields || configuredSummaryFields.includes(key))
+    .filter(([, value]) => !isEmptyValue(value))
   const columns = rows.length > 0
     ? Array.from(new Set(rows.flatMap(row => Object.keys(row || {})))).slice(0, 12)
     : []

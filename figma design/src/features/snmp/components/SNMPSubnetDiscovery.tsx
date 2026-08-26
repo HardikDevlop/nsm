@@ -20,12 +20,33 @@ function clean(v: unknown, fb = '—'): string {
   return s && !['not supported', 'none', 'null', 'undefined', '—', ''].includes(s.toLowerCase()) ? s : fb
 }
 
+function parseIPv4(value: string): number[] | null {
+  const parts = value.trim().split('.')
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return null
+  const numbers = parts.map(Number)
+  return numbers.every(part => part >= 0 && part <= 255) ? numbers : null
+}
+
+function ipv4ToNumber(parts: number[]): number {
+  return (((parts[0] * 256) + parts[1]) * 256 + parts[2]) * 256 + parts[3]
+}
+
+function numberToIPv4(value: number): string {
+  return [value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255].join('.')
+}
+
 function subnetIPs(cidr: string): string[] {
   try {
-    const [b] = cidr.split('/')
-    const p = b.split('.').map(Number)
-    if (p.length !== 4 || p.some(isNaN)) return []
-    return Array.from({ length: 254 }, (_, i) => `${p[0]}.${p[1]}.${p[2]}.${i + 1}`)
+    const [base, prefixText] = cidr.trim().split('/')
+    const parsed = parseIPv4(base)
+    const prefix = Number(prefixText)
+    if (!parsed || !/^\d{1,2}$/.test(prefixText || '') || prefix < 24 || prefix > 32) return []
+    const blockSize = 2 ** (32 - prefix)
+    const network = Math.floor(ipv4ToNumber(parsed) / blockSize) * blockSize
+    const first = prefix === 32 ? network : network + 1
+    const last = prefix === 32 ? network : network + blockSize - 2
+    if (last < first || last - first + 1 > 255) return []
+    return Array.from({ length: last - first + 1 }, (_, i) => numberToIPv4(first + i))
   } catch { return [] }
 }
 
@@ -52,8 +73,6 @@ function DevCard({ d, stored, onStore }: { d: SD; stored: boolean; onStore: () =
     { l: 'Vendor',   v: d.vendor   },
     { l: 'Model',    v: d.model    },
     { l: 'Uptime',   v: d.uptime   },
-    { l: 'Serial',   v: d.serial   },
-    { l: 'Firmware', v: d.firmware },
   ].filter(f => f.v !== '—')
 
   return (
@@ -166,34 +185,51 @@ export default function SNMPSubnetDiscovery({
 
   /* build target IP list */
   const getIPs = useCallback((): string[] => {
-    if (mode === 'single') { const ip = singleIP.trim(); return ip ? [ip] : [] }
+    if (mode === 'single') {
+      const parsed = parseIPv4(singleIP)
+      return parsed ? [numberToIPv4(ipv4ToNumber(parsed))] : []
+    }
     if (mode === 'range') {
-      const sp = rangeS.split('.').map(Number)
-      const ep = rangeE.split('.').map(Number)
-      if (sp.length !== 4 || ep.length !== 4 || sp[3] > ep[3]) return []
-      return Array.from({ length: ep[3] - sp[3] + 1 }, (_, i) => `${sp.slice(0, 3).join('.')}.${sp[3] + i}`)
+      const start = parseIPv4(rangeS)
+      const end = parseIPv4(rangeE)
+      if (!start || !end) return []
+      const first = ipv4ToNumber(start), last = ipv4ToNumber(end)
+      if (last < first || last - first + 1 > 255) return []
+      return Array.from({ length: last - first + 1 }, (_, i) => numberToIPv4(first + i))
     }
     return hostIPs
   }, [mode, singleIP, rangeS, rangeE, hostIPs])
 
   /* parse one SNMP result into SD */
-  const mkDevice = (ip: string, d: Record<string, unknown>): SD => ({
+  const mkDevice = (ip: string, d: Record<string, unknown>): SD => {
+    const collectors = d.collectors as Record<string, any> | undefined
+    const system = collectors?.system?.data || {}
+    const uptime = (d.uptime_seconds ?? system.uptime_seconds ?? system.uptime) as any
+    return {
     ip,
     raw:      d,
-    hostname: clean(d.hostname ?? d.sysName, ip),
-    descr:    clean(d.sysDescr ?? d.description),
-    vendor:   clean(d.vendor ?? d.snmp_vendor),
-    model:    clean(d.model),
-    serial:   clean(d.serial_number ?? d.serial),
-    firmware: clean(d.firmware_version ?? d.firmware),
-    uptime:   fmtUp(d.uptime_seconds),
+    hostname: clean(d.hostname ?? d.sysName ?? system.hostname, ip),
+    descr:    clean(d.sysDescr ?? d.description ?? system.description),
+    vendor:   clean(d.vendor ?? d.snmp_vendor ?? system.vendor),
+    model:    clean(d.model ?? system.model),
+    serial:   clean(d.serial_number ?? d.serial ?? system.serial_number),
+    firmware: clean(d.firmware_version ?? d.firmware ?? system.firmware),
+    uptime:   fmtUp(typeof uptime === 'object' ? uptime?.seconds : uptime),
     version:  clean(d.snmp_version, ver),
-  })
+    }
+  }
 
   /* run scan */
   const doScan = useCallback(async () => {
     const ips = getIPs()
-    if (!ips.length) { toast.warning('No IPs to scan'); return }
+    if (!ips.length) {
+      toast.warning(mode === 'single'
+        ? 'Please enter one valid IPv4 address.'
+        : mode === 'range'
+          ? 'Please enter a valid IP range of no more than 255 addresses.'
+          : 'Please enter a valid IPv4 subnet with no more than 255 host addresses.')
+      return
+    }
     setRunning(true); setDone(false); setFound([]); setStoredIps(new Set())
     setScanned(0); setTotal(ips.length)
     const batch = Math.max(1, Math.min(50, parseInt(batchSize, 10) || 10))
@@ -228,7 +264,7 @@ export default function SNMPSubnetDiscovery({
     setStoring(true)
     try {
       const devs  = found.map(d => ({ ip_address: d.ip, hostname: d.hostname, ...d.raw }))
-      const saved = await addDiscoveredDevices({ devices: devs, site_id: null })
+      const saved = await addDiscoveredDevices({ devices: devs, site_id: null, discovery_source: 'snmp' })
       setStoredIps(new Set(found.map(d => d.ip)))
       toast.success(`${saved.added_count} stored, ${saved.skipped_count} skipped`)
       onDevicesStored?.()
@@ -243,6 +279,7 @@ export default function SNMPSubnetDiscovery({
       const saved = await addDiscoveredDevices({
         devices: [{ ip_address: d.ip, hostname: d.hostname, ...d.raw }],
         site_id: null,
+        discovery_source: 'snmp',
       })
       setStoredIps(p => new Set([...p, d.ip]))
       if (saved.added_count > 0) toast.success(`${d.ip} saved to database`)
@@ -328,14 +365,24 @@ export default function SNMPSubnetDiscovery({
             </div>
 
             {mode === 'single' && (
-              <input value={singleIP} onChange={e => setSingleIP(e.target.value)}
-                placeholder="e.g. 192.168.1.10"
-                className="w-full rounded-lg px-3 py-2 font-mono text-sm" style={INP} />
+              <div>
+                <input value={singleIP} onChange={e => setSingleIP(e.target.value.replace(/[^\d.]/g, ''))}
+                  placeholder="Single IPv4, e.g. 192.168.1.10"
+                  className="w-full rounded-lg px-3 py-2 font-mono text-sm" style={INP} />
+                <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
+                  Enter one address only. Range/subnet scans allow up to 255 IPs.
+                </div>
+              </div>
             )}
             {mode === 'range' && (
-              <div className="grid grid-cols-2 gap-3">
-                <input value={rangeS} onChange={e => setRangeS(e.target.value)} placeholder="Start: 192.168.1.1"  className="rounded-lg px-3 py-2 font-mono text-sm" style={INP} />
-                <input value={rangeE} onChange={e => setRangeE(e.target.value)} placeholder="End:   192.168.1.50" className="rounded-lg px-3 py-2 font-mono text-sm" style={INP} />
+              <div>
+                <div className="grid grid-cols-2 gap-3">
+                  <input value={rangeS} onChange={e => setRangeS(e.target.value.replace(/[^\d.]/g, ''))} placeholder="Start: 192.168.1.1"  className="rounded-lg px-3 py-2 font-mono text-sm" style={INP} />
+                  <input value={rangeE} onChange={e => setRangeE(e.target.value.replace(/[^\d.]/g, ''))} placeholder="End: 192.168.1.255" className="rounded-lg px-3 py-2 font-mono text-sm" style={INP} />
+                </div>
+                <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
+                  Example: 192.168.1.1 to 192.168.1.255. Only up to 255 IPs are allowed.
+                </div>
               </div>
             )}
             {mode === 'subnet' && (
@@ -343,7 +390,7 @@ export default function SNMPSubnetDiscovery({
                 style={{ background: 'rgba(0,212,255,0.05)', border: '1px solid rgba(0,212,255,0.12)' }}>
                 <span style={{ color: '#667799' }}>Target: </span>
                 <span style={{ color: '#00d4ff' }}>{subnet || 'not set'}</span>
-                <span style={{ color: '#667799' }}> · {hostIPs.length} host IPs (.1–.254)</span>
+                <span style={{ color: '#667799' }}> · {hostIPs.length} host IPs (maximum 255)</span>
               </div>
             )}
           </div>

@@ -281,6 +281,16 @@ class SNMPService:
         if unsupported:
             logger.info("  unsupported: %s", unsupported)
 
+        system_data = (collectors_out.get("system") or {}).get("data") or {}
+        interface_data = (collectors_out.get("interfaces") or {}).get("data") or {}
+        interface_rows = interface_data.get("interfaces") if isinstance(interface_data, dict) else []
+        discovered_mac = system_data.get("mac_address")
+        if not discovered_mac and isinstance(interface_rows, list):
+            discovered_mac = next(
+                (row.get("mac") for row in interface_rows if isinstance(row, dict) and row.get("mac")),
+                None,
+            )
+
         return {
             "api_version":   API_VERSION,
             "ip":            host,
@@ -291,6 +301,8 @@ class SNMPService:
             "device_type":   device_type,
             "hostname":      device.hostname,
             "sys_object_id": device.sys_object_id,
+            "uptime_seconds": device.uptime_seconds,
+            "mac_address":   discovered_mac,
             "collection_ms": elapsed,
             "collectors":    collectors_out,
             "unsupported":   unsupported,
@@ -386,7 +398,7 @@ _DOMAIN_WALKS: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 
 class SNMPDiscovery(SNMPService):
-    """Legacy constructor — keeps discovery_routes.py working."""
+    """Read-only SNMP discovery adapter that returns the complete collection."""
     def __init__(self, communities=None, timeout_seconds=2.0, snmp_version="v2c",
                  username=None, auth_protocol=None, auth_password=None,
                  privacy_protocol=None, privacy_password=None, security_level=None):
@@ -397,6 +409,12 @@ class SNMPDiscovery(SNMPService):
             auth_password=auth_password, privacy_protocol=privacy_protocol,
             privacy_password=privacy_password, security_level=security_level,
         ), timeout=timeout_seconds)
+
+    def collect(self, host: str) -> dict[str, Any]:
+        # Scanning has no persistence side effect. The caller decides whether
+        # to add the returned device, while receiving the same full collector
+        # document used by the per-device discovery API.
+        return super().collect(host)
 
 
 SNMPCollector = SNMPService

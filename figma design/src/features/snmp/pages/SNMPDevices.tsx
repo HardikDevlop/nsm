@@ -463,12 +463,9 @@ export default function SNMPDevicesPage() {
   const [pageSize, setPageSize] = useState(25)
   const [search, setSearch] = useState("")
   const deferredSearch = useDeferredValue(search.trim())
-  const [statusFilter, setStatusFilter] = useState<string>("")
-  const [snmpStatusFilter, setSnmpStatusFilter] = useState<string>("")
-  const [monitoringStatusFilter, setMonitoringStatusFilter] =
-    useState<string>("")
-  const [deviceTypeFilter, setDeviceTypeFilter] = useState<string>("")
-  const [vendorFilter, setVendorFilter] = useState<string>("")
+  // Show only devices explicitly registered by SNMP discovery. ICMP
+  // inventory remains on the IP Scan page even when SNMP is reachable.
+  const [snmpStatusFilter] = useState<string>("verified")
   const [sortBy, setSortBy] = useState("id")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -487,11 +484,7 @@ export default function SNMPDevicesPage() {
     page,
     page_size: pageSize,
     search: deferredSearch || undefined,
-    status: statusFilter || undefined,
     snmp_status: snmpStatusFilter || undefined,
-    monitoring_status: monitoringStatusFilter || undefined,
-    device_type: deviceTypeFilter || undefined,
-    vendor: vendorFilter || undefined,
     sort_by: sortBy,
     sort_order: sortOrder,
   })
@@ -500,11 +493,7 @@ export default function SNMPDevicesPage() {
     setPage(1)
   }, [
     deferredSearch,
-    statusFilter,
     snmpStatusFilter,
-    monitoringStatusFilter,
-    deviceTypeFilter,
-    vendorFilter,
     sortBy,
     sortOrder,
   ])
@@ -528,17 +517,6 @@ export default function SNMPDevicesPage() {
     if (newPage >= 1 && newPage <= totalPages) {
       setPage(newPage)
     }
-  }
-
-  // Clear filters
-  const clearFilters = () => {
-    setSearch("")
-    setStatusFilter("")
-    setSnmpStatusFilter("")
-    setMonitoringStatusFilter("")
-    setDeviceTypeFilter("")
-    setVendorFilter("")
-    setPage(1)
   }
 
   // Row click - navigate to device details
@@ -606,7 +584,11 @@ export default function SNMPDevicesPage() {
     setDeleting(deviceId)
     try {
       await deleteDevice(deviceId)
+      // Clear detail/module query state when a device is removed so a later
+      // re-add cannot render the previous device snapshot.
+      invalidateDevice(deviceId)
       refetch() // Refresh the device list
+      if (selectedId === deviceId) setSelectedId(null)
       setError(null)
       toast.success(`Device "${deviceName}" deleted`)
 
@@ -624,13 +606,16 @@ export default function SNMPDevicesPage() {
     refetch()
   }
 
-  const hasFilters =
-    search ||
-    statusFilter ||
-    snmpStatusFilter ||
-    monitoringStatusFilter ||
-    deviceTypeFilter ||
-    vendorFilter
+  useEffect(() => {
+    if (devices.length === 0) {
+      setSelectedId(null)
+      setEditingDevice(null)
+      return
+    }
+    if (selectedId && !devices.some((device) => device.id === selectedId)) {
+      setSelectedId(devices[0]?.id ?? null)
+    }
+  }, [devices, selectedId])
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -646,6 +631,32 @@ export default function SNMPDevicesPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
+          <div className="relative">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search devices..."
+              aria-label="Search devices"
+              className="glass-bright rounded px-3 py-1.5 pr-8 font-mono text-xs w-44 sm:w-52"
+              style={{
+                border: "1px solid rgba(0,212,255,0.25)",
+                color: "#c8d8ee",
+                background: "rgba(8,25,55,0.7)",
+              }}
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Clear device search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 font-mono text-xs"
+                style={{ color: "#8899bb" }}
+              >
+                ×
+              </button>
+            )}
+          </div>
           <button
             onClick={handleRefresh}
             disabled={isFetching}
@@ -714,133 +725,6 @@ export default function SNMPDevicesPage() {
         </div>
       )}
 
-      {/* Search & Filters */}
-      <GlassCard className="p-4">
-        <div className="space-y-3">
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="flex-1 min-w-[200px]">
-              <label
-                className="font-mono text-[10px] block mb-1"
-                style={{ color: "#667799" }}
-              >
-                SEARCH
-              </label>
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search IP, hostname, MAC..."
-                className="w-full glass-bright rounded px-3 py-2 font-mono text-xs"
-                style={{
-                  border: "1px solid rgba(0,212,255,0.25)",
-                  color: "#c8d8ee",
-                  background: "rgba(8,25,55,0.7)",
-                }}
-              />
-            </div>
-
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="glass-bright rounded px-3 py-2 font-mono text-xs min-w-[140px]"
-              style={{
-                border: "1px solid rgba(0,212,255,0.25)",
-                color: "#c8d8ee",
-                background: "rgba(8,25,55,0.7)",
-              }}
-            >
-              <option value="">ALL STATUS</option>
-              <option value="online">ONLINE</option>
-              <option value="offline">OFFLINE</option>
-              <option value="warning">WARNING</option>
-              <option value="unknown">UNKNOWN</option>
-            </select>
-
-            <select
-              value={snmpStatusFilter}
-              onChange={(e) => setSnmpStatusFilter(e.target.value)}
-              className="glass-bright rounded px-3 py-2 font-mono text-xs min-w-[140px]"
-              style={{
-                border: "1px solid rgba(0,212,255,0.25)",
-                color: "#c8d8ee",
-                background: "rgba(8,25,55,0.7)",
-              }}
-            >
-              <option value="">ALL SNMP</option>
-              <option value="verified">VERIFIED</option>
-              <option value="unknown">UNKNOWN</option>
-              <option value="error">ERROR</option>
-            </select>
-
-            <select
-              value={monitoringStatusFilter}
-              onChange={(e) => setMonitoringStatusFilter(e.target.value)}
-              className="glass-bright rounded px-3 py-2 font-mono text-xs min-w-[160px]"
-              style={{
-                border: "1px solid rgba(0,212,255,0.25)",
-                color: "#c8d8ee",
-                background: "rgba(8,25,55,0.7)",
-              }}
-            >
-              <option value="">ALL MONITORING</option>
-              <option value="running">RUNNING</option>
-              <option value="stopped">STOPPED</option>
-              <option value="waiting_first_poll">WAITING</option>
-              <option value="not_supported">NOT SUPPORTED</option>
-            </select>
-          </div>
-
-          <div className="flex flex-wrap gap-3 items-end">
-            <select
-              value={deviceTypeFilter}
-              onChange={(e) => setDeviceTypeFilter(e.target.value)}
-              className="glass-bright rounded px-3 py-2 font-mono text-xs min-w-[140px]"
-              style={{
-                border: "1px solid rgba(0,212,255,0.25)",
-                color: "#c8d8ee",
-                background: "rgba(8,25,55,0.7)",
-              }}
-            >
-              <option value="">ALL TYPES</option>
-              <option value="router">ROUTER</option>
-              <option value="switch">SWITCH</option>
-              <option value="firewall">FIREWALL</option>
-              <option value="server">SERVER</option>
-              <option value="access_point">ACCESS POINT</option>
-            </select>
-
-            <input
-              type="text"
-              value={vendorFilter}
-              onChange={(e) => setVendorFilter(e.target.value)}
-              placeholder="Vendor filter..."
-              className="glass-bright rounded px-3 py-2 font-mono text-xs min-w-[140px]"
-              style={{
-                border: "1px solid rgba(0,212,255,0.25)",
-                color: "#c8d8ee",
-                background: "rgba(8,25,55,0.7)",
-              }}
-            />
-
-            <div className="flex items-center gap-2">
-              {hasFilters && (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="glass-bright px-3 py-2 rounded font-mono text-xs hover:bg-red-400/10"
-                  style={{
-                    border: "1px solid rgba(255,51,102,0.25)",
-                    color: "#ff3366",
-                  }}
-                >
-                  CLEAR
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </GlassCard>
-
       {/* Discovery Panel */}
       <SNMPDiscoveryPanel onCompleted={() => refetch()} />
 
@@ -882,7 +766,7 @@ export default function SNMPDevicesPage() {
             className="font-mono text-xs p-6 text-center"
             style={{ color: "#8899bb" }}
           >
-            No devices found. Run SNMP Discovery above or add a device manually.
+            No devices found. Add a device to start monitoring.
           </div>
         ) : (
           <>
@@ -896,6 +780,7 @@ export default function SNMPDevicesPage() {
                       { key: "name", label: "NAME" },
                       { key: "ip_address", label: "IP ADDRESS" },
                       { key: "hostname", label: "HOSTNAME" },
+                      { key: "mac_address", label: "MAC ADDRESS" },
                       // { key: 'model', label: 'MODEL' },
                       { key: "snmp_version", label: "SNMP" },
                       { key: "snmp_status", label: "SNMP STATUS" },
@@ -980,6 +865,12 @@ export default function SNMPDevicesPage() {
                         style={{ color: "#8899bb" }}
                       >
                         {device.hostname || "—"}
+                      </td>
+                      <td
+                        className="px-4 py-2 font-mono text-[10px]"
+                        style={{ color: "#00d4ff" }}
+                      >
+                        {device.mac_address || "—"}
                       </td>
                       {/* <td className="px-4 py-2 font-mono text-xs truncate max-w-[150px]" style={{ color: '#8899bb' }}>{device.model || '—'}</td> */}
                       <td

@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
+from backend.database.session import Base
+
 
 def _now() -> datetime:
     return datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
@@ -69,6 +71,30 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         migration_id="20260821_0004_device_topology_metadata",
         description="Store manually corrected topology fields on devices",
+    ),
+    Migration(
+        migration_id="20260825_0005_linux_server_monitoring_foundation",
+        description="Create isolated Linux Server Monitoring foundation tables",
+    ),
+    Migration(
+        migration_id="20260825_0006_linux_server_inventory",
+        description="Add isolated Linux server detected interface and disk inventory tables",
+    ),
+    Migration(
+        migration_id="20260825_0007_linux_server_metric_columns",
+        description="Add isolated Linux metric rate and utilization columns",
+    ),
+    Migration(
+        migration_id="20260825_0008_linux_security_events",
+        description="Create isolated Linux firewall and security event table",
+    ),
+    Migration(
+        migration_id="20260825_0009_linux_monitoring_scheduler",
+        description="Add isolated Linux scheduler credentials and durable monitoring state",
+    ),
+    Migration(
+        migration_id="20260825_0010_linux_metric_retention",
+        description="Add isolated current metrics table and indexed 24-hour history cleanup indexes",
     ),
 )
 
@@ -170,6 +196,76 @@ def _ensure_device_topology_metadata(engine: Engine) -> None:
             connection.execute(text('ALTER TABLE devices ADD COLUMN "topology_metadata" JSON'))
 
 
+def _ensure_linux_server_monitoring_tables(engine: Engine) -> None:
+    from backend.linux_monitoring.models import LINUX_MONITORING_TABLES
+
+    # Table-level checkfirst is not enough for PostgreSQL when an existing
+    # table's indexes were created by an earlier run. Create only missing
+    # tables so startup never issues duplicate CREATE INDEX statements.
+    present_tables = set(inspect(engine).get_table_names())
+    for table in LINUX_MONITORING_TABLES:
+        if table.name not in present_tables:
+            table.create(bind=engine)
+
+
+def _ensure_linux_metric_columns(engine: Engine) -> None:
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "linux_server_metric_samples" not in inspector.get_table_names():
+            return
+        present = {column["name"] for column in inspector.get_columns("linux_server_metric_samples")}
+        columns = {
+            "swap_percent": "DOUBLE PRECISION",
+            "disk_io_read_bytes_per_sec": "DOUBLE PRECISION",
+            "disk_io_write_bytes_per_sec": "DOUBLE PRECISION",
+            "load_5m": "DOUBLE PRECISION",
+            "load_15m": "DOUBLE PRECISION",
+            "uptime_seconds": "DOUBLE PRECISION",
+            "network_rx_bytes_per_sec": "DOUBLE PRECISION",
+            "network_tx_bytes_per_sec": "DOUBLE PRECISION",
+            "packets_per_sec": "DOUBLE PRECISION",
+            "interface_errors": "DOUBLE PRECISION",
+            "interface_drops": "DOUBLE PRECISION",
+        }
+        for name, sql_type in columns.items():
+            if name not in present:
+                connection.execute(text(f'ALTER TABLE linux_server_metric_samples ADD COLUMN "{name}" {sql_type}'))
+
+
+def _ensure_linux_scheduler_columns(engine: Engine) -> None:
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "linux_server_monitoring_configs" not in inspector.get_table_names():
+            return
+        present = {column["name"] for column in inspector.get_columns("linux_server_monitoring_configs")}
+        columns = {
+            "monitoring_status": "VARCHAR(20) NOT NULL DEFAULT 'stopped'",
+            "last_run_at": "TIMESTAMP",
+            "last_success_at": "TIMESTAMP",
+            "last_started_at": "TIMESTAMP",
+            "last_stopped_at": "TIMESTAMP",
+            "last_error": "TEXT",
+        }
+        for name, sql_type in columns.items():
+            if name not in present:
+                connection.execute(text(f'ALTER TABLE linux_server_monitoring_configs ADD COLUMN "{name}" {sql_type}'))
+        connection.execute(text('ALTER TABLE linux_server_monitoring_configs ALTER COLUMN "interval_seconds" SET DEFAULT 300'))
+        connection.execute(text('UPDATE linux_server_monitoring_configs SET "interval_seconds" = 300'))
+
+
+def _ensure_linux_metric_retention(engine: Engine) -> None:
+    _ensure_linux_server_monitoring_tables(engine)
+    with engine.begin() as connection:
+        connection.execute(text(
+            'CREATE INDEX IF NOT EXISTS "ix_linux_server_metric_samples_retention_collected" '
+            'ON "linux_server_metric_samples" ("collected_at", "id")'
+        ))
+        connection.execute(text(
+            'CREATE INDEX IF NOT EXISTS "ix_linux_security_events_retention_timestamp" '
+            'ON "linux_security_events" ("event_timestamp", "id")'
+        ))
+
+
 def run_migrations(engine: Engine) -> list[str]:
     """Run idempotent application-managed migrations and return applied ids."""
     applied = _applied_migrations(engine)
@@ -186,6 +282,20 @@ def run_migrations(engine: Engine) -> list[str]:
             _ensure_device_type_columns(engine)
         elif migration.migration_id == "20260821_0004_device_topology_metadata":
             _ensure_device_topology_metadata(engine)
+        elif migration.migration_id == "20260825_0005_linux_server_monitoring_foundation":
+            _ensure_linux_server_monitoring_tables(engine)
+        elif migration.migration_id == "20260825_0006_linux_server_inventory":
+            _ensure_linux_server_monitoring_tables(engine)
+        elif migration.migration_id == "20260825_0007_linux_server_metric_columns":
+            _ensure_linux_server_monitoring_tables(engine)
+            _ensure_linux_metric_columns(engine)
+        elif migration.migration_id == "20260825_0008_linux_security_events":
+            _ensure_linux_server_monitoring_tables(engine)
+        elif migration.migration_id == "20260825_0009_linux_monitoring_scheduler":
+            _ensure_linux_server_monitoring_tables(engine)
+            _ensure_linux_scheduler_columns(engine)
+        elif migration.migration_id == "20260825_0010_linux_metric_retention":
+            _ensure_linux_metric_retention(engine)
         else:
             raise ValueError(f"Unknown migration id: {migration.migration_id}")
         _record_migration(engine, migration)

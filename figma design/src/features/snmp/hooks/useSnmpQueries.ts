@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listSNMPDevicesOptimized,
   getSNMPDeviceDetails,
+  getSNMPSystemInfo,
   getSNMPDeviceMonitoringConfigs,
   startModuleMonitoring,
   stopModuleMonitoring,
@@ -100,8 +101,7 @@ export function useSNMPDevices(params: {
 } = {}) {
   return useQuery<SNMPDevicesResponse>({
     queryKey: snmpKeys.devices(params),
-    queryFn: () => listSNMPDevicesOptimized(params),
-    placeholderData: (previousData) => previousData, // Keep previous data while fetching
+    queryFn: ({ signal }) => listSNMPDevicesOptimized(params, signal),
     staleTime: 15_000,
     refetchOnWindowFocus: false,
   });
@@ -115,6 +115,19 @@ export function useSNMPDeviceDetails(deviceId: number | null) {
     enabled: !!deviceId,
     staleTime: 10000,
   });
+}
+
+// Uptime is a live system scalar and must be refreshed independently from
+// the DB-backed device details snapshot.
+export function useSNMPSystemInfo(deviceId: number | null) {
+  return useQuery({
+    queryKey: ['snmp', 'system', deviceId],
+    queryFn: () => getSNMPSystemInfo(deviceId!),
+    enabled: !!deviceId,
+    staleTime: 4 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  })
 }
 
 // Monitoring configurations for a device
@@ -411,17 +424,19 @@ export function usePrefetchMonitoringConfigs() {
   };
 }
 
-// Invalidate all SNMP queries for a device (after config changes)
+// Remove all device-scoped snapshots after deletion so stale details cannot
+// reappear when the same device is discovered again.
 export function useInvalidateDeviceQueries() {
   const queryClient = useQueryClient();
   return (deviceId: number) => {
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'device', deviceId] });
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'monitoring', deviceId] });
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'metrics', 'latest', deviceId] });
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'metrics', 'cpu', deviceId] });
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'metrics', 'memory', deviceId] });
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'metrics', 'interfaces', deviceId] });
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'metrics', 'storage', deviceId] });
-    queryClient.invalidateQueries({ queryKey: ['snmp', 'metrics', 'environment', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'device', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'monitoring', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'metrics', 'latest', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'metrics', 'cpu', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'metrics', 'memory', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'metrics', 'interfaces', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'metrics', 'storage', deviceId] });
+    queryClient.removeQueries({ queryKey: ['snmp', 'metrics', 'environment', deviceId] });
+    queryClient.invalidateQueries({ queryKey: ['snmp', 'devices'] });
   };
 }

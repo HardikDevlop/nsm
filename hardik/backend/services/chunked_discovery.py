@@ -281,6 +281,19 @@ def _execute_chunked_scan(
                 if record.get("snmp"):
                     snmp = record["snmp"]
                     if snmp.get("reachable"):
+                        # Preserve the verified SNMP identity for the save
+                        # endpoint; otherwise the discovery UI loses the
+                        # evidence needed by the SNMP device list filter.
+                        device["snmp"] = {
+                            "reachable": True,
+                            "snmp_enabled": snmp.get("snmp_enabled", True),
+                            "snmp_version": snmp.get("snmp_version"),
+                            "hostname": snmp.get("hostname"),
+                            "sys_object_id": snmp.get("sys_object_id"),
+                            "sys_descr": snmp.get("sys_descr"),
+                            "vendor": snmp.get("vendor"),
+                            "device_type": snmp.get("device_type"),
+                        }
                         device["snmp_name"] = snmp.get("hostname")
                         device["snmp_description"] = snmp.get("sysDescr")
                         device["snmp_vendor"] = snmp.get("vendor")

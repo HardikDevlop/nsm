@@ -1,9 +1,14 @@
 from datetime import datetime, timedelta
+import csv
+import io
 from threading import Lock
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, load_only
 
 from backend.auth.security import create_access_token, hash_password, verify_password
@@ -49,6 +54,12 @@ from backend.schemas.nms import (
     DeviceMetricUpdate,
     DeviceRead,
     DeviceStatusHistoryRead,
+    ReportManagementFilters,
+    ReportManagementOptionsItem,
+    ReportManagementRecord,
+    ReportManagementSection,
+    ReportManagementSummary,
+    ReportManagementDeviceOption,
     DeviceTypeCreate,
     DeviceTypeRead,
     DeviceTypeUpdate,
@@ -98,7 +109,7 @@ from backend.schemas.nms import (
 )
 from backend.services.discovery import discover_network
 from backend.services.monitoring import run_monitoring_check
-from backend.services.alerting import _notify
+from backend.services.alerting import _notify, create_device_added_alert
 from backend.utils.crypto import encrypt_secret
 
 
@@ -179,6 +190,267 @@ event_crud = CRUDRouterMixin(Event)
 notification_crud = CRUDRouterMixin(Notification)
 report_crud = CRUDRouterMixin(Report)
 audit_crud = CRUDRouterMixin(AuditLog)
+
+_REPORT_LOOKBACK = {
+    "weekly": timedelta(days=7),
+    "monthly": timedelta(days=30),
+    "yearly": timedelta(days=365),
+}
+
+
+def _report_range(period: str, start_date: datetime | None, end_date: datetime | None) -> tuple[datetime, datetime]:
+    now = datetime.utcnow()
+    if period == "custom":
+        if not start_date or not end_date:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date and end_date are required for custom range")
+        if start_date > end_date:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be before or equal to end_date")
+        return start_date, end_date
+    delta = _REPORT_LOOKBACK.get(period)
+    if not delta:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid period")
+    return now - delta, now
+
+
+def _percent(part: int, total: int) -> float:
+    return round((part / total) * 100, 2) if total else 0.0
+
+
+def _build_report_rows(db: Session, filters: ReportManagementFilters) -> tuple[ReportManagementSummary, list[dict[str, object]]]:
+    from backend.models import DeviceStatusHistory as _DSH
+    from backend.models.snmp import InterfaceStatistic as _IFS, LatestCPU, LatestMemory, PollingHistory
+
+    period_start, period_end = _report_range(filters.period, filters.start_date, filters.end_date)
+
+    query = (
+        db.query(Device)
+        .options(joinedload(Device.site), joinedload(Device.device_type))
+        .filter(Device.deleted_at.is_(None))
+    )
+    if filters.device_type_id is not None:
+        query = query.filter(Device.device_type_id == filters.device_type_id)
+    if filters.device_id is not None:
+        query = query.filter(Device.id == filters.device_id)
+    if filters.site_id is not None:
+        query = query.filter(Device.site_id == filters.site_id)
+
+    devices = query.order_by(Device.hostname.asc()).all()
+    device_ids = [device.id for device in devices]
+
+    history = (
+        db.query(_DSH)
+        .filter(_DSH.timestamp >= period_start, _DSH.timestamp <= period_end, _DSH.device_id.in_(device_ids or [0]))
+        .order_by(_DSH.timestamp.asc())
+        .all()
+    )
+    polling = (
+        db.query(PollingHistory)
+        .filter(PollingHistory.device_id.in_(device_ids or [0]), PollingHistory.created_at >= period_start, PollingHistory.created_at <= period_end)
+        .all()
+    )
+    cpu_rows = (
+        db.query(LatestCPU)
+        .filter(LatestCPU.device_id.in_(device_ids or [0]), LatestCPU.polled_at >= period_start, LatestCPU.polled_at <= period_end)
+        .all()
+    )
+    mem_rows = (
+        db.query(LatestMemory)
+        .filter(LatestMemory.device_id.in_(device_ids or [0]), LatestMemory.polled_at >= period_start, LatestMemory.polled_at <= period_end)
+        .all()
+    )
+    iface_rows = (
+        db.query(_IFS)
+        .filter(_IFS.device_id.in_(device_ids or [0]), _IFS.created_at >= period_start, _IFS.created_at <= period_end)
+        .all()
+    )
+    # InterfaceStatistic contains counters/utilization only.  Port state is
+    # persisted on the real Interface record, so use that table for status.
+    interface_states = (
+        db.query(Interface)
+        .filter(Interface.device_id.in_(device_ids or [0]))
+        .all()
+    )
+
+    history_by_device: dict[int, list] = {}
+    for row in history:
+        history_by_device.setdefault(row.device_id, []).append(row)
+    polling_by_device: dict[int, list] = {}
+    for row in polling:
+        polling_by_device.setdefault(row.device_id, []).append(row)
+    cpu_by_device: dict[int, list] = {}
+    for row in cpu_rows:
+        cpu_by_device.setdefault(row.device_id, []).append(row)
+    mem_by_device: dict[int, list] = {}
+    for row in mem_rows:
+        mem_by_device.setdefault(row.device_id, []).append(row)
+    iface_by_device: dict[int, list] = {}
+    for row in iface_rows:
+        iface_by_device.setdefault(row.device_id, []).append(row)
+    interface_state_by_device: dict[int, list] = {}
+    for row in interface_states:
+        interface_state_by_device.setdefault(row.device_id, []).append(row)
+
+    records: list[ReportManagementRecord] = []
+    protocol_filter = filters.protocol
+    for device in devices:
+        device_hist = history_by_device.get(device.id, [])
+        if protocol_filter == "icmp" and not device_hist:
+            continue
+        if protocol_filter == "snmp" and not (polling_by_device.get(device.id) or cpu_by_device.get(device.id) or mem_by_device.get(device.id) or iface_by_device.get(device.id)):
+            continue
+        uptime = sum(1 for item in device_hist if item.new_status == "online")
+        downtime = sum(1 for item in device_hist if item.new_status == "offline")
+        total_transitions = len(device_hist)
+        availability_pct = _percent(uptime, total_transitions) if total_transitions else _percent(1 if device.status == "online" else 0, 1)
+        snmp_ok = sum(1 for item in polling_by_device.get(device.id, []) if item.status == "success")
+        snmp_total = len(polling_by_device.get(device.id, []))
+        icmp_ok = uptime
+        icmp_total = total_transitions or (1 if device.status else 0)
+        cpu_vals = [row.utilization_percent for row in cpu_by_device.get(device.id, []) if row.utilization_percent is not None]
+        mem_vals = [row.utilization_percent for row in mem_by_device.get(device.id, []) if row.utilization_percent is not None]
+        iface_vals = [row.utilization_percent for row in iface_by_device.get(device.id, []) if row.utilization_percent is not None]
+        state_rows = interface_state_by_device.get(device.id, [])
+        iface_down = sum(1 for row in state_rows if (row.status or "").lower() == "down")
+        avg_cpu = round(sum(cpu_vals) / len(cpu_vals), 2) if cpu_vals else None
+        avg_mem = round(sum(mem_vals) / len(mem_vals), 2) if mem_vals else None
+        avg_iface = round(sum(iface_vals) / len(iface_vals), 2) if iface_vals else None
+        snmp_success_rate = _percent(snmp_ok, snmp_total) if snmp_total else None
+        icmp_success_rate = _percent(icmp_ok, icmp_total) if icmp_total else None
+        performance_score = None
+        score_parts = [v for v in [avg_cpu, avg_mem, avg_iface] if v is not None]
+        if score_parts:
+            performance_score = round(sum(score_parts) / len(score_parts), 2)
+        health_points = 100.0
+        if snmp_success_rate is not None:
+            health_points -= max(0.0, 100.0 - snmp_success_rate) * 0.5
+        if icmp_success_rate is not None:
+            health_points -= max(0.0, 100.0 - icmp_success_rate) * 0.3
+        if iface_down:
+            health_points -= min(30.0, iface_down * 5.0)
+        snmp_health = "healthy" if health_points >= 85 else "degraded" if health_points >= 60 else "critical"
+        sla_status = "met" if availability_pct >= 99.0 and snmp_health != "critical" else "breached"
+        protocol = "snmp" if protocol_filter == "snmp" else "icmp" if protocol_filter == "icmp" else "mixed"
+        records.append(ReportManagementRecord(
+            device_id=device.id,
+            hostname=device.hostname,
+            ip_address=device.ip_address,
+            site_name=device.site.name if device.site else None,
+            device_type_name=device.device_type.name if device.device_type else None,
+            protocol=protocol,
+            availability_pct=availability_pct,
+            downtime_seconds=device.downtime_seconds,
+            snmp_success_rate=snmp_success_rate,
+            icmp_success_rate=icmp_success_rate,
+            snmp_health=snmp_health,
+            performance_score=performance_score,
+            interface_count=(len({row.interface_id for row in iface_by_device.get(device.id, [])}) or len(state_rows) or None),
+            interface_down_count=iface_down or None,
+            avg_cpu_percent=avg_cpu,
+            avg_memory_percent=avg_mem,
+            avg_latency_ms=None,
+            packet_loss_pct=None,
+            sla_status=sla_status,
+            period_start=period_start,
+            period_end=period_end,
+        ))
+
+    availability_pct = round(sum(r.availability_pct for r in records) / len(records), 2) if records else 0.0
+    downtime_seconds = sum(r.downtime_seconds for r in records)
+    snmp_devices = sum(1 for r in records if r.snmp_success_rate is not None)
+    icmp_devices = sum(1 for r in records if r.icmp_success_rate is not None)
+    avg_snmp_health = round(sum(100 if r.snmp_health == "healthy" else 70 if r.snmp_health == "degraded" else 40 for r in records) / len(records), 2) if records else None
+    avg_performance_score = round(sum(r.performance_score for r in records if r.performance_score is not None) / max(1, len([r for r in records if r.performance_score is not None])), 2) if any(r.performance_score is not None for r in records) else None
+    sla_met_pct = _percent(sum(1 for r in records if r.sla_status == "met"), len(records))
+    summary = ReportManagementSummary(
+        filters=filters,
+        period_start=period_start,
+        period_end=period_end,
+        total_devices=len(devices),
+        total_records=len(records),
+        availability_pct=availability_pct,
+        downtime_seconds=downtime_seconds,
+        avg_snmp_health=avg_snmp_health,
+        avg_performance_score=avg_performance_score,
+        sla_met_pct=sla_met_pct,
+        snmp_devices=snmp_devices,
+        icmp_devices=icmp_devices,
+        sections={
+            "availability": ReportManagementSection(title="Availability", count=len(records), average=availability_pct, maximum=max((r.availability_pct for r in records), default=None), minimum=min((r.availability_pct for r in records), default=None)),
+            "downtime": ReportManagementSection(title="Downtime", count=len(records), average=round(downtime_seconds / len(records), 2) if records else None, maximum=max((r.downtime_seconds for r in records), default=None), minimum=min((r.downtime_seconds for r in records), default=None)),
+            "snmp_health": ReportManagementSection(title="SNMP Health", count=snmp_devices, average=avg_snmp_health),
+            "interface": ReportManagementSection(title="Interface/Port", count=sum(r.interface_count or 0 for r in records)),
+            "performance": ReportManagementSection(title="Performance", count=sum(1 for r in records if r.performance_score is not None), average=avg_performance_score),
+            "sla": ReportManagementSection(title="SLA Summary", count=len(records), average=sla_met_pct),
+        },
+        records=records,
+    )
+    export_rows = [r.model_dump() for r in records]
+    return summary, export_rows
+
+
+@router.get("/reports/management")
+def get_report_management(
+    device_type_id: int | None = None,
+    device_id: int | None = None,
+    site_id: int | None = None,
+    protocol: Literal["all", "snmp", "icmp"] = "all",
+    period: Literal["weekly", "monthly", "yearly", "custom"] = "weekly",
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("reports:read")),
+):
+    filters = ReportManagementFilters(
+        device_type_id=device_type_id,
+        device_id=device_id,
+        site_id=site_id,
+        protocol=protocol, period=period,
+        start_date=start_date, end_date=end_date,
+    )
+    summary, _ = _build_report_rows(db, filters)
+    return summary
+
+
+@router.get("/reports/management/options")
+def get_report_management_options(db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+    devices = db.query(Device).filter(Device.deleted_at.is_(None)).order_by(Device.hostname.asc()).all()
+    return {
+        "device_types": [ReportManagementOptionsItem(id=row.id, name=row.name) for row in db.query(DeviceType).filter(DeviceType.deleted_at.is_(None)).order_by(DeviceType.name.asc()).all()],
+        "sites": [ReportManagementOptionsItem(id=row.id, name=row.name) for row in db.query(Site).filter(Site.deleted_at.is_(None)).order_by(Site.name.asc()).all()],
+        "devices": [ReportManagementDeviceOption(id=d.id, hostname=d.hostname, ip_address=d.ip_address, device_type_id=d.device_type_id, site_id=d.site_id, status=d.status) for d in devices],
+    }
+
+
+@router.get("/reports/management/export")
+def export_report_management(
+    format: str = "csv",
+    device_type_id: int | None = None,
+    device_id: int | None = None,
+    site_id: int | None = None,
+    protocol: Literal["all", "snmp", "icmp"] = "all",
+    period: Literal["weekly", "monthly", "yearly", "custom"] = "weekly",
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("reports:read")),
+):
+    filters = ReportManagementFilters(
+        device_type_id=device_type_id,
+        device_id=device_id,
+        site_id=site_id,
+        protocol=protocol, period=period,
+        start_date=start_date, end_date=end_date,
+    )
+    summary, rows = _build_report_rows(db, filters)
+    if format == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()) if rows else ["device_id", "hostname"])
+        writer.writeheader()
+        writer.writerows(rows)
+        buffer.seek(0)
+        filename = f"report-management-{summary.period_start.date()}-{summary.period_end.date()}.csv"
+        return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export format on backend")
 
 
 # ---------------------------------------------------------------- Roles
@@ -503,34 +775,52 @@ def delete_device_type(item_id: int, db: Session = Depends(get_db), current_user
 # ---------------------------------------------------------------- Devices
 @router.get("/devices", response_model=list[DeviceRead])
 def list_devices(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("devices:read"))):
-    return (
+    devices = (
         db.query(Device)
-        .options(load_only(
-            Device.id,
-            Device.site_id,
-            Device.hostname,
-            Device.ip_address,
-            Device.mac_address,
-            Device.vendor_id,
-            Device.device_type_id,
-            Device.serial_number,
-            Device.model,
-            Device.firmware_version,
-            Device.status,
-            Device.monitoring_status,
-            Device.last_seen,
-            Device.created_at,
-            Device.uptime_seconds,
-            Device.downtime_seconds,
-            Device.last_status_change,
-            Device.deleted_at,
-        ))
+        .options(
+            load_only(
+                Device.id, Device.site_id, Device.hostname, Device.ip_address,
+                Device.mac_address, Device.vendor_id, Device.device_type_id,
+                Device.serial_number, Device.model, Device.firmware_version,
+                Device.status, Device.monitoring_status, Device.last_seen,
+                Device.created_at, Device.uptime_seconds, Device.downtime_seconds,
+                Device.last_status_change, Device.deleted_at,
+            ),
+            joinedload(Device.vendor).load_only(Vendor.id, Vendor.vendor_name),
+            joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
+            joinedload(Device.credentials).load_only(DeviceCredential.device_id, DeviceCredential.snmp_version),
+        )
         .filter(Device.deleted_at.is_(None))
         .order_by(Device.id)
         .offset(skip)
         .limit(min(limit, 500))
         .all()
     )
+    return [
+        {
+            "id": device.id,
+            "site_id": device.site_id,
+            "hostname": device.hostname,
+            "ip_address": device.ip_address,
+            "mac_address": device.mac_address,
+            "vendor_id": device.vendor_id,
+            "vendor_name": device.vendor.vendor_name if device.vendor else None,
+            "device_type_id": device.device_type_id,
+            "device_type": device.device_type.name if device.device_type else None,
+            "serial_number": device.serial_number,
+            "model": device.model,
+            "firmware_version": device.firmware_version,
+            "status": device.status,
+            "monitoring_status": device.monitoring_status,
+            "snmp_version": device.credentials[0].snmp_version if device.credentials else None,
+            "last_seen": device.last_seen,
+            "created_at": device.created_at,
+            "uptime_seconds": device.uptime_seconds,
+            "downtime_seconds": device.downtime_seconds,
+            "last_status_change": device.last_status_change,
+        }
+        for device in devices
+    ]
 
 
 @router.get("/devices/options", response_model=list[DeviceOptionRead])
@@ -540,21 +830,35 @@ def list_device_options(
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("devices:read")),
 ):
-    return (
+    devices = (
         db.query(Device)
-        .options(load_only(
-            Device.id,
-            Device.hostname,
-            Device.ip_address,
-            Device.status,
-            Device.deleted_at,
-        ))
+        .options(
+            load_only(
+                Device.id, Device.hostname, Device.ip_address, Device.mac_address,
+                Device.model, Device.status, Device.deleted_at,
+            ),
+            joinedload(Device.vendor).load_only(Vendor.id, Vendor.vendor_name),
+            joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
+        )
         .filter(Device.deleted_at.is_(None))
         .order_by(Device.hostname.asc(), Device.id.asc())
         .offset(skip)
         .limit(min(limit, 1000))
         .all()
     )
+    return [
+        {
+            "id": device.id,
+            "hostname": device.hostname,
+            "ip_address": device.ip_address,
+            "mac_address": device.mac_address,
+            "model": device.model,
+            "vendor_name": device.vendor.vendor_name if device.vendor else None,
+            "device_type": device.device_type.name if device.device_type else None,
+            "status": device.status,
+        }
+        for device in devices
+    ]
 
 
 @router.post("/devices", response_model=DeviceRead, status_code=status.HTTP_201_CREATED)
@@ -669,6 +973,15 @@ def add_device_with_discovery(
     db.add(new_device)
     db.flush()
     db.refresh(new_device)
+    create_device_added_alert(
+        db,
+        new_device.id,
+        new_device.hostname,
+        new_device.ip_address,
+        "ICMP",
+        new_device.status,
+        new_device.mac_address,
+    )
     audit(db, current_user.id, "CREATE", "devices")
 
     return {
@@ -712,9 +1025,42 @@ def update_device(item_id: int, payload: DeviceUpdate, db: Session = Depends(get
 
 @router.delete("/devices/{item_id}")
 def delete_device(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:delete"))):
-    result = device_crud.delete(db, item_id)
+    # Device deletion is permanent. The generic CRUD helper soft-deletes
+    # models with ``deleted_at``, which leaves the device and stale discovery
+    # data available for later re-discovery. Use the model cascade instead.
+    device = db.query(Device).filter(Device.id == item_id).first()
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    try:
+        # Some legacy device tables use RESTRICT/NO ACTION foreign keys,
+        # while newer tables use database cascades. Delete the targeted
+        # device-owned rows explicitly so one device can always be removed.
+        db.execute(text(
+            "DELETE FROM notifications WHERE alert_id IN "
+            "(SELECT id FROM alerts WHERE device_id = :device_id)"
+        ), {"device_id": item_id})
+        for table in (
+            "alerts", "events", "snmp_traps", "alarms",
+            "device_credentials", "interfaces", "monitoring_jobs",
+            "device_metrics", "device_status_history", "device_inventory",
+            "snmp_credentials", "device_performance", "cpu_statistics",
+            "memory_statistics", "storage_statistics", "environment_statistics",
+            "power_statistics", "poe_statistics", "vlan_information",
+            "lldp_neighbors", "routing_table", "system_health",
+            "polling_history", "interface_statistics", "oid_cache",
+            "device_interfaces", "device_capabilities", "device_identity",
+            "monitoring_configs", "latest_cpu", "latest_memory",
+            "latest_storage", "latest_interface", "latest_environment",
+        ):
+            db.execute(text(f"DELETE FROM {table} WHERE device_id = :device_id"), {"device_id": item_id})
+        db.delete(device)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Failed to permanently delete device %s", item_id)
+        raise HTTPException(status_code=409, detail="Device cannot be deleted because related data is still in use") from exc
     audit(db, current_user.id, "DELETE", "devices")
-    return result
+    return {"deleted": True, "detail": f"Device {item_id} deleted"}
 
 
 @router.delete("/devices")
@@ -1512,8 +1858,8 @@ def run_discovery(payload: DiscoveryRequest, db: Session = Depends(get_db), curr
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"site_id {payload.site_id} does not exist. Create a site first or send site_id as null.",
             )
-        if payload.max_hosts < 1 or payload.max_hosts > 1024:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_hosts must be between 1 and 1024")
+        if payload.max_hosts < 1 or payload.max_hosts > 255:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="IP range cannot contain more than 255 addresses")
         if payload.timeout_ms < 100 or payload.timeout_ms > 5000:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="timeout_ms must be between 100 and 5000")
 
@@ -1588,6 +1934,16 @@ def run_discovery(payload: DiscoveryRequest, db: Session = Depends(get_db), curr
             db.flush()
             event_type = "DISCOVERY_FOUND" if is_new else "DISCOVERY_UPDATED"
             db.add(Event(device_id=device.id, event_type=event_type, description=description))
+            if is_new:
+                create_device_added_alert(
+                    db,
+                    device.id,
+                    device.hostname,
+                    device.ip_address,
+                    "ICMP",
+                    device.status,
+                    device.mac_address,
+                )
             discovered.append(device)
         db.commit()
         for device in discovered:

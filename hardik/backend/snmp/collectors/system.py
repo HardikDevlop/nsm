@@ -19,7 +19,9 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BaseCollector, CollectorResponse
-from ..normalizer import RawDevice, uptime as _uptime
+from ..normalizer import RawDevice, mac as _mac, uptime as _uptime
+
+_IF_PHYS_ADDRESS_PREFIX = "1.3.6.1.2.1.2.2.1.6."
 
 
 class SystemCollector(BaseCollector):
@@ -99,6 +101,20 @@ class SystemCollector(BaseCollector):
             model = self.text(raw_flat.get(mn_prefix + "1"))
         hw_rev = self.text(raw_flat.get(hw_prefix + "1"))
 
+        # MAC addresses are learned from IF-MIB when the full collection
+        # includes interface data. System-only collections can be enriched by
+        # the API from the already persisted device identity.
+        interface_raw = device.raw_interfaces or raw_flat
+        mac_address = next(
+            (
+                normalized
+                for oid, value in interface_raw.items()
+                if str(oid).startswith(_IF_PHYS_ADDRESS_PREFIX)
+                and (normalized := _mac(value))
+            ),
+            None,
+        )
+
         # --- Track missing optional fields as warnings ---
         for label, val in [("model", model), ("serial_number", serial),
                             ("firmware", firmware), ("os_version", os_version)]:
@@ -115,6 +131,7 @@ class SystemCollector(BaseCollector):
             "firmware":      firmware,
             "os_version":    os_version,
             "hardware_rev":  hw_rev,
+            "mac_address":   mac_address,
             "uptime": {
                 "ticks":   device.uptime_ticks,
                 "seconds": ut["seconds"],

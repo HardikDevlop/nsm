@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import GlassCard from '../components/GlassCard'
 import SNMPDiscoveryPanel from '../features/snmp/components/SNMPDiscoveryPanel'
 import SNMPSubnetDiscovery from '../features/snmp/components/SNMPSubnetDiscovery'
@@ -16,18 +17,40 @@ const moduleCatalog = [
   // { key: 'wmi_discovery', label: 'WMI', description: 'Windows system metadata' },
 ]
 
-const presetOptions = [
-  { value: 'isp', label: 'ISP Only', modules: ['ip_discovery', 'icmp_discovery'] },
-  { value: 'tcp', label: 'TCP + ICMP', modules: ['ip_discovery', 'icmp_discovery', 'tcp_discovery'] },
-  { value: 'full', label: 'Full Discovery', modules: ['ip_discovery', 'icmp_discovery', 'tcp_discovery', 'arp_discovery', 'dns_discovery', 'snmp_discovery', 'wmi_discovery'] },
-]
+function isIPv4(value: string): boolean {
+  const parts = value.trim().split('.')
+  return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+}
+
+function discoveryTargetIsValid(value: string): boolean {
+  const spec = value.trim()
+  if (!spec) return false
+  if (spec.includes(',')) {
+    const values = spec.split(',').map(item => item.trim()).filter(Boolean)
+    return values.length <= 255 && values.every(isIPv4)
+  }
+  if (spec.includes('/')) {
+    const [ip, prefix] = spec.split('/')
+    const bits = Number(prefix)
+    return isIPv4(ip) && /^\d{1,2}$/.test(prefix || '') && bits >= 24 && bits <= 32
+  }
+  if (spec.includes('-')) {
+    const [start, end] = spec.split('-').map(item => item.trim())
+    if (!isIPv4(start)) return false
+    if (/^\d{1,3}$/.test(end)) return Number(end) <= 255 && Number(end) >= Number(start.split('.')[3]) && Number(end) - Number(start.split('.')[3]) + 1 <= 255
+    if (!isIPv4(end)) return false
+    const toNumber = (ip: string) => ip.split('.').reduce((total, part) => total * 256 + Number(part), 0)
+    return toNumber(end) >= toNumber(start) && toNumber(end) - toNumber(start) + 1 <= 255
+  }
+  return isIPv4(spec)
+}
 
 export default function ISPMonitoring() {
+  const queryClient = useQueryClient()
   const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [interfaceCount, setInterfaceCount] = useState(0)
   const [openAlertCount, setOpenAlertCount] = useState(0)
   const [discoveryTarget, setDiscoveryTarget] = useState('192.168.1.0/24')
-  const [preset, setPreset] = useState('isp')
   const [selectedModules, setSelectedModules] = useState<string[]>(['ip_discovery', 'icmp_discovery'])
   const [discoveryProgress, setDiscoveryProgress] = useState<ChunkedDiscoveryProgress | null>(null)
   const [discoveryResults, setDiscoveryResults] = useState<Record<string, unknown>[]>([])
@@ -340,12 +363,6 @@ export default function ISPMonitoring() {
     })
   }
 
-  const applyPreset = (nextPreset: string) => {
-    const selectedPreset = presetOptions.find(item => item.value === nextPreset)
-    setPreset(nextPreset)
-    setSelectedModules(selectedPreset?.modules ?? ['ip_discovery', 'icmp_discovery'])
-  }
-
   const buildRows = (results: Record<string, unknown>[]) => {
     const rows: Array<{ id: string; title: string; detail: string }> = []
 
@@ -423,7 +440,29 @@ export default function ISPMonitoring() {
 
   const discoveryResultsRef = useRef<Record<string, unknown>[]>([])
 
+  const inventoryOnlyPayload = (device: Record<string, unknown>) => {
+    // IP Scan stores inventory only. SNMP results must be created from the
+    // dedicated SNMP discovery flow, not forwarded from this page.
+    const {
+      snmp,
+      snmp_name,
+      snmp_description,
+      snmp_vendor,
+      snmp_model,
+      snmp_version,
+      collectors,
+      ...inventory
+    } = device
+    return inventory
+  }
+
   const handleDiscover = async () => {
+    const target = discoveryTarget.trim() || '192.168.1.0/24'
+    if (!discoveryTargetIsValid(target)) {
+      setError('Enter valid IPv4 addresses and keep the discovery range within 255 addresses.')
+      toast.warning('Invalid discovery range. Maximum allowed is 255 addresses.')
+      return
+    }
     setError(null)
     setMessage('')
     setDiscoveryResults([])
@@ -437,7 +476,7 @@ export default function ISPMonitoring() {
     try {
       const modules = Array.from(new Set(['ip_discovery', ...selectedModules]))
       const started = await startChunkedDiscovery({
-        network_range: discoveryTarget.trim() || '192.168.1.0/24',
+        network_range: target,
         max_hosts: 254,
         ports: [22, 80, 443, 161, 162, 8080, 8443],
         timeout_ms: 700,
@@ -451,7 +490,7 @@ export default function ISPMonitoring() {
       setDiscoveryProgress({
         job_id: started.job_id,
         status: started.status,
-        network_range: discoveryTarget.trim() || '192.168.1.0/24',
+        network_range: target,
         total_ips: started.total_ips,
         chunk_size: started.chunk_size,
         chunks_total: started.chunks_total,
@@ -518,7 +557,11 @@ export default function ISPMonitoring() {
       return
     }
     try {
-      const stored = await addDiscoveredDevices({ devices: discoveryResults, site_id: null })
+      const stored = await addDiscoveredDevices({
+        devices: discoveryResults.map(inventoryOnlyPayload),
+        site_id: null,
+        discovery_source: 'icmp',
+      })
       setMessage(`Stored ${stored.added_count} device(s) into the database`)
       // Update storedIps
       const ips = discoveryResults.map(d => String((d as Record<string, unknown>).ip_address ?? (d as Record<string, unknown>).ip ?? '')).filter(Boolean)
@@ -534,7 +577,11 @@ export default function ISPMonitoring() {
     if (!ip) return
     setAddingIps(prev => new Set([...prev, ip]))
     try {
-      const stored = await addDiscoveredDevices({ devices: [device], site_id: null })
+      const stored = await addDiscoveredDevices({
+        devices: [inventoryOnlyPayload(device)],
+        site_id: null,
+        discovery_source: 'icmp',
+      })
       if (stored.added_count > 0) {
         setStoredIps(prev => new Set([...prev, ip]))
         setMessage(`Stored ${ip} into the database`)
@@ -663,6 +710,7 @@ export default function ISPMonitoring() {
     setCrudMessage('')
     try {
       await deleteDevice(id)
+      queryClient.clear()
       setDevices(prev => prev.filter(d => d.id !== id))
       setCrudMessage(`Device "${hostname}" deleted`)
       toast.success(`Device "${hostname}" deleted`)
@@ -685,6 +733,9 @@ export default function ISPMonitoring() {
     setCrudMessage('')
     try {
       const result = await deleteAllDevices()
+      // Plain API cache invalidation cannot clear React Query snapshots held
+      // by SNMP/detail pages, so remove every cached device response too.
+      queryClient.clear()
       setDevices([])
       setCrudMessage(`All ${result.deleted} devices deleted successfully`)
       toast.success(`All ${result.deleted} devices deleted`)
@@ -727,21 +778,18 @@ export default function ISPMonitoring() {
             <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>Choose the modules you want, start chunked discovery, then add discovered devices to the database.</div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <input
-              value={discoveryTarget}
-              onChange={(event) => setDiscoveryTarget(event.target.value)}
-              className="rounded border px-3 py-2 font-mono text-xs outline-none"
-              style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)', minWidth: 180 }}
-              placeholder="Network range"
-            />
-            <select
-              value={preset}
-              onChange={(event) => applyPreset(event.target.value)}
-              className="rounded border px-3 py-2 font-mono text-xs outline-none"
-              style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
-            >
-              {presetOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            <div className="flex flex-col">
+              <input
+                value={discoveryTarget}
+                onChange={(event) => setDiscoveryTarget(event.target.value.replace(/[^\d./,-]/g, ''))}
+                className="rounded border px-3 py-2 font-mono text-xs outline-none"
+                style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)', minWidth: 180 }}
+                placeholder="192.168.1.1-192.168.1.255 or /24"
+              />
+              <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>
+                Single IP, start-end range, or CIDR. Maximum 255 IPs.
+              </div>
+            </div>
             <PermissionGuard permission="discovery:execute">
             <button
               onClick={handleDiscover}
@@ -933,6 +981,9 @@ export default function ISPMonitoring() {
                           <div className="font-display text-sm tracking-wider" style={{ color: 'var(--t-text, #c8d8ee)' }}>{device.hostname}</div>
                         </div>
                         <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · {device.model ?? '—'} · {device.status}</div>
+                        <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-muted, #667799)' }}>
+                          {device.mac_address ? `MAC: ${device.mac_address} · ` : ''}{device.vendor_name ? `Vendor: ${device.vendor_name} · ` : ''}{device.device_type ? `Type: ${device.device_type}` : ''}
+                        </div>
                       </div>
                       <div className="flex flex-col gap-2">
                         <Link to={`/device-monitoring/${device.id}`} className="font-mono text-xs text-center" style={{ color: '#00d4ff' }}>View Details</Link>
@@ -1253,6 +1304,9 @@ export default function ISPMonitoring() {
                       <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>
                         {device.model && <span>Model: {device.model} · </span>}
                         {device.mac_address && <span>MAC: {device.mac_address} · </span>}
+                        {device.vendor_name && <span>Vendor: {device.vendor_name} · </span>}
+                        {device.device_type && <span>Type: {device.device_type} · </span>}
+                        {device.snmp_version && <span>SNMP: {device.snmp_version} · </span>}
                         {org && <span>Org: {org.name} · </span>}
                         {site && <span>Site: {site.name}</span>}
                       </div>

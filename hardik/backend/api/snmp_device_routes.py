@@ -191,6 +191,21 @@ def _collector_data(result: dict[str, Any], name: str) -> dict[str, Any]:
     }
 
 
+def _known_device_mac(device: Device, db: Session) -> str | None:
+    """Return the best MAC already known for a device, without another SNMP poll."""
+    if device.mac_address:
+        return str(device.mac_address)
+
+    identity_macs = (
+        db.query(DeviceIdentity.mac_addresses)
+        .filter(DeviceIdentity.device_id == device.id)
+        .scalar()
+    ) or []
+    if isinstance(identity_macs, list):
+        return next((str(value) for value in identity_macs if value), None)
+    return None
+
+
 def _infer_topology_type(device: Device | None, node: dict[str, Any]) -> str | None:
     text = " ".join(
         part.lower()
@@ -221,6 +236,14 @@ def _infer_topology_type(device: Device | None, node: dict[str, Any]) -> str | N
 
 def _normalize_mac(value: Any) -> str:
     return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _display_mac(value: Any) -> str | None:
+    """Return a stable human-readable MAC without assuming a vendor format."""
+    normalized = _normalize_mac(value)
+    if len(normalized) != 12:
+        return str(value) if value else None
+    return ":".join(normalized[index:index + 2] for index in range(0, 12, 2)).upper()
 
 
 def _first_non_empty(*values: Any) -> str | None:
@@ -340,7 +363,7 @@ def _enrich_lldp_neighbors(db: Session, device: Device, neighbors: list[dict[str
             remote_ip,
         )
         row["capabilities"] = row.get("capabilities") or row.get("capabilities_supported") or row.get("capabilities_enabled") or []
-        row["remote_chassis_id"] = displayMac(remote_mac) if remote_mac else row.get("remote_chassis_id")
+        row["remote_chassis_id"] = _display_mac(remote_mac) if remote_mac else row.get("remote_chassis_id")
         enriched_neighbors.append(row)
 
     return enriched_neighbors
@@ -402,15 +425,40 @@ def _persist_collect_result(device_id: int, result: dict[str, Any], db: Session)
     if not isinstance(collectors, dict):
         return
 
+    # System data can contain a MAC learned from the existing IF-MIB walk.
+    # Keep the inventory/detail APIs backed by the same persisted value.
+    system_data = (collectors.get("system") or {}).get("data") or {}
+    discovered_mac = system_data.get("mac_address")
+    interface_data = (collectors.get("interfaces") or {}).get("data") or {}
+    interface_rows = interface_data.get("interfaces") if isinstance(interface_data, dict) else []
+    if not discovered_mac and isinstance(interface_rows, list):
+        discovered_mac = next(
+            (row.get("mac") for row in interface_rows if isinstance(row, dict) and row.get("mac")),
+            None,
+        )
+    if discovered_mac:
+        stored_device = db.query(Device).filter(Device.id == device_id).first()
+        if stored_device and not stored_device.mac_address:
+            stored_device.mac_address = str(discovered_mac)
+
     cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
     if cap is None:
         cap = DeviceCapabilities(device_id=device_id)
         db.add(cap)
-    for name in ("system", "cpu", "memory", "storage", "interfaces", "environment", "inventory", "vlan", "lldp", "cdp", "routing", "arp", "mac_table", "firewall", "wireless", "topology"):
+    # Domain polls contain only the requested collector. Do not mark every
+    # other module unsupported or discard its previously discovered detail.
+    detail = dict(cap.capability_detail or {})
+    for name, collector in collectors.items():
+        if not isinstance(collector, dict):
+            continue
         attr = f"cap_{name}"
         if hasattr(cap, attr):
-            setattr(cap, attr, collectors.get(name, {}).get("supported", False))
-    cap.capability_detail = collectors
+            setattr(cap, attr, collector.get("supported", False))
+        detail[name] = {
+            **(detail.get(name, {}) if isinstance(detail.get(name), dict) else {}),
+            **collector,
+        }
+    cap.capability_detail = detail
     cap.updated_at = datetime.utcnow()
     db.flush()
 
@@ -479,6 +527,7 @@ def add_device_manual(
     5. Return device + discovery result
     """
     from backend.utils.crypto import encrypt_secret  # noqa: PLC0415
+    from backend.services.alerting import create_device_added_alert  # noqa: PLC0415
 
     ip = payload.ip_address.strip()
     if not ip:
@@ -531,6 +580,17 @@ def add_device_manual(
         event_type="DEVICE_MANUAL_ADD",
         description=f"Device {ip} added manually",
     ))
+    if created:
+        create_device_added_alert(
+            db,
+            device.id,
+            device.hostname,
+            device.ip_address,
+            "SNMP",
+            device.status,
+            device.mac_address,
+            payload.snmp_version,
+        )
     db.commit()
 
     db.refresh(device)
@@ -673,6 +733,12 @@ def _run_identity_discovery(
 
     # 2. Collect MAC addresses from interface data
     macs: list[str] = []
+    system_data = (result.get("collectors") or {}).get("system", {}).get("data") or {}
+    system_mac = system_data.get("mac_address")
+    if system_mac:
+        macs.append(str(system_mac))
+        if not device.mac_address:
+            device.mac_address = str(system_mac)
     if_data = (result.get("collectors") or {}).get("interfaces", {})
     if isinstance(if_data, dict) and if_data.get("data"):
         for iface in (if_data["data"].get("interfaces") or []):
@@ -753,6 +819,26 @@ def _run_identity_discovery(
         device.firmware_version = identity.firmware_version
     if identity.model:
         device.model = identity.model
+    # Persist values from the full collector on the primary device row so the
+    # inventory and detail endpoints can render them immediately.
+    system_data = (result.get("collectors", {}).get("system", {}).get("data") or {})
+    uptime = system_data.get("uptime") or {}
+    uptime_seconds = result.get("uptime_seconds")
+    if isinstance(uptime, dict):
+        uptime_seconds = uptime.get("seconds", uptime_seconds)
+    if uptime_seconds is not None:
+        device.uptime_seconds = int(float(uptime_seconds))
+    interface_data = (result.get("collectors", {}).get("interfaces", {}).get("data") or {})
+    interface_rows = interface_data.get("interfaces") if isinstance(interface_data, dict) else []
+    if not device.mac_address and result.get("mac_address"):
+        device.mac_address = str(result["mac_address"])[:32]
+    if not device.mac_address and isinstance(interface_rows, list):
+        first_mac = next(
+            (row.get("mac") for row in interface_rows if isinstance(row, dict) and row.get("mac")),
+            None,
+        )
+        if first_mac:
+            device.mac_address = str(first_mac)[:32]
     device.status   = "online" if result.get("reachable") else "offline"
     device.last_seen = datetime.utcnow()
 
@@ -968,6 +1054,14 @@ def get_snmp_system(
     device = _get_device_or_404(device_id, db)
     cred   = _get_credentials(device_id, db)
     result = _live_collect(device, cred, domain="system")
+    system = _collector_data(result, "system")
+    system_data = dict(system.get("data") or {})
+    mac_address = _known_device_mac(device, db)
+    # MAC is learned from interface/identity data, not the system OID set.
+    # Always expose the field so an empty database is distinguishable from a
+    # response-mapping bug, while keeping the system collector unchanged.
+    system_data["mac_address"] = mac_address or system_data.get("mac_address")
+    system = {**system, "data": system_data}
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -980,7 +1074,7 @@ def get_snmp_system(
         "sys_object_id": result.get("sys_object_id"),
         "collection_ms": result.get("collection_ms"),
         "device_id":     device_id,
-        **_collector_data(result, "system"),
+        **system,
     }
 
 
@@ -2435,7 +2529,15 @@ def list_snmp_devices_optimized(
     if snmp_status:
         query = query.join(DeviceIdentity, DeviceIdentity.device_id == Device.id, isouter=True)
         if snmp_status == "verified":
-            query = query.filter(DeviceIdentity.vendor.isnot(None))
+            # SNMP and ICMP inventory are separate sources. Only devices
+            # explicitly registered by the dedicated SNMP discovery flow may
+            # appear here; this also excludes legacy unmarked ICMP rows.
+            query = query.filter(
+                Device.topology_metadata["discovery_source"].as_string() == "snmp",
+                (DeviceIdentity.vendor.isnot(None))
+                | (DeviceIdentity.sys_name.isnot(None))
+                | (DeviceIdentity.sys_object_id.isnot(None))
+            )
         elif snmp_status == "error":
             query = query.filter(DeviceIdentity.vendor.is_(None))
 
@@ -2481,6 +2583,7 @@ def list_snmp_devices_optimized(
             DeviceIdentity.vendor,
             DeviceIdentity.hostname,
             DeviceIdentity.sys_name,
+            DeviceIdentity.mac_addresses,
         ))
         .filter(DeviceIdentity.device_id.in_(device_ids)).all()
     } if device_ids else {}
@@ -2503,7 +2606,11 @@ def list_snmp_devices_optimized(
         modules_monitored = sum(1 for c in configs if c.enabled and c.status == "running")
 
         vendor_name = d.vendor.vendor_name if d.vendor else (di.vendor if di else None)
-        snmp_status_val = "verified" if di and di.vendor else "unknown"
+        snmp_status_val = (
+            "verified"
+            if di and (di.vendor or di.sys_name or di.sys_object_id)
+            else "unknown"
+        )
         primary_credential = credentials_by_device.get(d.id)
         identity_hostname = (
             di.hostname
@@ -2516,6 +2623,11 @@ def list_snmp_devices_optimized(
             d.hostname,
             d.ip_address,
         )
+        identity_macs = di.mac_addresses if di and isinstance(di.mac_addresses, list) else []
+        resolved_mac = _first_non_empty(
+            d.mac_address,
+            next((str(mac) for mac in identity_macs if mac), None),
+        )
 
         items.append({
             "id": d.id,
@@ -2526,7 +2638,7 @@ def list_snmp_devices_optimized(
             "model": d.model,
             "serial_number": d.serial_number,
             "firmware": d.firmware_version,
-            "mac_address": d.mac_address,
+            "mac_address": resolved_mac,
             "topology_metadata": d.topology_metadata or {},
             "status": d.status,
             "snmp_version": primary_credential.snmp_version if primary_credential else None,
@@ -2658,7 +2770,7 @@ def get_device_details(
             "model": device.model,
             "serial_number": device.serial_number,
             "firmware": device.firmware_version,
-            "mac_address": device.mac_address,
+            "mac_address": _known_device_mac(device, db),
             "topology_metadata": device.topology_metadata or {},
             "status": device.status,
             "monitoring_status": device.monitoring_status,
@@ -2669,7 +2781,11 @@ def get_device_details(
         "snmp": {
             "version": cred.snmp_version if cred else None,
             "port": 161,
-            "status": "verified" if di and di.vendor else "unknown",
+            "status": (
+                "verified"
+                if di and (di.vendor or di.sys_name or di.sys_object_id)
+                else "unknown"
+            ),
             "last_test_at": None,
         },
         "capabilities": capabilities,

@@ -13,6 +13,26 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const inputStyle: React.CSSProperties = { background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)', outline: 'none' }
 
+function formatBitsPerSecond(value?: string | number | null): string {
+  if (value == null || value === '') return '—'
+  const numeric = typeof value === 'number' ? value : Number(String(value).replace(/[^0-9.+-]/g, ''))
+  if (!Number.isFinite(numeric)) return String(value)
+  const units = ['bps', 'Kbps', 'Mbps', 'Gbps', 'Tbps']
+  let scaled = Math.abs(numeric)
+  let unit = 0
+  while (scaled >= 1000 && unit < units.length - 1) { scaled /= 1000; unit += 1 }
+  return `${numeric < 0 ? '-' : ''}${scaled.toFixed(2)} ${units[unit]}`
+}
+
+function formatBytes(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let scaled = Math.abs(value)
+  let unit = 0
+  while (scaled >= 1024 && unit < units.length - 1) { scaled /= 1024; unit += 1 }
+  return `${value < 0 ? '-' : ''}${scaled.toFixed(2)} ${units[unit]}`
+}
+
 export default function InterfacesList() {
   const [items, setItems] = useState<InterfaceRecord[]>([])
   const [devices, setDevices] = useState<DeviceOptionRecord[]>([])
@@ -92,11 +112,11 @@ export default function InterfacesList() {
                 return (
                   <tr key={item.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }} onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}>
                     <td className="px-4 py-3 font-display font-medium text-sm" style={{ color: 'var(--t-text)' }}>{item.interface_name}</td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{device ? device.hostname : '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{device ? <><div>{device.hostname}</div><div className="text-[10px] mt-1">{device.mac_address ?? 'MAC unavailable'}{device.vendor_name ? ` · ${device.vendor_name}` : ''}</div></> : '—'}</td>
                     <td className="px-4 py-3"><span className="px-2 py-1 rounded text-xs font-mono" style={{ background: item.status === 'up' ? 'rgba(74,222,128,0.2)' : 'rgba(255,51,102,0.2)', color: item.status === 'up' ? '#4ade80' : '#ff3366' }}>{item.status.toUpperCase()}</span></td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.speed || '—'}</td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.traffic_in.toFixed(2)} MB</td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.traffic_out.toFixed(2)} MB</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{formatBitsPerSecond(item.speed)}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{formatBytes(item.traffic_in)}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{formatBytes(item.traffic_out)}</td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: item.packet_errors > 0 ? '#ff3366' : 'var(--t-muted)' }}>{item.packet_errors}</td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">

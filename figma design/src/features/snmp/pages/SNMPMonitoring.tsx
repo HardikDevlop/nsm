@@ -416,7 +416,7 @@ export default function SNMPMonitoring() {
           </div>
           {inventory.length === 0 ? (
             <div className="font-mono text-xs p-6 text-center" style={{color:'#8899bb'}}>
-              No devices found. Run SNMP Discovery above to detect devices.
+              No devices found. Add a device to start monitoring.
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">

@@ -26,6 +26,7 @@ CRUD_MODULES = [
     "events",
     "notifications",
     "reports",
+    "linux_servers",
 ]
 
 EXTRA_PERMISSIONS = [

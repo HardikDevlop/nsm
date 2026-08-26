@@ -29,7 +29,7 @@ const Incidents = lazyRetry(() => import('./pages/Incidents'))
 const PacketAnalysis = lazyRetry(() => import('./pages/PacketAnalysis'))
 // const NginxMonitoring = lazyRetry(() => import('./pages/NginxMonitoring'))
 const Firewall = lazyRetry(() => import('./pages/Firewall'))
-const ServerMonitoring = lazyRetry(() => import('./pages/ServerMonitoring'))
+const LinuxServerMonitoring = lazyRetry(() => import('./pages/LinuxServerMonitoring'))
 const Forensics = lazyRetry(() => import('./pages/Forensics'))
 const Compliance = lazyRetry(() => import('./pages/Compliance'))
 const DeviceMonitoring = lazyRetry(() => import('./pages/DeviceMonitoring'))
@@ -40,6 +40,7 @@ const Organizations = lazyRetry(() => import('./pages/Organizations'))
 const Vendors = lazyRetry(() => import('./pages/Vendors'))
 const Sites = lazyRetry(() => import('./pages/Sites'))
 const DailyReport = lazyRetry(() => import('./pages/DailyReport'))
+const ReportManagement = lazyRetry(() => import('./pages/ReportManagement'))
 const AlertsManagement = lazyRetry(() => import('./pages/AlertsManagement'))
 const Events = lazyRetry(() => import('./pages/Events'))
 const Notifications = lazyRetry(() => import('./pages/Notifications'))
@@ -72,7 +73,7 @@ export const router = createBrowserRouter([
           // { path: 'nginx', Component: withPermission(NginxMonitoring, 'nginx:read') },
           // { path: 'firewall', Component: withPermission(Firewall, 'firewall:read') },
           ...snmpRoutes,
-          { path: 'servers', Component: withPermission(ServerMonitoring, 'server_monitoring:read') },
+          { path: 'linux-servers', Component: withPermission(LinuxServerMonitoring, 'linux_servers:read') },
           // { path: 'forensics', Component: withPermission(Forensics, 'forensics:read') },
           // { path: 'compliance', Component: withPermission(Compliance, 'compliance:read') },
           { path: 'device-monitoring', Component: withPermission(DeviceMonitoringList, 'device_monitoring:read') },
@@ -82,6 +83,7 @@ export const router = createBrowserRouter([
           { path: 'organizations', Component: withPermission(Organizations, 'organizations:read') },
           { path: 'vendors', Component: withPermission(Vendors, 'vendors:read') },
           { path: 'reports/daily', Component: withPermission(DailyReport, 'reports:read') },
+          { path: 'reports/management', Component: withPermission(ReportManagement, 'reports:read') },
           { path: 'sites', Component: withPermission(Sites, 'sites:read') },
           { path: 'alerts-management', Component: withPermission(AlertsManagement, 'alerts:read') },
           { path: 'events', Component: withPermission(Events, 'events:read') },

@@ -25,8 +25,14 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["Discovery / Monitoring (modules)"])
 logger = logging.getLogger(__name__)
+MAX_DISCOVERY_HOSTS = 255
 _monitor_start_lock = Lock()
 _monitoring_start_inflight: set[str] = set()
+
+
+def _bad_request(message: str) -> HTTPException:
+    logger.warning("Bad request: %s", message)
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
 
 
 # ----------------------------- Request schemas ----------------------------- #
@@ -36,7 +42,7 @@ class IpsRequest(BaseModel):
     ips: list[str] = Field(default_factory=list)
     ip: str | None = None
     subnet: str | None = None
-    max_hosts: int = Field(default=1024, ge=1, le=65536)
+    max_hosts: int = Field(default=MAX_DISCOVERY_HOSTS, ge=1, le=MAX_DISCOVERY_HOSTS)
     timeout_ms: int = 1000
     timeout_seconds: float = 0.75
     ports: list[int] | None = None
@@ -94,7 +100,7 @@ class MacLookupRequest(BaseModel):
 
 class ScanPlanRequest(BaseModel):
     network_range: str
-    max_hosts: int = 1024
+    max_hosts: int = Field(default=MAX_DISCOVERY_HOSTS, ge=1, le=MAX_DISCOVERY_HOSTS)
 
 
 class ChunkedScanRequest(BaseModel):
@@ -107,7 +113,7 @@ class ChunkedScanRequest(BaseModel):
     scan_snmp: bool = False
     snmp_community: str = "public"
     timeout_ms: int = 700
-    max_hosts: int = 254
+    max_hosts: int = Field(default=254, ge=1, le=MAX_DISCOVERY_HOSTS)
     chunk_size: int = 25
     modules: list[str] = ["ip_discovery", "icmp_discovery"]
 
@@ -116,6 +122,15 @@ class AddDevicesRequest(BaseModel):
     """Request body for adding discovered devices to the database."""
     devices: list[dict[str, Any]]
     site_id: int | None = None
+    discovery_source: str | None = None
+    snmp_version: str | None = None
+    communities: list[str] | None = None
+    username: str | None = None
+    auth_protocol: str | None = None
+    auth_password: str | None = None
+    privacy_protocol: str | None = None
+    privacy_password: str | None = None
+    security_level: str | None = None
 
 
 class MonitorDeviceRequest(BaseModel):
@@ -151,6 +166,22 @@ def _ips(body: IpsRequest) -> list[str]:
     if not out and body.ip:
         out = [body.ip]
     return [str(x) for x in out if x]
+
+
+def _validated_ipv4s(values: list[str]) -> list[str]:
+    """Validate discovery targets before any network probe is started."""
+    if len(values) > MAX_DISCOVERY_HOSTS:
+        raise _bad_request("IP range cannot contain more than 255 addresses.")
+    normalized: list[str] = []
+    for value in values:
+        try:
+            address = ipaddress.ip_address(str(value).strip())
+        except ValueError as exc:
+            raise _bad_request("Please provide valid IPv4 addresses only.") from exc
+        if address.version != 4:
+            raise _bad_request("Please provide valid IPv4 addresses only.")
+        normalized.append(str(address))
+    return normalized
 
 
 def _load_inventory() -> dict[str, Any]:
@@ -258,9 +289,9 @@ def discovery_ip(payload: TargetRequest):
 def discovery_icmp(payload: IpsRequest):
     from discovery_modules.icmp_discovery import ICMPDiscovery  # type: ignore
 
-    ips = _ips(payload)
+    ips = _validated_ipv4s(_ips(payload))
     if not ips:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ips[] is required")
+        raise _bad_request("Please provide the required device information.")
     results = ICMPDiscovery(timeout_ms=payload.timeout_ms).discover(ips)
     return {"count": len(results), "results": results}
 
@@ -274,7 +305,7 @@ def discovery_tcp(payload: IpsRequest):
 
     ips = _ips(payload)
     if not ips:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ips[] is required")
+        raise _bad_request("Please provide the required device information.")
     scanner = TCPDiscovery(ports=payload.ports, timeout_seconds=payload.timeout_seconds)
     results = {ip: scanner.scan_host(ip) for ip in ips}
     return {"count": len(results), "results": results}
@@ -289,7 +320,7 @@ def discovery_arp(payload: IpsRequest):
 
     ips = _ips(payload)
     if not ips:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ips[] is required")
+        raise _bad_request("Please provide the required device information.")
     arp = ARPDiscovery()
     results = [arp.collect(ip) for ip in ips]
     return {"count": len(results), "results": results}
@@ -304,7 +335,7 @@ def discovery_dns(payload: IpsRequest):
 
     ips = _ips(payload)
     if not ips:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ips[] is required")
+        raise _bad_request("Please provide the required device information.")
     dns = DNSDiscovery()
     results = [dns.resolve(ip) for ip in ips]
     return {"count": len(results), "results": results}
@@ -331,23 +362,22 @@ def discovery_http(payload: IpsRequest):
 @router.post("/discovery/snmp")
 def discovery_snmp(payload: IpsRequest):
     from backend.snmp.collector import SNMPDiscovery
-    from backend.database.session import SessionLocal
-    from backend.models import Device, DeviceCredential, Event, Interface, DeviceCapabilities, DeviceIdentity
-    from backend.utils.crypto import encrypt_secret
-    from datetime import datetime
 
-    ips = _ips(payload)
+    ips = _validated_ipv4s(_ips(payload))
     if payload.subnet:
         try:
             network = ipaddress.ip_network(payload.subnet, strict=False)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"invalid subnet: {exc}")
+            raise _bad_request("Please provide a valid subnet.")
         hosts = list(network.hosts())
+        if len(hosts) > MAX_DISCOVERY_HOSTS:
+            raise _bad_request("IP range cannot contain more than 255 addresses.")
         if len(hosts) > payload.max_hosts:
-            raise HTTPException(status_code=400, detail=f"subnet has {len(hosts)} hosts; max_hosts is {payload.max_hosts}")
+            raise _bad_request("Please reduce the subnet size.")
         ips = [str(host) for host in hosts]
+        ips = _validated_ipv4s(ips)
     if not ips:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ips[] or subnet is required")
+        raise _bad_request("Please provide the required device information.")
     snmp = SNMPDiscovery(
         communities=payload.communities,
         timeout_seconds=payload.timeout_seconds,
@@ -368,191 +398,8 @@ def discovery_snmp(payload: IpsRequest):
             detail="No SNMP response received before timeout. Check community string, credentials, and that SNMP is enabled on target devices.",
         )
 
-    # Persist successful discovery before returning the response.
-    db = SessionLocal()
-    try:
-        for ip, result in results.items():
-            # sysName is optional on cameras and other embedded agents;
-            # devices.hostname is NOT NULL, so establish a stable fallback
-            # before SQLAlchemy flushes the row.
-            raw_hostname = result.get("hostname") or result.get("sysName")
-            hostname = str(raw_hostname) if raw_hostname and str(raw_hostname).lower() not in {"(none)", "none", "unknown"} else f"device-{ip.replace('.', '-')}"
-
-            # UPSERT: find existing device or create a new one.
-            # Never delete ICMP-discovered or other existing devices.
-            device = db.query(Device).filter(Device.ip_address == ip, Device.deleted_at.is_(None)).first()
-            if device is None:
-                # Check for soft-deleted device with same IP - if it exists, undelete it
-                soft_deleted = db.query(Device).filter(Device.ip_address == ip, Device.deleted_at.isnot(None)).first()
-                if soft_deleted:
-                    # Undelete the device and update its hostname
-                    device = soft_deleted
-                    device.deleted_at = None
-                else:
-                    # Create new device
-                    device = Device(ip_address=ip, hostname=hostname)
-                db.add(device)
-                db.flush()
-            
-            # Update hostname only if the new one is meaningful
-            if hostname and hostname != f"device-{ip.replace('.', '-')}":
-                device.hostname = hostname
-            device.model = result.get("model")
-            device.firmware_version = result.get("firmware")
-            interface_payload = result.get("interfaces") or {}
-            interface_rows = interface_payload.get("interfaces", []) if isinstance(interface_payload, dict) else interface_payload
-            interface_rows = interface_rows if isinstance(interface_rows, list) else []
-            # Upsert IF-MIB interface rows — match by device_id + interface_name
-            interface_names = {
-                str(row.get("name") or f"ifIndex-{row.get('ifIndex', 'unknown')}")
-                for row in interface_rows
-                if isinstance(row, dict)
-            }
-            existing_interfaces = db.query(Interface).filter(
-                Interface.device_id == device.id,
-                Interface.interface_name.in_(interface_names),
-            ).all() if interface_names else []
-            interfaces_by_name = {
-                interface.interface_name: interface
-                for interface in existing_interfaces
-            }
-            new_interfaces = []
-            for row in interface_rows:
-                if not isinstance(row, dict):
-                    continue
-                iface_name = str(row.get("name") or f"ifIndex-{row.get('ifIndex', 'unknown')}")
-                existing_iface = interfaces_by_name.get(iface_name)
-                if existing_iface:
-                    existing_iface.status = str(row.get("operStatus") or "unknown").lower()
-                    existing_iface.speed = str(row.get("speed") or "Not Supported")
-                    existing_iface.traffic_in = float(row.get("inOctets") or 0)
-                    existing_iface.traffic_out = float(row.get("outOctets") or 0)
-                    existing_iface.packet_errors = int(row.get("errors") or 0)
-                else:
-                    existing_iface = Interface(
-                        device_id=device.id,
-                        interface_name=iface_name,
-                        status=str(row.get("operStatus") or "unknown").lower(),
-                        speed=str(row.get("speed") or "Not Supported"),
-                        traffic_in=float(row.get("inOctets") or 0),
-                        traffic_out=float(row.get("outOctets") or 0),
-                        packet_errors=int(row.get("errors") or 0),
-                    )
-                    interfaces_by_name[iface_name] = existing_iface
-                    new_interfaces.append(existing_iface)
-                if not device.mac_address and row.get("mac") not in (None, "", "Not Supported"):
-                    device.mac_address = str(row["mac"])
-            if new_interfaces:
-                db.add_all(new_interfaces)
-            device.uptime_seconds = int(result.get("uptime_seconds") or 0)
-            device.status = "online"
-            device.monitoring_status = True
-            device.last_seen = datetime.utcnow()
-            device.deleted_at = None
-
-            credential = db.query(DeviceCredential).filter(DeviceCredential.device_id == device.id).first()
-            if credential is None:
-                credential = DeviceCredential(device_id=device.id)
-                db.add(credential)
-            credential.snmp_version = payload.snmp_version
-            credential.username = payload.username
-            credential.auth_protocol = payload.auth_protocol
-            credential.auth_password = encrypt_secret(payload.auth_password) if payload.auth_password else None
-            credential.privacy_protocol = payload.privacy_protocol
-            credential.privacy_password = encrypt_secret(payload.privacy_password) if payload.privacy_password else None
-            credential.security_level = payload.security_level
-
-            # Save device capabilities from collectors
-            collectors = result.get("collectors", {})
-            if collectors:
-                import asyncio
-                from backend.services.snmp_polling import PollJob, SNMPPoller
-
-                # UPSERT capabilities
-                capabilities = db.query(DeviceCapabilities).filter(
-                    DeviceCapabilities.device_id == device.id
-                ).first()
-                
-                if capabilities is None:
-                    capabilities = DeviceCapabilities(device_id=device.id)
-                    db.add(capabilities)
-                
-                # Map collector names to capability fields
-                capabilities.cap_system = collectors.get("system", {}).get("supported", False)
-                capabilities.cap_cpu = collectors.get("cpu", {}).get("supported", False)
-                capabilities.cap_memory = collectors.get("memory", {}).get("supported", False)
-                capabilities.cap_storage = collectors.get("storage", {}).get("supported", False)
-                capabilities.cap_interfaces = collectors.get("interfaces", {}).get("supported", False)
-                capabilities.cap_environment = collectors.get("environment", {}).get("supported", False)
-                capabilities.cap_inventory = collectors.get("inventory", {}).get("supported", False)
-                capabilities.cap_vlan = collectors.get("vlan", {}).get("supported", False)
-                capabilities.cap_lldp = collectors.get("lldp", {}).get("supported", False)
-                capabilities.cap_cdp = collectors.get("cdp", {}).get("supported", False)
-                capabilities.cap_routing = collectors.get("routing", {}).get("supported", False)
-                capabilities.cap_arp = collectors.get("arp", {}).get("supported", False)
-                capabilities.cap_mac_table = collectors.get("mac_table", {}).get("supported", False)
-                capabilities.cap_firewall = collectors.get("firewall", {}).get("supported", False)
-                capabilities.cap_wireless = collectors.get("wireless", {}).get("supported", False)
-                capabilities.cap_topology = collectors.get("topology", {}).get("supported", False)
-                
-                # Store full capability detail
-                capabilities.capability_detail = collectors
-                capabilities.updated_at = datetime.utcnow()
-
-                poller = SNMPPoller(db)
-                for module_name, collector in collectors.items():
-                    if not isinstance(collector, dict):
-                        continue
-                    job = PollJob(
-                        device_id=device.id,
-                        module_name=module_name,
-                        collector_name=module_name,
-                        interval_seconds=0,
-                        config_id=0,
-                    )
-                    asyncio.run(poller._persist_results(
-                        job,
-                        collector.get("data") or {},
-                        collector.get("supported") is True,
-                    ))
-                
-                logger.info(f"Saved capabilities for device {device.id} ({ip}): {capabilities.to_map()}")
-
-            # Save device identity
-            identity = db.query(DeviceIdentity).filter(
-                DeviceIdentity.device_id == device.id
-            ).first()
-            
-            if identity is None:
-                identity = DeviceIdentity(device_id=device.id)
-                db.add(identity)
-            
-            # Update identity fields from SNMP result
-            identity.vendor = result.get("vendor")
-            identity.vendor_source = "snmp_discovery"
-            identity.vendor_confidence = 0.9 if result.get("vendor") else 0.0
-            identity.hostname = hostname
-            identity.hostname_source = "snmp_sysname"
-            identity.model = result.get("model")
-            identity.model_source = "snmp_discovery"
-            identity.model_confidence = 0.8 if result.get("model") else 0.0
-            identity.device_type = result.get("device_type")
-            identity.device_type_source = "snmp_discovery"
-            identity.device_type_confidence = 0.8 if result.get("device_type") else 0.0
-            identity.sys_object_id = result.get("sys_object_id")
-            identity.sys_name = result.get("hostname")
-            identity.updated_at = datetime.utcnow()
-            
-            logger.info(f"Saved identity for device {device.id} ({ip}): vendor={identity.vendor}, model={identity.model}")
-
-            db.add(Event(device_id=device.id, event_type="SNMP_DISCOVERY", description=f"SNMP discovery successful for {ip}"))
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        logger.exception("SNMP inventory replacement failed")
-        raise HTTPException(status_code=500, detail=f"SNMP inventory save failed: {exc}") from exc
-    finally:
-        db.close()
+    # Discovery is read-only. Devices are persisted only by the explicit
+    # Add/Store action, which calls /discovery/add-devices.
     return {
         "scanned": len(ips),
         "count": len(results),
@@ -625,7 +472,7 @@ def monitoring_icmp(payload: IpsRequest):
 
     ips = _ips(payload)
     if not ips:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ips[] is required")
+        raise _bad_request("Please provide the required device information.")
     samples = ICMPMonitor(timeout_ms=payload.timeout_ms).check_many(ips)
     return {"count": len(samples), "samples": samples}
 
@@ -840,6 +687,8 @@ def start_chunked_scan(payload: ChunkedScanRequest):
 
     if not all_ips:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No IPs in range")
+    if len(all_ips) > MAX_DISCOVERY_HOSTS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="IP range cannot contain more than 255 addresses.")
 
     from backend.services.chunked_discovery import start_chunked_scan as _start
 
@@ -949,8 +798,11 @@ def add_discovered_devices(payload: AddDevicesRequest):
     Returns a summary of added / skipped devices.
     """
     from backend.database.session import SessionLocal
-    from backend.models import Device, DeviceMetric, Interface, DeviceCapabilities
+    from backend.models import Device, DeviceMetric, Interface, DeviceCapabilities, DeviceCredential
+    from backend.models.identity import DeviceIdentity
+    from backend.utils.crypto import encrypt_secret
     from backend.services.snmp_polling import PollJob, SNMPPoller
+    from backend.services.alerting import create_device_added_alert
     from datetime import datetime
     import asyncio
 
@@ -959,6 +811,62 @@ def add_discovered_devices(payload: AddDevicesRequest):
 
     try:
         with SessionLocal() as db:
+            def persist_snmp_identity(device: Device, discovered: dict[str, Any]) -> None:
+                """Persist only identities confirmed by an SNMP response."""
+                snmp = discovered.get("snmp")
+                # Dedicated SNMP discovery returns a nested ``snmp`` object,
+                # while the SNMP scan returns the confirmed fields at the
+                # top level. Support both shapes so added devices are visible
+                # in the SNMP inventory immediately.
+                if not isinstance(snmp, dict):
+                    snmp = discovered
+                if snmp.get("reachable") is not True and snmp.get("snmp_enabled") is not True:
+                    return
+
+                identity = db.query(DeviceIdentity).filter(
+                    DeviceIdentity.device_id == device.id,
+                ).first()
+                if identity is None:
+                    identity = DeviceIdentity(device_id=device.id)
+                    db.add(identity)
+
+                system_data = ((discovered.get("collectors") or {}).get("system") or {}).get("data") or {}
+                identity.vendor = snmp.get("vendor") or discovered.get("snmp_vendor") or discovered.get("vendor") or system_data.get("vendor")
+                identity.vendor_source = "snmp_discovery"
+                identity.vendor_confidence = 0.9 if identity.vendor else 0.0
+                identity.hostname = snmp.get("hostname") or discovered.get("snmp_name") or system_data.get("hostname") or device.hostname
+                identity.hostname_source = "snmp_sysname"
+                identity.model = snmp.get("model") or discovered.get("snmp_model") or system_data.get("model") or device.model
+                identity.model_source = "snmp_discovery"
+                identity.model_confidence = 0.8 if identity.model else 0.0
+                identity.device_type = snmp.get("device_type")
+                identity.device_type_source = "snmp_discovery"
+                identity.device_type_confidence = 0.8 if identity.device_type else 0.0
+                identity.sys_object_id = snmp.get("sys_object_id") or system_data.get("sys_object_id")
+                identity.sys_descr = snmp.get("sys_descr") or discovered.get("snmp_description") or system_data.get("description")
+                identity.sys_name = snmp.get("hostname") or discovered.get("snmp_name") or system_data.get("hostname")
+                identity.mac_addresses = [device.mac_address] if device.mac_address else []
+                identity.identity_sources = ["snmp_discovery"]
+
+                # Chunked discovery uses the public community unless a
+                # dedicated SNMP discovery flow supplied other credentials.
+                credential = db.query(DeviceCredential).filter(
+                    DeviceCredential.device_id == device.id,
+                ).first()
+                if credential is None:
+                    credential = DeviceCredential(device_id=device.id)
+                    db.add(credential)
+                credential.snmp_version = snmp.get("snmp_version") or "v2c"
+                credential.username = payload.username or snmp.get("username")
+                credential.auth_protocol = payload.auth_protocol or snmp.get("auth_protocol")
+                credential.auth_password = encrypt_secret(payload.auth_password) if payload.auth_password else None
+                credential.privacy_protocol = payload.privacy_protocol or snmp.get("privacy_protocol")
+                credential.privacy_password = encrypt_secret(payload.privacy_password) if payload.privacy_password else None
+                credential.security_level = payload.security_level or snmp.get("security_level")
+                community = (payload.communities or [None])[0]
+                if community:
+                    credential.community_string = encrypt_secret(community)
+
             def persist_collectors(device_id: int, collectors: dict) -> None:
                 if not isinstance(collectors, dict) or not collectors:
                     return
@@ -980,7 +888,32 @@ def add_discovered_devices(payload: AddDevicesRequest):
                             collector.get("supported") is True,
                         ))
 
+            def persist_device_scalars(device: Device, discovered: dict[str, Any]) -> None:
+                """Copy full SNMP system/interface values to the device row."""
+                collectors = discovered.get("collectors") or {}
+                system = ((collectors.get("system") or {}).get("data") or {})
+                uptime = system.get("uptime") or {}
+                uptime_seconds = discovered.get("uptime_seconds")
+                if isinstance(uptime, dict):
+                    uptime_seconds = uptime.get("seconds", uptime_seconds)
+                if uptime_seconds is not None:
+                    device.uptime_seconds = int(float(uptime_seconds))
+                interfaces = ((collectors.get("interfaces") or {}).get("data") or {})
+                rows = interfaces.get("interfaces") if isinstance(interfaces, dict) else []
+                if not device.mac_address and discovered.get("mac_address"):
+                    device.mac_address = str(discovered["mac_address"])[:32]
+                if not device.mac_address and isinstance(rows, list):
+                    mac = next(
+                        (row.get("mac") for row in rows if isinstance(row, dict) and row.get("mac")),
+                        None,
+                    )
+                    if mac:
+                        device.mac_address = str(mac)[:32]
+
             for dev in payload.devices:
+                source = payload.discovery_source or (
+                    "snmp" if dev.get("collectors") or dev.get("snmp_version") else "icmp"
+                )
                 ip = dev.get("ip_address") or dev.get("ip")
                 if not ip:
                     skipped.append({"ip": None, "reason": "no IP"})
@@ -999,6 +932,18 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     existing.status = "online"
                     existing.monitoring_status = True
                     existing.last_seen = datetime.utcnow()
+                    if source == "icmp":
+                        existing.topology_metadata = {
+                            **(existing.topology_metadata or {}),
+                            "discovery_source": "icmp",
+                        }
+                    else:
+                        persist_device_scalars(existing, dev)
+                        existing.topology_metadata = {
+                            **(existing.topology_metadata or {}),
+                            "discovery_source": "snmp",
+                        }
+                        persist_snmp_identity(existing, dev)
                     persist_collectors(existing.id, dev.get("collectors") or {})
                     added.append({"id": existing.id, "ip": ip, "hostname": existing.hostname, "updated": True})
                     continue
@@ -1019,7 +964,23 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     soft_deleted.monitoring_status = True
                     if payload.site_id is not None:
                         soft_deleted.site_id = payload.site_id
+                    soft_deleted.topology_metadata = {
+                        **(soft_deleted.topology_metadata or {}),
+                        "discovery_source": source,
+                    }
+                    if source != "icmp":
+                        persist_device_scalars(soft_deleted, dev)
+                        persist_snmp_identity(soft_deleted, dev)
                     persist_collectors(soft_deleted.id, dev.get("collectors") or {})
+                    create_device_added_alert(
+                        db,
+                        soft_deleted.id,
+                        soft_deleted.hostname,
+                        soft_deleted.ip_address,
+                        "SNMP" if source == "snmp" else "ICMP",
+                        soft_deleted.status,
+                        soft_deleted.mac_address,
+                    )
                     added.append({"id": soft_deleted.id, "ip": ip, "hostname": soft_deleted.hostname})
                     continue
 
@@ -1040,6 +1001,13 @@ def add_discovered_devices(payload: AddDevicesRequest):
                 )
                 db.add(device)
                 db.flush()
+                device.topology_metadata = {
+                    "discovery_source": source,
+                }
+                if source != "icmp":
+                    persist_device_scalars(device, dev)
+                    persist_snmp_identity(device, dev)
+
                 for row in dev.get("interfaces") or []:
                     index = row.get("ifIndex")
                     if index is None:
@@ -1062,6 +1030,15 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     temperature=float((dev.get("environment") or {}).get("temperature") or 0) if (dev.get("environment") or {}).get("temperature") is not None else None,
                 ))
                 persist_collectors(device.id, dev.get("collectors") or {})
+                create_device_added_alert(
+                    db,
+                    device.id,
+                    device.hostname,
+                    device.ip_address,
+                    "SNMP" if source == "snmp" else "ICMP",
+                    device.status,
+                    device.mac_address,
+                )
                 added.append({"id": device.id, "ip": ip, "hostname": hostname})
 
             db.commit()
@@ -1378,6 +1355,8 @@ def discovery_plan(payload: ScanPlanRequest):
         all_ips = rng.expand()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if len(all_ips) > MAX_DISCOVERY_HOSTS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="IP range cannot contain more than 255 addresses.")
 
     known_ips = [d.get("ip") for d in _load_inventory().get("devices", []) if d.get("ip")]
     new_ips, known_in_range = diff_against_known(all_ips, known_ips)

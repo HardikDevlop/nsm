@@ -4,7 +4,7 @@
  */
 import { useState } from 'react'
 import GlassCard from '../../../components/GlassCard'
-import { addDiscoveredDevices, discoverSNMP, type SNMPDiscoveryResponse } from '../../../lib/api'
+import { addDiscoveredDevices, discoverDevice, discoverSNMP, type SNMPDiscoveryResponse } from '../../../lib/api'
 import { toast } from '../../../lib/swal'
 
 // Import buildUrl and ensureAuth for API calls
@@ -38,6 +38,21 @@ const INPUT = "w-full rounded-lg px-3 py-2 font-mono text-xs outline-none"
 const INPUT_STYLE = { background: 'rgba(4,14,33,0.85)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' } as const
 const SEL_STYLE  = { background: '#041021', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' } as const
 
+function parseIPv4(value: string): number[] | null {
+  const parts = value.trim().split('.')
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return null
+  const numbers = parts.map(Number)
+  return numbers.every(part => part >= 0 && part <= 255) ? numbers : null
+}
+
+function ipv4ToNumber(parts: number[]): number {
+  return (((parts[0] * 256) + parts[1]) * 256 + parts[2]) * 256 + parts[3]
+}
+
+function numberToIPv4(value: number): string {
+  return [value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255].join('.')
+}
+
 /* ── SNMP result card ────────────────────────────────────────────────────── */
 function SNMPResultCard({
   ip, data, stored, onStore,
@@ -47,17 +62,17 @@ function SNMPResultCard({
   stored: boolean
   onStore: () => void
 }) {
-  const hostname  = clean(data.hostname ?? data.sysName, ip)
-  const descr     = clean(data.sysDescr ?? data.description)
-  const vendor    = clean(data.vendor ?? data.snmp_vendor)
-  const model     = clean(data.model)
-  const firmware  = clean(data.firmware_version ?? data.firmware)
-  const serial    = clean(data.serial_number ?? data.serial)
-  const uptime    = fmtUptime(data.uptime_seconds)
+  const colData = data.collectors as Record<string, {supported?: boolean; data?: Record<string, any>}> | undefined
+  const systemData = colData?.system?.data || {}
+  const hostname  = clean(data.hostname ?? data.sysName ?? systemData.hostname, ip)
+  const descr     = clean(data.sysDescr ?? data.description ?? systemData.description)
+  const vendor    = clean(data.vendor ?? data.snmp_vendor ?? systemData.vendor)
+  const model     = clean(data.model ?? systemData.model)
+  const uptimeData = (data.uptime_seconds ?? systemData.uptime_seconds ?? systemData.uptime) as any
+  const uptime    = fmtUptime(typeof uptimeData === 'object' ? uptimeData?.seconds : uptimeData)
   const version   = clean(data.snmp_version, 'SNMP')
 
   /* collectors data */
-  const colData = data.collectors as Record<string, {supported?: boolean; data?: Record<string, unknown>}> | undefined
   const cpu     = colData?.cpu?.data?.overall_percent as number | undefined
   const mem     = colData?.memory?.data?.utilization_percent as number | undefined
   const ifaces  = colData?.interfaces?.data as { interface_count?: number; up_count?: number } | undefined
@@ -71,7 +86,7 @@ function SNMPResultCard({
     { name: 'Environment', supported: colData?.environment?.supported ?? false },
     { name: 'LLDP', supported: colData?.lldp?.supported ?? false },
     { name: 'Routing', supported: colData?.routing?.supported ?? false },
-    { name: 'VLANs', supported: colData?.vlans?.supported ?? false },
+    { name: 'VLANs', supported: colData?.vlan?.supported ?? false },
   ]
 
   return (
@@ -113,8 +128,6 @@ function SNMPResultCard({
           { l: 'Vendor',    v: vendor },
           { l: 'Model',     v: model },
           { l: 'Uptime',    v: uptime },
-          { l: 'Serial',    v: serial },
-          { l: 'Firmware',  v: firmware },
           cpu  !== undefined ? { l: 'CPU',    v: `${cpu.toFixed(1)}%`,   c: cpu > 80 ? '#ff3366' : '#00ff88' } : null,
           mem  !== undefined ? { l: 'Memory', v: `${mem.toFixed(1)}%`,   c: mem > 85 ? '#ffaa00' : '#00ff88' } : null,
           ifaces ? { l: 'Interfaces', v: `${ifaces.up_count ?? 0}/${ifaces.interface_count ?? 0} up`, c: '#00d4ff' } : null,
@@ -169,6 +182,10 @@ export default function SNMPDiscoveryPanel({
   onCompleted?: () => Promise<void> | void
 }) {
   const [ips,             setIps]             = useState('192.168.100.1')
+  const [scanMode,        setScanMode]        = useState<'single' | 'range' | 'full'>('single')
+  const [rangeStart,      setRangeStart]      = useState('192.168.100.1')
+  const [rangeEnd,        setRangeEnd]        = useState('192.168.100.254')
+  const [fullPrefix,      setFullPrefix]      = useState('192.168.100')
   const [version,         setVersion]         = useState<'v2c'|'v3'>('v3')
   const [community,       setCommunity]       = useState('public')
   const [username,        setUsername]        = useState('Agnigate')
@@ -181,25 +198,78 @@ export default function SNMPDiscoveryPanel({
   const [busy,            setBusy]            = useState(false)
   const [response,        setResponse]        = useState<SNMPDiscoveryResponse | null>(null)
   const [storedIps,       setStoredIps]       = useState<Set<string>>(new Set())
+  const [scanProgress,    setScanProgress]    = useState({ scanned: 0, total: 0 })
 
   const run = async () => {
     setBusy(true)
     try {
-      const addresses = ips.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+      let addresses: string[] = []
+      if (scanMode === 'single') {
+        const single = parseIPv4(ips)
+        if (!single) {
+          toast.warning('Please enter one valid IPv4 address.')
+          setBusy(false)
+          return
+        }
+        addresses = [numberToIPv4(ipv4ToNumber(single))]
+      } else if (scanMode === 'range') {
+        const start = parseIPv4(rangeStart)
+        const end = parseIPv4(rangeEnd)
+        if (!start || !end || ipv4ToNumber(start) > ipv4ToNumber(end)) {
+          toast.warning('Enter a valid start and end IP range')
+          setBusy(false)
+          return
+        }
+        const first = ipv4ToNumber(start)
+        const last = ipv4ToNumber(end)
+        if (last - first + 1 > 255) {
+          toast.warning('IP range cannot be larger than 255 addresses')
+          setBusy(false)
+          return
+        }
+        addresses = Array.from({ length: last - first + 1 }, (_, index) => numberToIPv4(first + index))
+      } else {
+        const prefix = fullPrefix.trim().split('.')
+        if (prefix.length !== 3 || prefix.some(part => !/^\d+$/.test(part) || Number(part) < 0 || Number(part) > 255)) {
+          toast.warning('Full discovery needs a prefix like 192.168.100')
+          setBusy(false)
+          return
+        }
+        addresses = Array.from({ length: 255 }, (_, host) => `${prefix.join('.')}.${host}`)
+      }
       if (!addresses.length) { toast.warning('Enter at least one IP address'); setBusy(false); return }
-      const result = await discoverSNMP({
-        ips: addresses, snmp_version: version, timeout_seconds: Number(timeout) || 1,
-        communities: version === 'v2c' ? [community] : undefined,
-        username:    version === 'v3' ? username : null,
-        auth_protocol:    version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol    : null,
-        auth_password:    version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authPassword    : null,
-        privacy_protocol: version === 'v3' && securityLevel === 'authPriv'    ? privacyProtocol : null,
-        privacy_password: version === 'v3' && securityLevel === 'authPriv'    ? privacyPassword : null,
-        security_level: version === 'v3' ? securityLevel : null,
-      })
-      setResponse(result)
+      setResponse(null)
       setStoredIps(new Set())
-      toast.success(`${result.count}/${result.scanned} device(s) responded to SNMP`)
+      setScanProgress({ scanned: 0, total: addresses.length })
+      const batchSize = scanMode === 'single' ? addresses.length : 32
+      let scanned = 0
+      let results: Record<string, Record<string, unknown>> = {}
+      for (let offset = 0; offset < addresses.length; offset += batchSize) {
+        const batch = addresses.slice(offset, offset + batchSize)
+        let result: SNMPDiscoveryResponse | null = null
+        try {
+          result = await discoverSNMP({
+            ips: batch, snmp_version: version, timeout_seconds: Number(timeout) || 1,
+            communities: version === 'v2c' ? [community] : undefined,
+            username:    version === 'v3' ? username : null,
+            auth_protocol:    version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol    : null,
+            auth_password:    version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authPassword    : null,
+            privacy_protocol: version === 'v3' && securityLevel === 'authPriv'    ? privacyProtocol : null,
+            privacy_password: version === 'v3' && securityLevel === 'authPriv'    ? privacyPassword : null,
+            security_level: version === 'v3' ? securityLevel : null,
+          })
+        } catch {
+          // Continue scanning when one batch has no responding devices.
+        }
+        if (result) {
+          results = { ...results, ...result.results }
+          setResponse({ scanned: scanned + batch.length, count: Object.keys(results).length, results })
+        }
+        scanned += batch.length
+        setScanProgress({ scanned, total: addresses.length })
+      }
+      setResponse({ scanned: addresses.length, count: Object.keys(results).length, results })
+      toast.success(`${Object.keys(results).length}/${addresses.length} device(s) responded to SNMP`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'SNMP discovery failed')
     }
@@ -224,10 +294,35 @@ export default function SNMPDiscoveryPanel({
         }
       })
       
-      const saved = await addDiscoveredDevices({ devices, site_id: null })
+      const saved = await addDiscoveredDevices({
+        devices,
+        site_id: null,
+        discovery_source: 'snmp',
+        snmp_version: version,
+        communities: version === 'v2c' ? [community] : undefined,
+        username: version === 'v3' ? username : null,
+        auth_protocol: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol : null,
+        auth_password: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authPassword : null,
+        privacy_protocol: version === 'v3' && securityLevel === 'authPriv' ? privacyProtocol : null,
+        privacy_password: version === 'v3' && securityLevel === 'authPriv' ? privacyPassword : null,
+        security_level: version === 'v3' ? securityLevel : null,
+      })
       const ips = Object.keys(response.results)
       setStoredIps(new Set(ips))
       toast.success(`${saved.added_count} device(s) saved, ${saved.skipped_count} skipped`)
+
+      // The scan endpoint is intentionally identity-only. Run the persisted
+      // device discovery next so the details page receives fresh capabilities
+      // and collected metrics instead of only the system collector.
+      await Promise.all((saved.added || []).map(async addedDevice => {
+        const deviceId = Number((addedDevice as any).id)
+        if (!deviceId) return
+        try {
+          await discoverDevice(deviceId)
+        } catch (err) {
+          console.warn(`Full SNMP discovery failed for device ${deviceId}`, err)
+        }
+      }))
       
       // Start monitoring for all saved devices automatically
       if (saved.added && saved.added.length > 0) {
@@ -278,8 +373,30 @@ export default function SNMPDiscoveryPanel({
         capabilities // Include capabilities in payload
       }
       
-      const saved = await addDiscoveredDevices({ devices: [devicePayload], site_id: null })
+      const saved = await addDiscoveredDevices({
+        devices: [devicePayload],
+        site_id: null,
+        discovery_source: 'snmp',
+        snmp_version: version,
+        communities: version === 'v2c' ? [community] : undefined,
+        username: version === 'v3' ? username : null,
+        auth_protocol: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol : null,
+        auth_password: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authPassword : null,
+        privacy_protocol: version === 'v3' && securityLevel === 'authPriv' ? privacyProtocol : null,
+        privacy_password: version === 'v3' && securityLevel === 'authPriv' ? privacyPassword : null,
+        security_level: version === 'v3' ? securityLevel : null,
+      })
       setStoredIps(prev => new Set([...prev, ip]))
+
+      // Complete the identity-only scan before opening the device details.
+      const addedDevice = saved.added?.[0] as any
+      if (addedDevice?.id) {
+        try {
+          await discoverDevice(Number(addedDevice.id))
+        } catch (err) {
+          console.warn(`Full SNMP discovery failed for device ${addedDevice.id}`, err)
+        }
+      }
       
       if (saved.added_count > 0) {
         toast.success(`${ip} saved to database`)
@@ -339,24 +456,46 @@ export default function SNMPDiscoveryPanel({
       {/* header */}
       <div className="flex items-center justify-between gap-2 mb-4">
         <div>
-          <div className="font-display font-bold text-sm tracking-wider neon-cyan">SNMP DEVICE DISCOVERY</div>
+          <div className="font-display font-bold text-sm tracking-wider neon-cyan">DISCOVER SNMP DEVICES</div>
           <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
-            Discover and store devices dynamically via SNMP polling
+            Scan a single IP or range, verify the response, and add devices to monitoring.
           </div>
         </div>
         <span className="font-mono text-[10px] px-2 py-1 rounded"
           style={{ color: busy ? '#ffaa00' : '#00ff88', background: busy ? 'rgba(255,170,0,0.1)' : 'rgba(0,255,136,0.1)', border: `1px solid ${busy ? 'rgba(255,170,0,0.3)' : 'rgba(0,255,136,0.3)'}` }}>
-          {busy ? '● POLLING…' : '● READY'}
+          {busy ? `● SCANNING ${scanProgress.scanned}/${scanProgress.total}` : '● READY'}
         </span>
       </div>
 
       {/* inputs */}
       <div className={`grid gap-2 ${compact ? 'md:grid-cols-2' : 'md:grid-cols-3 xl:grid-cols-4'}`}>
-        <div className="md:col-span-2">
-          <input value={ips} onChange={e => setIps(e.target.value)}
-            placeholder="IP addresses, e.g. 192.168.1.1, 192.168.1.10"
+        <select value={scanMode} onChange={e => setScanMode(e.target.value as 'single' | 'range' | 'full')}
+          className="rounded-lg px-2 py-2 font-mono text-xs" style={SEL_STYLE}>
+          <option value="single">SINGLE IP</option>
+          <option value="range">IP RANGE</option>
+          <option value="full">FULL DISCOVERY (0-255)</option>
+        </select>
+        {scanMode === 'single' && <div className="md:col-span-2">
+          <input value={ips} onChange={e => setIps(e.target.value.replace(/[^\d.]/g, ''))}
+            placeholder="Single IPv4, e.g. 192.168.1.10"
             className={INPUT} style={INPUT_STYLE}/>
-        </div>
+          <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
+            Enter one address only. Range mode allows 192.168.1.1 to 192.168.1.255 (maximum 255 IPs).
+          </div>
+        </div>}
+        {scanMode === 'range' && <>
+          <input value={rangeStart} onChange={e => setRangeStart(e.target.value.replace(/[^\d.]/g, ''))}
+            placeholder="Start: 192.168.1.1" className={INPUT} style={INPUT_STYLE}/>
+          <input value={rangeEnd} onChange={e => setRangeEnd(e.target.value.replace(/[^\d.]/g, ''))}
+            placeholder="End: 192.168.1.255" className={INPUT} style={INPUT_STYLE}/>
+        </>}
+        {scanMode === 'full' && <div className="md:col-span-2">
+          <input value={fullPrefix} onChange={e => setFullPrefix(e.target.value.replace(/[^\d.]/g, ''))}
+            placeholder="Network prefix, e.g. 192.168.100" className={INPUT} style={INPUT_STYLE}/>
+          <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
+            Scans {fullPrefix || 'x.x.x'}.0 through {fullPrefix || 'x.x.x'}.254 (maximum 255 IPs).
+          </div>
+        </div>}
         <select value={version} onChange={e => setVersion(e.target.value as 'v2c'|'v3')}
           className="rounded-lg px-2 py-2 font-mono text-xs" style={SEL_STYLE}>
           <option value="v3">SNMPv3</option>

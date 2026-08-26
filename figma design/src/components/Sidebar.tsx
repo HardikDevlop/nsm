@@ -2,6 +2,7 @@ import { NavLink } from 'react-router'
 import { useEffect, useMemo, useState } from 'react'
 import { useTheme } from './ThemeContext'
 import { useAuth } from './AuthContext'
+import { requestJson, type DashboardSummary } from '../lib/api'
 
 type Props = { 
   collapsed: boolean
@@ -23,6 +24,7 @@ const nav = [
   // { to: '/firewall', label: 'Firewall', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', permission: 'firewall:read' },
   { to: '/snmp/devices', label: 'SNMP Devices', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z', permission: 'devices:read' },
   { to: '/servers', label: 'Server Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2', permission: 'server_monitoring:read' },
+  { to: '/linux-servers', label: 'Linux Server Monitoring', icon: 'M4 5h16v14H4zM8 9h8M8 13h5', permission: 'linux_servers:read' },
   // { to: '/forensics', label: 'Forensics', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z', permission: 'forensics:read' },
   // { to: '/compliance', label: 'Compliance', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4', permission: 'compliance:read' },
   
@@ -43,6 +45,7 @@ const nav = [
   { to: '/device-types', label: 'Device Types', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z', permission: 'device_types:read', admin: true },
   { to: '/device-credentials', label: 'Device Credentials', icon: 'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z', permission: 'device_credentials:read', admin: true },
   { to: '/audit-logs', label: 'Audit Logs', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01', permission: 'audit_logs:read', admin: true },
+  { to: '/reports/management', label: 'Report Management', icon: 'M4 5h16v14H4zM7 9h10M7 13h6M7 17h4', permission: 'reports:read', admin: true },
   { to: '/reports/daily', label: 'Daily Report', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', permission: 'reports:read', admin: true },
 ]
 
@@ -55,20 +58,60 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
   const [totalDevices, setTotalDevices] = useState(0)
 
   // Filter nav items by permission
-  const visibleNav = useMemo(() => nav.filter(item => hasPermission(item.permission)), [hasPermission])
+  const visibleNav = useMemo(() => nav.filter(item => item.to !== '/servers' && hasPermission(item.permission)), [hasPermission])
 
   useEffect(() => {
     const summary = window.sessionStorage.getItem('nms.dashboard.summary.v1')
-    if (!summary) return
-    try {
-      const parsed = JSON.parse(summary) as { total_devices?: number; online_devices?: number }
-      const total = parsed.total_devices ?? 0
-      const online = parsed.online_devices ?? 0
-      setTotalDevices(total)
-      setOnlineCount(online)
-      setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
-    } catch {
-      // ignore bad cache
+    if (summary) {
+      try {
+        const parsed = JSON.parse(summary) as { total_devices?: number; online_devices?: number }
+        const total = parsed.total_devices ?? 0
+        const online = parsed.online_devices ?? 0
+        setTotalDevices(total)
+        setOnlineCount(online)
+        setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
+      } catch {
+        // Ignore a malformed optional cache and use the live request below.
+      }
+    }
+
+    let mounted = true
+    let controller: AbortController | null = null
+    let inFlight = false
+
+    const loadLiveStatus = async () => {
+      if (!mounted || inFlight || document.visibilityState !== 'visible') return
+      inFlight = true
+      controller?.abort()
+      controller = new AbortController()
+      try {
+        const live = await requestJson<DashboardSummary>('/dashboard/summary', { signal: controller.signal })
+        if (!mounted) return
+        const total = live.total_devices ?? 0
+        const online = live.online_devices ?? 0
+        setTotalDevices(total)
+        setOnlineCount(online)
+        setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'AbortError')) {
+          // Keep the last known values if the live summary is temporarily unavailable.
+        }
+      } finally {
+        inFlight = false
+      }
+    }
+
+    void loadLiveStatus()
+    const timer = window.setInterval(() => { void loadLiveStatus() }, 15_000)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void loadLiveStatus()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      mounted = false
+      clearInterval(timer)
+      controller?.abort()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
 
@@ -93,7 +136,6 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
     '/packet-analysis': () => import('../pages/PacketAnalysis'),
     '/nginx': () => import('../pages/NginxMonitoring'),
     '/firewall': () => import('../pages/Firewall'),
-    '/servers': () => import('../pages/ServerMonitoring'),
     '/forensics': () => import('../pages/Forensics'),
     '/compliance': () => import('../pages/Compliance'),
     '/alerts-management': () => import('../pages/AlertsManagement'),
@@ -107,6 +149,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
     '/organizations': () => import('../pages/Organizations'),
     '/sites': () => import('../pages/Sites'),
     '/vendors': () => import('../pages/Vendors'),
+    '/reports/management': () => import('../pages/ReportManagement'),
     '/reports/daily': () => import('../pages/DailyReport'),
     '/audit-logs': () => import('../pages/AuditLogs'),
     '/device-credentials': () => import('../pages/DeviceCredentials'),
