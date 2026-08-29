@@ -107,8 +107,6 @@ def get_overview(
 
     # ── latest metric per device (one query) ──────────────────────────────
     from sqlalchemy import func  # noqa: PLC0415
-    from sqlalchemy.orm import aliased  # noqa: PLC0415
-
     # Subquery: max metric id per device
     sub = (
         db.query(

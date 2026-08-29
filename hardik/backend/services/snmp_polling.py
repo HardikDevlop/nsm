@@ -14,14 +14,12 @@ import asyncio
 import logging
 import time
 from zoneinfo import ZoneInfo
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.database.session import SessionLocal

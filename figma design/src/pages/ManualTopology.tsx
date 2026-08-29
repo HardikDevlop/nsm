@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { useBlocker } from "react-router"
 import GlassCard from "../components/GlassCard"
 import {
   createManualTopologySnapshot,
@@ -43,8 +44,36 @@ type Link = {
   toPort?: string
   geometry?: "straight" | "curved"
 }
-type Workspace = { devices: Device[] links: Link[] }
+type Workspace = { devices: Device[]; links: Link[] }
+type VerificationStatus =
+  | "VERIFIED"
+  | "DISCONNECTED"
+  | "UNEXPECTED"
+  | "PORT_MISMATCH"
+  | "DEVICE_OFFLINE"
+  | "UNKNOWN"
+type ActualTopology = {
+  devices: Array<Record<string, unknown>>
+  links: Array<Record<string, unknown>>
+  timestamp?: string | null
+}
+type ConfirmRequest = {
+  title: string
+  description: string
+  details: Array<[string, string]>
+  confirmLabel: string
+  tone: "amber" | "red" | "green"
+  secondStep?: {
+    title: string
+    description: string
+    confirmLabel: string
+  }
+  onConfirm: () => void
+}
+type ContextMenuState = { x: number; y: number; deviceId?: string; linkId?: string }
 const FALLBACK_PORT = "Port 1"
+const CANVAS_WIDTH = 1440
+const CANVAS_HEIGHT = 900
 
 function linkUsesPort(link: Link, deviceId: string, port: string) {
   return (
@@ -104,17 +133,43 @@ const STORAGE_KEY = "nms.manual-topology.workspace.v2"
 const LEGACY_STORAGE_KEY = "nms.manual-topology.workspace.v1"
 const OFFLINE_ALERT_KEY = "nms.device-health.offline-alerts.v1"
 const tones = [
-  "#f97316",
-  "#ff3366",
-  "#00d4ff",
-  "#38bdf8",
-  "#a78bfa",
-  "#00ff88",
-  "#facc15",
+  "#c8c1b4",
+  "#9bb5a3",
+  "#b7c0ba",
+  "#d0a65a",
+  "#8eaaa0",
+  "#d8d2c6",
+  "#b98d71",
 ]
-const PEN_COLOR = "#f4f1ea"
-const PEN_SURFACE = "rgba(244,241,234,.10)"
-const PEN_BORDER = "rgba(244,241,234,.58)"
+const PEN_COLOR = "var(--t-accent)"
+const PEN_SURFACE = "var(--t-accent-alpha)"
+const PEN_BORDER = "var(--t-accent-border)"
+
+const paletteItems = [
+  ["Firewall", "Firewall"],
+  ["Router", "Router"],
+  ["Switch", "Switch"],
+  ["Server", "Server"],
+  ["NVR", "NVR"],
+  ["Camera", "Camera"],
+  ["Access Point", "Access Point"],
+  ["Wireless", "Wireless"],
+  ["Cloud", "Internet / Cloud"],
+  ["Generic device", "Network device"],
+  ["Others", "Network device"],
+] as const
+
+function inventoryCategory(device: SNMPDeviceListItem) {
+  const value = `${device.device_type || ""} ${device.hostname || ""} ${device.name || ""} ${device.model || ""}`.toLowerCase()
+  if (value.includes("firewall") || value.includes("fortigate") || value.includes("palo alto")) return "Firewall"
+  if (value.includes("router") || value.includes("gateway") || value.includes("mikrotik")) return "Router"
+  if (value.includes("switch") || value.includes("catalyst") || value.includes("nexus")) return "Switch"
+  if (value.includes("nvr") || value.includes("dvr") || value.includes("video recorder")) return "NVR"
+  if (value.includes("camera") || value.includes("cctv") || value.includes("ipcam")) return "Camera"
+  if (value.includes("access point") || value.includes("wireless") || value.includes("wifi") || value.includes("wap")) return "Access Point"
+  if (value.includes("server")) return "Server"
+  return "Others"
+}
 
 const initialWorkspace: Workspace = {
   devices: [
@@ -282,6 +337,54 @@ function DeviceGlyph({ type, tone }: { type: string; tone: string }) {
   return <g {...common}><rect x="18" y="19" width="12" height="9" rx="1.5" /><path d="M22 30h4M20 32h8" /></g>
 }
 
+function SafetyConfirmDialog({
+  request,
+  step,
+  onCancel,
+  onConfirm,
+}: {
+  request: ConfirmRequest
+  step: 1 | 2
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const secondStep = step === 2 && request.secondStep
+  const accent = request.tone === "red" ? "#d87b73" : request.tone === "green" ? "#9bb5a3" : "#d0a65a"
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" role="presentation">
+      <div
+        className="w-full max-w-lg rounded-xl p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="topology-confirm-title"
+        style={{ background: "#171b1a", border: `1px solid ${accent}88`, color: "#e7e1d5" }}
+      >
+        <div className="flex gap-3">
+          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ color: accent, background: `${accent}18` }} aria-hidden="true">
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5M12 17h.01" /></svg>
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 id="topology-confirm-title" className="font-display text-lg font-semibold">{secondStep ? request.secondStep?.title : request.title}</h2>
+            <p className="mt-1 font-mono text-xs leading-relaxed" style={{ color: "#a8b0aa" }}>{secondStep ? request.secondStep?.description : request.description}</p>
+          </div>
+        </div>
+        <div className="mt-4 space-y-2 rounded-lg p-3" style={{ background: "#101413", border: "1px solid rgba(231,225,213,.1)" }}>
+          {request.details.map(([label, value]) => (
+            <div key={label} className="grid grid-cols-[7rem_1fr] gap-3 font-mono text-[10px]">
+              <span className="uppercase" style={{ color: "#7f8982" }}>{label}</span>
+              <span className="break-words" style={{ color: "#e7e1d5" }}>{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className="rounded-md px-4 py-2 font-mono text-[10px] uppercase" style={{ color: "#b7c0ba", border: "1px solid rgba(231,225,213,.18)" }}>Cancel</button>
+          <button type="button" onClick={onConfirm} className="rounded-md px-4 py-2 font-mono text-[10px] font-bold uppercase" style={{ color: "#101413", background: accent }}>{secondStep ? request.secondStep?.confirmLabel : request.secondStep ? "Review & Confirm" : request.confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function wrapDeviceName(name: string, maxChars: number) {
   const words = name.trim().split(/\s+/).filter(Boolean)
   if (!words.length) return ["DEVICE"]
@@ -350,21 +453,23 @@ function NodeCard({
   onHoverChange,
   showTargetPorts,
   warning,
+  onContextMenu,
 }: {
   device: Device
   selected: boolean
-  onClick: () => void
+  onClick: (event: React.MouseEvent<SVGGElement>) => void
   expanded: boolean
   onTogglePorts: () => void
   onPortClick: (port: string) => void
   onPortPointerDown: (port: string) => void
   onDragStart: (event: React.PointerEvent<SVGGElement>) => void
   onResizeStart: (event: React.PointerEvent<SVGGElement>) => void
-  sourcePort: { deviceId: string port: string } | null
+  sourcePort: { deviceId: string; port: string } | null
   hovered: boolean
   onHoverChange: (hovered: boolean) => void
   showTargetPorts: boolean
   warning: boolean
+  onContextMenu: (event: React.MouseEvent<SVGGElement>) => void
 }) {
   const ports = Array.isArray(device.ports) && device.ports.length > 0 ? device.ports : [FALLBACK_PORT]
   // Keep saved cards visually consistent while preserving a small resize range.
@@ -396,26 +501,20 @@ function NodeCard({
   const subtitleMaxLength = Math.max(18, Math.floor((width - 58) / 5))
   const typeLabel = device.type.trim().toUpperCase() || "DEVICE"
   const typeTextLength = Math.min(58, Math.max(32, width - 108))
-  const casingFill = selected ? "var(--t-card, #0f0f0f)" : "var(--t-card, #0f0f0f)"
+  const casingFill = "var(--topology-node)"
   const bezelFill = hovered
-    ? "var(--t-accent-alpha, rgba(14, 165, 233, .15))"
-    : "var(--t-border-light, rgba(148, 163, 184, .08))"
+    ? "var(--topology-node-highlight)"
+    : "transparent"
   return (
     <g
       transform={`translate(${device.x - width / 2}, ${device.y - height / 2})`}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       onPointerDown={onDragStart}
       onMouseEnter={() => onHoverChange(true)}
       onMouseLeave={() => onHoverChange(false)}
-      className="cursor-pointer"
+      className="cursor-grab"
     >
-      <defs>
-        <linearGradient id={`device-gloss-${device.id}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity=".10" />
-          <stop offset="45%" stopColor="#ffffff" stopOpacity=".03" />
-          <stop offset="100%" stopColor="#000000" stopOpacity=".14" />
-        </linearGradient>
-      </defs>
       <rect
         x="1"
         y="1"
@@ -428,16 +527,7 @@ function NodeCard({
         strokeOpacity=".95"
         filter="url(#topologyGlow)"
       />
-      <rect
-        x="1"
-        y="1"
-        width={width - 2}
-        height={height - 2}
-        rx="14"
-        fill={`url(#device-gloss-${device.id})`}
-        opacity=".9"
-      />
-    
+      <rect x="2" y="2" width="5" height={height - 4} rx="2.5" fill={device.tone} />
       <rect x="9" y="1" width={width - 10} height="6" rx="3" fill={bezelFill} />
       
       <circle cx="24" cy="24" r="10" fill={device.tone} fillOpacity=".14" stroke={device.tone} />
@@ -464,6 +554,10 @@ function NodeCard({
         fontFamily="JetBrains Mono, monospace"
       >
         {device.subtitle.slice(0, subtitleMaxLength)}
+      </text>
+      <circle cx="48" cy={height - 14} r="3" fill={portStatus(ports[0]) === "down" ? "#dc2626" : portStatus(ports[0]) === "up" ? "#059669" : "var(--t-muted)"} />
+      <text x="56" y={height - 11} fill="var(--t-muted)" fontSize="6.5" fontFamily="JetBrains Mono, monospace" letterSpacing=".3">
+        {downCount > 0 ? `${downCount} PORT${downCount === 1 ? "" : "S"} DOWN` : `${upCount || ports.length} PORT${(upCount || ports.length) === 1 ? "" : "S"} READY`}
       </text>
       <text
         x={labelEndX}
@@ -697,6 +791,7 @@ function NodeCard({
 export default function ManualTopology() {
   const [workspace, setWorkspace] = useState<Workspace>(() => loadWorkspace())
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [connectFrom, setConnectFrom] = useState<string | null>(null)
   const [connectMode, setConnectMode] = useState(false)
   const [sourcePort, setSourcePort] = useState<{
@@ -719,8 +814,29 @@ export default function ManualTopology() {
   const loadedInterfaceDevices = useRef(new Set<number>())
   const svgRef = useRef<SVGSVGElement | null>(null)
   const workspaceGridRef = useRef<HTMLDivElement | null>(null)
+  const canvasScrollRef = useRef<HTMLDivElement | null>(null)
   const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false)
   const [canvasZoom, setCanvasZoom] = useState(1)
+  const [canvasPan, setCanvasPan] = useState({ x: 0, y: 0 })
+  const [canvasViewport, setCanvasViewport] = useState({
+    x: 0,
+    y: 0,
+    width: CANVAS_WIDTH,
+    height: CANVAS_HEIGHT,
+  })
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false)
+  const [expandedPaletteCategories, setExpandedPaletteCategories] = useState<Record<string, boolean>>({})
+  const [snapToGrid, setSnapToGrid] = useState(true)
+  const [selectionBox, setSelectionBox] = useState<{
+    start: { x: number; y: number }
+    end: { x: number; y: number }
+  } | null>(null)
+  const [panState, setPanState] = useState<{
+    startX: number
+    startY: number
+    originX: number
+    originY: number
+  } | null>(null)
   const [dragState, setDragState] = useState<{
     id: string
     offsetX: number
@@ -736,16 +852,99 @@ export default function ManualTopology() {
   const [snapshotId, setSnapshotId] = useState<number | null>(null)
   const [topologyChanges, setTopologyChanges] =
     useState<ManualTopologyChange[]>([])
+  const [actualTopology, setActualTopology] = useState<ActualTopology | null>(null)
   const [reconcileLoading, setReconcileLoading] = useState(false)
   const [reconcileError, setReconcileError] = useState<string | null>(null)
   const [editing, setEditing] = useState<Device | null>(null)
   const [activeView, setActiveView] = useState<"physical" | "logical">(
     "physical",
   )
+  const [verificationView, setVerificationView] = useState<"manual" | "actual" | "compare">("compare")
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
+  const [confirmStep, setConfirmStep] = useState<1 | 2>(1)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [deviceTypeFilter, setDeviceTypeFilter] = useState("all")
+  const [healthFilter, setHealthFilter] = useState("all")
+  const [verificationFilter, setVerificationFilter] = useState("all")
+  const [onlyMismatches, setOnlyMismatches] = useState(false)
+  const [onlyOffline, setOnlyOffline] = useState(false)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [checked, setChecked] = useState<boolean[]>(
     checklistItems.map(() => false),
   )
   const alertedOfflineIps = useRef(new Set<string>())
+  const historyRef = useRef<Workspace[]>([])
+  const futureRef = useRef<Workspace[]>([])
+  const historyApplyingRef = useRef(false)
+  const lastWorkspaceRef = useRef(JSON.stringify(workspace))
+  const persistedWorkspaceRef = useRef(JSON.stringify(workspace))
+  const latestWorkspaceRef = useRef(workspace)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const navigationBlocker = useBlocker(hasUnsavedChanges)
+
+  const requestConfirmation = (request: ConfirmRequest) => {
+    setConfirmStep(1)
+    setConfirmRequest(request)
+  }
+
+  const syncCanvasViewport = () => {
+    const container = canvasScrollRef.current
+    const svg = svgRef.current
+    if (!container || !svg) return
+    const rect = svg.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+
+    const viewBoxWidth = CANVAS_WIDTH / canvasZoom
+    const viewBoxHeight = CANVAS_HEIGHT / canvasZoom
+
+    setCanvasViewport({
+      x:
+        CANVAS_WIDTH / 2 -
+        CANVAS_WIDTH / (2 * canvasZoom) -
+        canvasPan.x +
+        (container.scrollLeft / rect.width) * viewBoxWidth,
+      y:
+        CANVAS_HEIGHT / 2 -
+        CANVAS_HEIGHT / (2 * canvasZoom) -
+        canvasPan.y +
+        (container.scrollTop / rect.height) * viewBoxHeight,
+      width: (container.clientWidth / rect.width) * viewBoxWidth,
+      height: (container.clientHeight / rect.height) * viewBoxHeight,
+    })
+  }
+
+  const cancelConfirmation = () => {
+    setConfirmRequest(null)
+    setConfirmStep(1)
+  }
+
+  const confirmPendingChange = () => {
+    if (!confirmRequest) {
+      if (navigationBlocker.state === "blocked") navigationBlocker.proceed()
+      return
+    }
+    if (confirmStep === 1 && confirmRequest.secondStep) {
+      setConfirmStep(2)
+      return
+    }
+    const action = confirmRequest.onConfirm
+    cancelConfirmation()
+    action()
+  }
+
+  useEffect(() => {
+    const serialized = JSON.stringify(workspace)
+    latestWorkspaceRef.current = workspace
+    setHasUnsavedChanges(serialized !== persistedWorkspaceRef.current)
+    if (serialized === lastWorkspaceRef.current) return
+    if (!historyApplyingRef.current) {
+      historyRef.current = [...historyRef.current, JSON.parse(lastWorkspaceRef.current) as Workspace].slice(-30)
+      futureRef.current = []
+    }
+    historyApplyingRef.current = false
+    lastWorkspaceRef.current = serialized
+  }, [workspace])
 
   useEffect(() => {
     try {
@@ -764,6 +963,30 @@ export default function ManualTopology() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace))
   }, [workspace])
   useEffect(() => {
+    syncCanvasViewport()
+  }, [canvasPan.x, canvasPan.y, canvasZoom, isCanvasFullscreen, workspace.devices.length, activeView])
+  useEffect(() => {
+    const container = canvasScrollRef.current
+    if (!container) return
+    const handleScroll = () => syncCanvasViewport()
+    const handleResize = () => syncCanvasViewport()
+    container.addEventListener("scroll", handleScroll, { passive: true })
+    window.addEventListener("resize", handleResize)
+    return () => {
+      container.removeEventListener("scroll", handleScroll)
+      window.removeEventListener("resize", handleResize)
+    }
+  }, [canvasPan.x, canvasPan.y, canvasZoom, isCanvasFullscreen, activeView])
+  useEffect(() => {
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges) return
+      event.preventDefault()
+      event.returnValue = ""
+    }
+    window.addEventListener("beforeunload", warnBeforeUnload)
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload)
+  }, [hasUnsavedChanges])
+  useEffect(() => {
     void getLatestManualTopologySnapshot()
       .then((snapshot) => {
         if (!snapshot) return
@@ -781,7 +1004,12 @@ export default function ManualTopology() {
         ? updateManualTopologySnapshot(snapshotId, workspace)
         : createManualTopologySnapshot(workspace)
       void request
-        .then((snapshot) => setSnapshotId(snapshot.id))
+        .then((snapshot) => {
+          setSnapshotId(snapshot.id)
+          const savedWorkspace = JSON.stringify(workspace)
+          persistedWorkspaceRef.current = savedWorkspace
+          if (JSON.stringify(latestWorkspaceRef.current) === savedWorkspace) setHasUnsavedChanges(false)
+        })
         .catch(() => undefined)
     }, 900)
     return () => window.clearTimeout(timer)
@@ -793,6 +1021,13 @@ export default function ManualTopology() {
       void reconcileManualTopology(snapshotId)
         .then((result) => {
           setTopologyChanges(result.changes ?? [])
+          if (result.live) {
+            setActualTopology({
+              devices: Array.isArray(result.live.devices) ? result.live.devices : [],
+              links: Array.isArray(result.live.links) ? result.live.links : [],
+              timestamp: result.last_reconciled_at,
+            })
+          }
           setReconcileError(null)
         })
         .catch((error) =>
@@ -956,6 +1191,156 @@ export default function ManualTopology() {
     () => new Map(workspace.devices.map((device) => [device.id, device])),
     [workspace.devices],
   )
+  const actualDevices = useMemo<Device[]>(() => {
+    if (!actualTopology) return []
+    return actualTopology.devices.map((raw, index) => {
+      const backendId = Number(raw.id ?? raw.device_id)
+      const existing = workspace.devices.find((device) => device.backendId === backendId)
+      return {
+        ...(existing ?? {}),
+        id: existing?.id ?? `actual-${String(raw.id ?? index)}`,
+        backendId: Number.isFinite(backendId) ? backendId : undefined,
+        name: String(raw.display_name ?? raw.hostname ?? raw.sys_name ?? raw.name ?? `DEVICE ${index + 1}`),
+        subtitle: String(raw.ip_address ?? raw.ip ?? existing?.subtitle ?? "SNMP device"),
+        ipAddress: String(raw.ip_address ?? raw.ip ?? existing?.ipAddress ?? ""),
+        type: String(raw.type ?? raw.device_type ?? raw.vendor ?? existing?.type ?? "Network device"),
+        tone: existing?.tone ?? tones[index % tones.length],
+        status: deviceHealth[backendId] === false ? "offline" : String(raw.status ?? existing?.status ?? "unknown"),
+        x: existing?.x ?? 150 + (index % 4) * 220,
+        y: existing?.y ?? 120 + Math.floor(index / 4) * 120,
+      }
+    })
+  }, [actualTopology, deviceHealth, workspace.devices])
+  const actualDeviceById = useMemo(
+    () => new Map(actualDevices.map((device) => [device.id, device])),
+    [actualDevices],
+  )
+  const actualLinks = useMemo<Link[]>(() => {
+    if (!actualTopology) return []
+    return actualTopology.links.map((raw, index) => {
+      const from = String(raw.from ?? raw.source_node ?? raw.source_device_id ?? "")
+      const to = String(raw.to ?? raw.target_node ?? raw.target_device_id ?? "")
+      const fromDevice = actualDevices.find((device) => String(device.id) === from || String(device.backendId) === from)
+      const toDevice = actualDevices.find((device) => String(device.id) === to || String(device.backendId) === to)
+      const fromPort = String(raw.fromPort ?? raw.source_port ?? raw.local_port ?? "")
+      const toPort = String(raw.toPort ?? raw.target_port ?? raw.remote_port ?? "")
+      return {
+        id: `actual-link-${String(raw.id ?? index)}`,
+        from: fromDevice?.id ?? from,
+        to: toDevice?.id ?? to,
+        fromPort,
+        toPort,
+        label: String(raw.label ?? `${fromPort || "unknown port"} → ${toPort || "unknown port"}`),
+        geometry: "curved",
+      }
+    }).filter((link) => actualDeviceById.has(link.from) && actualDeviceById.has(link.to))
+  }, [actualTopology, actualDevices, actualDeviceById])
+  const endpointKey = (deviceId: string, port?: string) => `${deviceId}::${String(port ?? "").trim().toLowerCase()}`
+  const devicePairKey = (link: Link) => [link.from, link.to].sort().join("::")
+  const linkKey = (link: Link) => [endpointKey(link.from, link.fromPort), endpointKey(link.to, link.toPort)].sort().join("||")
+  const verification = useMemo(() => {
+    const manual = workspace.links.map((link) => {
+      const from = deviceById.get(link.from)
+      const to = deviceById.get(link.to)
+      const offline = [from, to].some((device) => device?.backendId != null && deviceHealth[device.backendId] === false)
+      let status: VerificationStatus = "UNKNOWN"
+      if (offline) status = "DEVICE_OFFLINE"
+      else if (!actualTopology) status = "UNKNOWN"
+      else if (!link.fromPort || !link.toPort) status = "UNKNOWN"
+      else if (actualLinks.some((candidate) => linkKey(candidate) === linkKey(link))) status = "VERIFIED"
+      else if (actualLinks.some((candidate) => devicePairKey(candidate) === devicePairKey(link))) status = "PORT_MISMATCH"
+      else status = "DISCONNECTED"
+      return { id: link.id, status, manualLink: link, actualLink: actualLinks.find((candidate) => devicePairKey(candidate) === devicePairKey(link)) }
+    })
+    const manualKeys = new Set(manual.map((item) => item.actualLink ? linkKey(item.actualLink) : ""))
+    const unexpected = actualLinks
+      .filter((link) => !manualKeys.has(linkKey(link)) && !manual.some((item) => devicePairKey(item.manualLink) === devicePairKey(link)))
+      .map((link) => ({ id: link.id, status: "UNEXPECTED" as VerificationStatus, actualLink: link }))
+    return [...manual, ...unexpected]
+  }, [actualLinks, actualTopology, deviceById, deviceHealth, workspace.links])
+  const verificationCounts = {
+    total: workspace.links.length,
+    verified: verification.filter((item) => item.status === "VERIFIED").length,
+    issues: verification.filter((item) => item.status !== "VERIFIED").length,
+    unexpected: verification.filter((item) => item.status === "UNEXPECTED").length,
+    offline: new Set(verification.filter((item) => item.status === "DEVICE_OFFLINE").flatMap((item) => [item.manualLink?.from, item.manualLink?.to].filter(Boolean))).size,
+  }
+  const statusMeta = (status: VerificationStatus) => ({
+    VERIFIED: { label: "VERIFIED", color: "#79c69a", icon: "✓" },
+    DISCONNECTED: { label: "DISCONNECTED", color: "#d7aa59", icon: "!" },
+    UNEXPECTED: { label: "UNEXPECTED", color: "#da6b6b", icon: "!" },
+    PORT_MISMATCH: { label: "PORT MISMATCH", color: "#d7aa59", icon: "↔" },
+    DEVICE_OFFLINE: { label: "DEVICE OFFLINE", color: "#da6b6b", icon: "×" },
+    UNKNOWN: { label: "UNKNOWN", color: "#9ba59f", icon: "?" },
+  }[status])
+  const verificationByLinkId = useMemo(() => {
+    const result = new Map<string, (typeof verification)[number]>()
+    verification.forEach((item) => {
+      if (item.manualLink) result.set(item.manualLink.id, item)
+      if (item.actualLink) result.set(item.actualLink.id, item)
+    })
+    return result
+  }, [verification])
+  const verificationForLink = (linkId: string) => verificationByLinkId.get(linkId)
+  const visibleDevices = verificationView === "actual" ? actualDevices : workspace.devices
+  const visibleDeviceById = verificationView === "actual" ? actualDeviceById : deviceById
+  const visibleLinks = verificationView === "actual"
+    ? actualLinks
+      : verificationView === "compare"
+        ? [...workspace.links, ...verification.filter((item) => item.status === "UNEXPECTED" && item.actualLink).map((item) => item.actualLink as Link)]
+        : workspace.links
+  const filteredTopology = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    const queryLinks = visibleLinks.filter((link) => {
+      if (!query) return false
+      const from = visibleDeviceById.get(link.from)
+      const to = visibleDeviceById.get(link.to)
+      return [link.label, link.fromPort, link.toPort, from?.name, to?.name, from?.ipAddress, to?.ipAddress].filter(Boolean).join(" ").toLowerCase().includes(query)
+    })
+    const deviceMatches = new Set(
+      visibleDevices
+        .filter((device) => {
+          const verificationStatuses = verification
+            .filter((item) => item.manualLink?.from === device.id || item.manualLink?.to === device.id || item.actualLink?.from === device.id || item.actualLink?.to === device.id)
+            .map((item) => item.status)
+          const health = (device.status ?? (device.backendId != null && deviceHealth[device.backendId] === false ? "offline" : "unknown")).toLowerCase()
+          const searchFields = [device.name, device.subtitle, device.ipAddress, device.macAddress, device.type].filter(Boolean).join(" ").toLowerCase()
+          return (!query || searchFields.includes(query) || queryLinks.some((link) => link.from === device.id || link.to === device.id)) &&
+            (deviceTypeFilter === "all" || device.type.toLowerCase() === deviceTypeFilter) &&
+            (healthFilter === "all" || health === healthFilter) &&
+            (!onlyOffline || health === "offline") &&
+            (!onlyMismatches || verificationStatuses.some((status) => status !== "VERIFIED")) &&
+            (verificationFilter === "all" || verificationStatuses.includes(verificationFilter as VerificationStatus))
+        })
+        .map((device) => device.id),
+    )
+    const links = visibleLinks.filter((link) => {
+      const item = verificationForLink(link.id)
+      const from = visibleDeviceById.get(link.from)
+      const to = visibleDeviceById.get(link.to)
+      const linkText = [link.label, link.fromPort, link.toPort, from?.name, to?.name, from?.ipAddress, to?.ipAddress].filter(Boolean).join(" ").toLowerCase()
+      const status = item?.status ?? (verificationView === "actual" ? "VERIFIED" : "UNKNOWN")
+      return deviceMatches.has(link.from) && deviceMatches.has(link.to) &&
+        (!query || linkText.includes(query)) &&
+        (verificationFilter === "all" || status === verificationFilter) &&
+        (!onlyMismatches || status !== "VERIFIED")
+    })
+    const linkDeviceIds = new Set(links.flatMap((link) => [link.from, link.to]))
+    return {
+      devices: visibleDevices.filter((device) => deviceMatches.has(device.id) || linkDeviceIds.has(device.id)),
+      links,
+    }
+  }, [deviceHealth, deviceTypeFilter, healthFilter, onlyMismatches, onlyOffline, searchQuery, verification, verificationFilter, verificationView, visibleDevices, visibleDeviceById, visibleLinks, verificationByLinkId])
+  const filteredDevices = filteredTopology.devices
+  const filteredLinks = filteredTopology.links
+  const focusVerification = (item: { manualLink?: Link; actualLink?: Link }) => {
+    const link = item.manualLink ?? item.actualLink
+    if (!link) return
+    setVerificationView("compare")
+    setSelectedLinkId(link.id)
+    setSelectedId(link.from)
+    setSelectedIds([link.from, link.to])
+  }
   const interfacePoint = (deviceId: string, rawPort: string) => {
     const device = deviceById.get(deviceId)
     if (!device) return null
@@ -995,10 +1380,13 @@ export default function ManualTopology() {
     device: Device,
     event: React.PointerEvent<SVGGElement>,
   ) => {
+    if (verificationView === "actual") return
     const point = canvasPoint(
       event as unknown as React.PointerEvent<SVGSVGElement>,
     )
     if (!point) return
+    event.preventDefault()
+    svgRef.current?.setPointerCapture?.(event.pointerId)
     setSelectedId(device.id)
     setDragState({
       id: device.id,
@@ -1011,10 +1399,13 @@ export default function ManualTopology() {
     device: Device,
     event: React.PointerEvent<SVGGElement>,
   ) => {
+    if (verificationView === "actual") return
     const point = canvasPoint(
       event as unknown as React.PointerEvent<SVGSVGElement>,
     )
     if (!point) return
+    event.preventDefault()
+    svgRef.current?.setPointerCapture?.(event.pointerId)
     setSelectedId(device.id)
     setResizeState({
       id: device.id,
@@ -1029,6 +1420,22 @@ export default function ManualTopology() {
     const point = canvasPoint(event)
     if (!point) return
     if (sourcePort) setConnectionPointer(point)
+    if (panState) {
+      const rect = svgRef.current?.getBoundingClientRect()
+      if (rect) {
+        const scaleX = (CANVAS_WIDTH / canvasZoom) / rect.width
+        const scaleY = (CANVAS_HEIGHT / canvasZoom) / rect.height
+        setCanvasPan({
+          x: panState.originX + (event.clientX - panState.startX) * scaleX,
+          y: panState.originY + (event.clientY - panState.startY) * scaleY,
+        })
+      }
+      return
+    }
+    if (selectionBox) {
+      setSelectionBox({ start: selectionBox.start, end: point })
+      return
+    }
     if (dragState) {
       setWorkspace((current) => ({
         ...current,
@@ -1036,12 +1443,13 @@ export default function ManualTopology() {
           device.id === dragState.id
             ? {
                 ...device,
-                x: Math.max(110, Math.min(850, point.x - dragState.offsetX)),
-                y: Math.max(40, Math.min(530, point.y - dragState.offsetY)),
+                x: Math.max(40, Math.min(CANVAS_WIDTH - 40, snapToGrid ? Math.round((point.x - dragState.offsetX) / 24) * 24 : point.x - dragState.offsetX)),
+                y: Math.max(40, Math.min(CANVAS_HEIGHT - 40, snapToGrid ? Math.round((point.y - dragState.offsetY) / 24) * 24 : point.y - dragState.offsetY)),
               }
             : device,
         ),
       }))
+      return
     }
     if (resizeState) {
       setWorkspace((current) => ({
@@ -1069,6 +1477,46 @@ export default function ManualTopology() {
         ),
       }))
     }
+  }
+
+  const startCanvasPointer = (event: React.PointerEvent<SVGSVGElement>) => {
+    const target = event.target as SVGElement
+    if (event.target !== event.currentTarget && target.getAttribute("data-canvas-background") !== "true") return
+    const point = canvasPoint(event)
+    if (!point) return
+    if (event.altKey || event.shiftKey) {
+      setPanState({
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: canvasPan.x,
+        originY: canvasPan.y,
+      })
+      return
+    }
+    setSelectedId(null)
+    setSelectedIds([])
+    setSelectedLinkId(null)
+    setSelectionBox({ start: point, end: point })
+  }
+
+  const finishCanvasPointer = () => {
+    if (selectionBox) {
+      const left = Math.min(selectionBox.start.x, selectionBox.end.x)
+      const right = Math.max(selectionBox.start.x, selectionBox.end.x)
+      const top = Math.min(selectionBox.start.y, selectionBox.end.y)
+      const bottom = Math.max(selectionBox.start.y, selectionBox.end.y)
+      const ids = workspace.devices
+        .filter((device) => device.x >= left && device.x <= right && device.y >= top && device.y <= bottom)
+        .map((device) => device.id)
+      if (ids.length) {
+        setSelectedIds(ids)
+        setSelectedId(ids[ids.length - 1])
+      }
+    }
+    setSelectionBox(null)
+    setPanState(null)
+    setDragState(null)
+    setResizeState(null)
   }
 
   useEffect(() => {
@@ -1173,6 +1621,7 @@ export default function ManualTopology() {
   const importAvailableDevice = (raw: SNMPDeviceListItem | undefined) => {
     if (!raw) return
     const id = `real-${raw.id}`
+    const category = inventoryCategory(raw)
     setWorkspace((current) => ({
       ...current,
       devices: current.devices.some((device) => device.id === id)
@@ -1188,9 +1637,7 @@ export default function ManualTopology() {
               macAddress: raw.mac_address ?? "",
               location: raw.topology_metadata?.location ?? "",
               status: raw.status,
-              type: raw.hostname?.toLowerCase().includes("switch")
-                ? "Switch"
-                : "Network device",
+              type: category === "Others" ? "Network device" : category,
               tone: "#00d4ff",
               x: 150 + (current.devices.length % 4) * 220,
               y: 120 + Math.floor(current.devices.length / 4) * 120,
@@ -1198,6 +1645,7 @@ export default function ManualTopology() {
           ],
     }))
     setSelectedId(id)
+    setSelectedIds([id])
   }
 
   const startNew = (deviceType = "Switch") => {
@@ -1274,57 +1722,111 @@ export default function ManualTopology() {
             label: `${displayPort(sourcePort.deviceId, sourcePort.port)} → ${portLabel(nextDevice.ports?.[0] ?? "Gi0/1", 0)}`,
           }
         : null
-    setWorkspace((current) => ({
-      ...current,
-      devices: current.devices.some((device) => device.id === editing.id)
-        ? current.devices.map((device) =>
-            device.id === editing.id ? nextDevice : device,
-          )
-        : [...current.devices, nextDevice],
-      links: autoLink ? [...current.links, autoLink] : current.links,
-    }))
-    setEditing(null)
-    if (nextDevice.backendId) {
-      void updateDevice(nextDevice.backendId, {
-        hostname: nextDevice.name,
-        ip_address: nextDevice.ipAddress,
-        mac_address: nextDevice.macAddress || undefined,
-        topology_metadata: {
-          location: nextDevice.location || null,
-        },
-      }).catch(() => {
-        setPortsError("Device details could not be saved to the database")
-      })
+    const existingDevice = workspace.devices.find((device) => device.id === editing.id)
+    const connectedLinks = existingDevice
+      ? workspace.links.filter((link) => link.from === editing.id || link.to === editing.id)
+      : []
+    const identityChanged = existingDevice && [
+      existingDevice.name !== nextDevice.name,
+      existingDevice.ipAddress !== nextDevice.ipAddress,
+      existingDevice.macAddress !== nextDevice.macAddress,
+      existingDevice.location !== nextDevice.location,
+      existingDevice.type !== nextDevice.type,
+      JSON.stringify(existingDevice.ports ?? []) !== JSON.stringify(nextDevice.ports ?? []),
+    ].some(Boolean)
+    const commitDevice = () => {
+      setWorkspace((current) => ({
+        ...current,
+        devices: current.devices.some((device) => device.id === editing.id)
+          ? current.devices.map((device) => device.id === editing.id ? nextDevice : device)
+          : [...current.devices, nextDevice],
+        links: autoLink ? [...current.links, autoLink] : current.links,
+      }))
+      setEditing(null)
+      if (nextDevice.backendId) {
+        void updateDevice(nextDevice.backendId, {
+          hostname: nextDevice.name,
+          ip_address: nextDevice.ipAddress,
+          mac_address: nextDevice.macAddress || undefined,
+          topology_metadata: { location: nextDevice.location || null },
+        }).catch(() => setPortsError("Device details could not be saved to the database"))
+      }
+      if (autoLink) {
+        setSourcePort(null)
+        setConnectFrom(null)
+        setConnectMode(false)
+      }
     }
     if (autoLink) {
-      setSourcePort(null)
-      setConnectFrom(null)
-      setConnectMode(false)
+      requestConfirmation({
+        title: "Create physical connection?",
+        description: "Review the new manual link before it is added to the topology.",
+        details: [["Current state", "No connection"], ["Proposed", `${displayPort(sourcePort.deviceId, sourcePort.port)} ↔ ${displayPort(nextDevice.id, autoLink.toPort ?? FALLBACK_PORT)}`], ["Impact", "Adds one manual topology connection"]],
+        confirmLabel: "Confirm Change",
+        tone: "amber",
+        onConfirm: commitDevice,
+      })
+      return
     }
+    if (identityChanged) {
+      requestConfirmation({
+        title: "Change device identity?",
+        description: "These details are used to identify this device in the manual topology.",
+        details: [["Current", `${existingDevice.name} · ${existingDevice.ipAddress || existingDevice.subtitle || "No IP"}`], ["Proposed", `${nextDevice.name} · ${nextDevice.ipAddress || "No IP"}`], ["Connected links", connectedLinks.length ? connectedLinks.map((link) => `${link.fromPort ?? FALLBACK_PORT} ↔ ${link.toPort ?? FALLBACK_PORT}`).join(", ") : "None"], ["Proposed ports", nextDevice.ports?.join(", ") || "None"], ["Impact", nextDevice.backendId ? "Updates the linked SNMP device details; existing link endpoints stay stored" : "Updates the manual device record; existing link endpoints stay stored"]],
+        confirmLabel: "Confirm Change",
+        tone: "amber",
+        onConfirm: commitDevice,
+      })
+      return
+    }
+    commitDevice()
   }
 
-  const deleteSelected = () => {
-    if (!selectedId) return
-    if (!window.confirm("Remove this device and its connections?")) return
-    setWorkspace((current) => ({
-      devices: current.devices.filter((device) => device.id !== selectedId),
-      links: current.links.filter(
-        (link) => link.from !== selectedId && link.to !== selectedId,
-      ),
-    }))
-    setSelectedId(null)
-    setEditing(null)
-    setConnectFrom(null)
-    setConnectMode(false)
-    setSourcePort(null)
+  const deleteSelected = (requestedId = selectedId) => {
+    if (!requestedId) return
+    const device = workspace.devices.find((item) => item.id === requestedId)
+    if (!device) return
+    const connectedLinks = workspace.links.filter((link) => link.from === requestedId || link.to === requestedId)
+    const connectedPorts = connectedLinks.map((link) => `${link.from === requestedId ? device.name : workspace.devices.find((item) => item.id === link.from)?.name ?? "Unknown"} ${link.from === requestedId ? link.fromPort ?? FALLBACK_PORT : link.toPort ?? FALLBACK_PORT}`).join(", ") || "None"
+    const commitDelete = () => {
+      setWorkspace((current) => ({
+        devices: current.devices.filter((item) => item.id !== requestedId),
+        links: current.links.filter((link) => link.from !== requestedId && link.to !== requestedId),
+      }))
+      setSelectedId(null)
+      setSelectedIds([])
+      setEditing(null)
+      setConnectFrom(null)
+      setConnectMode(false)
+      setSourcePort(null)
+    }
+    requestConfirmation({
+      title: "Delete this device?",
+      description: connectedLinks.length ? "This device has connected topology links. Review the permanent removal before continuing." : "This removes the device from the manual topology.",
+      details: [["Device", device.name], ["IP address", device.ipAddress || device.subtitle || "Not set"], ["Connected links", String(connectedLinks.length)], ["Connected ports", connectedPorts], ["Backend / SNMP", device.backendId ? `Yes · device #${device.backendId}` : "No · manual-only device"], ["Will be removed", connectedLinks.length ? "Device record and every attached manual connection" : "Manual device record"]],
+      confirmLabel: "Review Deletion",
+      tone: "red",
+      secondStep: connectedLinks.length ? { title: "Confirm permanent topology removal?", description: "The manual links listed above will be deleted with this device. Live SNMP data will not be changed.", confirmLabel: "Delete Device" } : undefined,
+      onConfirm: commitDelete,
+    })
   }
 
   const disconnectLink = (linkId: string) => {
-    setWorkspace((current) => ({
-      ...current,
-      links: current.links.filter((link) => link.id !== linkId),
-    }))
-    setSelectedLinkId(null)
+    const link = workspace.links.find((item) => item.id === linkId)
+    if (!link) return
+    const from = workspace.devices.find((device) => device.id === link.from)
+    const to = workspace.devices.find((device) => device.id === link.to)
+    requestConfirmation({
+      title: "Delete physical connection?",
+      description: "This removes the link from the manual topology only.",
+      details: [["Current", `${from?.name ?? link.from} ${link.fromPort ?? FALLBACK_PORT} ↔ ${to?.name ?? link.to} ${link.toPort ?? FALLBACK_PORT}`], ["Proposed", "No manual connection"], ["Impact", "The live SNMP topology is unchanged"]],
+      confirmLabel: "Confirm Change",
+      tone: "red",
+      onConfirm: () => {
+        setWorkspace((current) => ({ ...current, links: current.links.filter((item) => item.id !== linkId) }))
+        setSelectedLinkId(null)
+      },
+    })
   }
 
   const toggleLinkGeometry = (linkId: string) => {
@@ -1338,7 +1840,7 @@ export default function ManualTopology() {
     }))
   }
 
-  const resolveChange = async (
+  const applyResolvedChange = async (
     change: ManualTopologyChange,
     action: "accept_real_change" | "keep_manual",
   ) => {
@@ -1359,6 +1861,21 @@ export default function ManualTopology() {
           : "Unable to resolve topology change",
       )
     }
+  }
+
+  const resolveChange = (change: ManualTopologyChange, action: "accept_real_change" | "keep_manual") => {
+    if (action !== "accept_real_change") {
+      void applyResolvedChange(change, action)
+      return
+    }
+    requestConfirmation({
+      title: "Accept physical topology change?",
+      description: "Manual topology differs from the physical network. Live SNMP data will replace the affected manual baseline only after confirmation.",
+      details: [["Detected change", changeDescription(change)], ["Expected", changeStateLabel(change.expected)], ["Observed", changeStateLabel(change.observed)], ["Alternative", "Keep manual topology and continue monitoring"]],
+      confirmLabel: "Accept Real Change",
+      tone: "amber",
+      onConfirm: () => { void applyResolvedChange(change, action) },
+    })
   }
 
   const changeDescription = (change: ManualTopologyChange) =>
@@ -1395,10 +1912,146 @@ export default function ManualTopology() {
       })
     })
 
-  const selectNode = (id: string) => {
+  const selectNode = (id: string, additive = false) => {
+    setSelectedIds((current) => additive
+      ? current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+      : [id])
     setSelectedId(id)
     if (!connectMode) return
     setConnectFrom(id)
+  }
+
+  const undo = () => {
+    const previous = historyRef.current.pop()
+    if (!previous) return
+    futureRef.current.push(workspace)
+    historyApplyingRef.current = true
+    setWorkspace(previous)
+  }
+
+  const redo = () => {
+    const next = futureRef.current.pop()
+    if (!next) return
+    historyRef.current.push(workspace)
+    historyApplyingRef.current = true
+    setWorkspace(next)
+  }
+
+  const fitCanvas = () => {
+    if (!workspace.devices.length) {
+      setCanvasZoom(1)
+      setCanvasPan({ x: 0, y: 0 })
+      return
+    }
+    const bounds = workspace.devices.reduce(
+      (acc, device) => ({
+        minX: Math.min(acc.minX, device.x),
+        minY: Math.min(acc.minY, device.y),
+        maxX: Math.max(acc.maxX, device.x),
+        maxY: Math.max(acc.maxY, device.y),
+      }),
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+    )
+    const width = Math.max(360, bounds.maxX - bounds.minX + 300)
+    const height = Math.max(280, bounds.maxY - bounds.minY + 180)
+    setCanvasZoom(Math.max(0.6, Math.min(1.8, Math.min(CANVAS_WIDTH / width, CANVAS_HEIGHT / height))))
+    setCanvasPan({
+      x: (bounds.minX + bounds.maxX) / 2 - CANVAS_WIDTH / 2,
+      y: (bounds.minY + bounds.maxY) / 2 - CANVAS_HEIGHT / 2,
+    })
+  }
+
+  const autoLayout = () => {
+    if (verificationView === "actual" || workspace.devices.length === 0) return
+    setWorkspace((current) => ({
+      ...current,
+      devices: current.devices.map((device, index) => ({
+        ...device,
+        x: 150 + (index % 4) * 230,
+        y: 110 + Math.floor(index / 4) * 130,
+      })),
+    }))
+    setCanvasZoom(1)
+    setCanvasPan({ x: 0, y: 0 })
+  }
+
+  const downloadFile = (content: BlobPart, fileName: string, type: string) => {
+    const url = URL.createObjectURL(new Blob([content], { type }))
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = fileName
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportSvg = () => {
+    if (!svgRef.current) return
+    const clone = svgRef.current.cloneNode(true) as SVGSVGElement
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg")
+    clone.setAttribute("width", "1200")
+    clone.setAttribute("height", "720")
+    downloadFile(new XMLSerializer().serializeToString(clone), "manual-topology.svg", "image/svg+xml")
+  }
+
+  const exportPng = () => {
+    if (!svgRef.current) return
+    const clone = svgRef.current.cloneNode(true) as SVGSVGElement
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg")
+    clone.setAttribute("width", "1200")
+    clone.setAttribute("height", "720")
+    const svgUrl = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml" }))
+    const image = new Image()
+    image.onload = () => {
+      const canvas = document.createElement("canvas")
+      canvas.width = 1200
+      canvas.height = 720
+      canvas.getContext("2d")?.drawImage(image, 0, 0)
+      canvas.toBlob((blob) => blob && downloadFile(blob, "manual-topology.png", "image/png"))
+      URL.revokeObjectURL(svgUrl)
+    }
+    image.src = svgUrl
+  }
+
+  const openContextMenu = (event: React.MouseEvent<SVGGElement>, target: Pick<ContextMenuState, "deviceId" | "linkId">) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setContextMenu({ x: event.clientX, y: event.clientY, ...target })
+  }
+
+  const deviceTypes = useMemo(() => Array.from(new Set(workspace.devices.map((device) => device.type.toLowerCase()))).sort(), [workspace.devices])
+  const inventoryItems = useMemo(() => realDevices.map((device) => {
+    const canvasDevice = workspace.devices.find((item) => item.backendId === device.id)
+    const categorySource = canvasDevice
+      ? { ...device, name: canvasDevice.name, hostname: canvasDevice.name, device_type: canvasDevice.type }
+      : device
+    return { device, canvasDevice, category: inventoryCategory(categorySource) }
+  }), [realDevices, workspace.devices])
+
+  const createPaletteDevice = (type: string, point?: { x: number; y: number }) => {
+    const index = workspace.devices.length
+    const deviceType = type === "Internet / Cloud" ? "Cloud" : type
+    const id = `device-${Date.now()}`
+    const device: Device = {
+      id,
+      name: `${deviceType.toUpperCase()} ${String(index + 1).padStart(2, "0")}`,
+      subtitle: "Add IP / VLAN",
+      type: deviceType,
+      tone: tones[index % tones.length],
+      x: point?.x ?? 150 + (index % 4) * 220,
+      y: point?.y ?? 120 + Math.floor(index / 4) * 120,
+      ports: ["Gi0/1", "Gi0/2"],
+    }
+    setWorkspace((current) => ({ ...current, devices: [...current.devices, device] }))
+    setSelectedId(id)
+    setSelectedIds([id])
+    setEditing(device)
+  }
+
+  const handleCanvasDrop = (event: React.DragEvent<SVGSVGElement>) => {
+    event.preventDefault()
+    const type = event.dataTransfer.getData("manual-topology/device-type")
+    const point = canvasPoint(event as unknown as React.PointerEvent<SVGSVGElement>)
+    if (type && point) createPaletteDevice(type, point)
   }
 
   const selectPort = (deviceId: string, port: string) => {
@@ -1425,29 +2078,31 @@ export default function ManualTopology() {
       toast.warning("This port is already connected to another device.")
       return
     }
-    setWorkspace((current) => {
-      // Re-check inside the state update so the same endpoint cannot be
-      // consumed twice even when two pointer events arrive back-to-back.
-      if (isPortOccupied(current.links, deviceId, port) ||
-          isPortOccupied(current.links, sourcePort.deviceId, sourcePort.port)) {
-        return current
-      }
-      return {
-        ...current,
-        links: [...current.links, {
-          id: `link-${Date.now()}`,
-          from: sourcePort.deviceId,
-          to: deviceId,
-          fromPort: sourcePort.port,
-          toPort: port,
-          label: `${displayPort(sourcePort.deviceId, sourcePort.port)} → ${displayPort(deviceId, port)}`,
-        }],
-      }
+    const proposedLink: Link = {
+      id: `link-${Date.now()}`,
+      from: sourcePort.deviceId,
+      to: deviceId,
+      fromPort: sourcePort.port,
+      toPort: port,
+      label: `${displayPort(sourcePort.deviceId, sourcePort.port)} → ${displayPort(deviceId, port)}`,
+    }
+    requestConfirmation({
+      title: "Create physical connection?",
+      description: "Review both physical endpoints before adding this manual link.",
+      details: [["Current", "No manual connection"], ["Proposed", `${displayPort(sourcePort.deviceId, sourcePort.port)} ↔ ${displayPort(deviceId, port)}`], ["Impact", "Adds one manual topology connection"]],
+      confirmLabel: "Confirm Change",
+      tone: "amber",
+      onConfirm: () => {
+        setWorkspace((current) => {
+          if (isPortOccupied(current.links, deviceId, port) || isPortOccupied(current.links, proposedLink.from, proposedLink.fromPort ?? FALLBACK_PORT)) return current
+          return { ...current, links: [...current.links, proposedLink] }
+        })
+        setSourcePort(null)
+        setConnectFrom(null)
+        setConnectMode(false)
+        setConnectionPointer(null)
+      },
     })
-    setSourcePort(null)
-    setConnectFrom(null)
-    setConnectMode(false)
-    setConnectionPointer(null)
   }
 
   const beginPortConnection = (deviceId: string, port: string) => {
@@ -1484,21 +2139,63 @@ export default function ManualTopology() {
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange)
   }, [])
 
+  useEffect(() => {
+    const closeContextMenu = () => setContextMenu(null)
+    window.addEventListener("click", closeContextMenu)
+    return () => window.removeEventListener("click", closeContextMenu)
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      if (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault()
+        event.shiftKey ? redo() : undo()
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") {
+        event.preventDefault()
+        redo()
+      } else if (event.key === "Delete" || event.key === "Backspace") {
+        if (selectedId) deleteSelected()
+        else if (selectedLinkId) disconnectLink(selectedLinkId)
+      } else if (event.key === "Escape") {
+        setContextMenu(null)
+        setSelectedId(null)
+        setSelectedIds([])
+        setSelectedLinkId(null)
+        setConnectMode(false)
+        setSourcePort(null)
+        setSelectionBox(null)
+      } else if (event.key === "/") {
+        event.preventDefault()
+        searchInputRef.current?.focus()
+      } else if (event.key.toLowerCase() === "f") {
+        event.preventDefault()
+        fitCanvas()
+      } else if (event.key.toLowerCase() === "l") {
+        event.preventDefault()
+        autoLayout()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [selectedId, selectedLinkId, workspace])
+
   return (
-    <main className="min-h-full overflow-y-auto grid-bg">
-      <div className="w-full max-w-[2400px] mx-auto space-y-4 p-3 md:p-5 2xl:p-7">
+    <main className="manual-topology-shell min-h-full overflow-y-auto" style={{ background: "var(--t-bg)", color: "var(--t-text)" }}>
+      <div className="w-full max-w-[2400px] mx-auto space-y-3 p-3 md:p-5 2xl:p-7">
         <header
           className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 rounded-xl px-4 py-3"
           style={{
             background: "var(--t-card)",
             border: "1px solid var(--t-border-alpha)",
-            boxShadow: "0 16px 50px rgba(0,0,0,.12)",
+            boxShadow: "0 18px 50px var(--topology-node-shadow)",
           }}
         >
           <div>
             <div
               className="font-mono text-[10px] tracking-[.24em] uppercase"
-              style={{ color: "var(--t-accent)" }}
+              style={{ color: "#b7c0ba" }}
             >
               Network workspace / manual design board
             </div>
@@ -1507,11 +2204,11 @@ export default function ManualTopology() {
               style={{ color: "var(--t-text)" }}
             >
               Manual Topology <span style={{ color: "var(--t-muted)" }}>·</span>{" "}
-              <span style={{ color: "var(--t-accent)" }}>Design Board</span>
+              <span style={{ color: "#9bb5a3" }}>Design Board</span>
             </h1>
             <p
               className="font-mono text-[10px] mt-1 max-w-2xl"
-              style={{ color: "var(--t-muted)" }}
+              style={{ color: "#8e9690" }}
             >
               Arrange devices, connect physical ports, and keep a clean network
               record with live health context.
@@ -1521,9 +2218,9 @@ export default function ManualTopology() {
             <span
               className="px-2.5 py-1.5 rounded-md font-mono text-[10px] uppercase"
               style={{
-                color: "#00ff88",
-                background: "rgba(0,255,136,.08)",
-                border: "1px solid rgba(0,255,136,.24)",
+                color: "#9bd3ad",
+                background: "rgba(121,198,154,.08)",
+                border: "1px solid rgba(121,198,154,.24)",
               }}
             >
               {workspace.devices.length} devices
@@ -1531,9 +2228,9 @@ export default function ManualTopology() {
             <span
               className="px-2.5 py-1.5 rounded-md font-mono text-[10px] uppercase"
               style={{
-                color: "var(--t-accent)",
-                background: "var(--t-accent-alpha)",
-                border: "1px solid var(--t-accent-border)",
+                color: "#d0a65a",
+                background: "rgba(208,166,90,.08)",
+                border: "1px solid rgba(208,166,90,.28)",
               }}
             >
               {workspace.links.length} links
@@ -1564,6 +2261,37 @@ export default function ManualTopology() {
           <span className="font-mono text-[9px] uppercase" style={{ color: "var(--t-muted)" }}>Auto-save enabled</span>
         </div>
 
+        <section className="rounded-lg p-3 md:p-4" style={{ background: "var(--t-card)", border: "1px solid var(--t-border-alpha)" }} aria-label="Topology filters and tools">
+          <div className="flex flex-col xl:flex-row xl:items-center gap-2">
+            <label className="relative flex-1 min-w-[220px]">
+              <span className="sr-only">Search devices and connections</span>
+              <svg aria-hidden="true" className="absolute left-3 top-2.5 h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="#7f8984" strokeWidth="1.8"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 5 5" /></svg>
+              <input ref={searchInputRef} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search hostname / IP / MAC / connection · press /" className="w-full rounded-md py-2 pl-9 pr-3 font-mono text-[10px] outline-none" style={{ color: "var(--t-text)", background: "var(--t-bg)", border: "1px solid var(--t-border-alpha)" }} />
+            </label>
+            <select aria-label="Filter by device type" value={deviceTypeFilter} onChange={(event) => setDeviceTypeFilter(event.target.value)} className="rounded-md px-2.5 py-2 font-mono text-[10px] uppercase" style={{ color: "var(--t-text)", background: "var(--t-bg)", border: "1px solid var(--t-border-alpha)" }}>
+              <option value="all">All types</option>
+              {deviceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+            <select aria-label="Filter by health status" value={healthFilter} onChange={(event) => setHealthFilter(event.target.value)} className="rounded-md px-2.5 py-2 font-mono text-[10px] uppercase" style={{ color: "var(--t-text)", background: "var(--t-bg)", border: "1px solid var(--t-border-alpha)" }}>
+              <option value="all">All health</option><option value="online">Online</option><option value="offline">Offline</option><option value="unknown">Unknown</option>
+            </select>
+            <select aria-label="Filter by verification status" value={verificationFilter} onChange={(event) => setVerificationFilter(event.target.value)} className="rounded-md px-2.5 py-2 font-mono text-[10px] uppercase" style={{ color: "var(--t-text)", background: "var(--t-bg)", border: "1px solid var(--t-border-alpha)" }}>
+              <option value="all">All verification</option>
+              {(["VERIFIED", "DISCONNECTED", "UNEXPECTED", "PORT_MISMATCH", "DEVICE_OFFLINE", "UNKNOWN"] as const).map((status) => <option key={status} value={status}>{status.replace("_", " ")}</option>)}
+            </select>
+            <button type="button" onClick={() => setOnlyMismatches((value) => !value)} aria-pressed={onlyMismatches} className="rounded-md px-2.5 py-2 font-mono text-[10px] uppercase" style={{ color: onlyMismatches ? "#d0a65a" : "#9ba59f", background: onlyMismatches ? "rgba(208,166,90,.12)" : "transparent", border: `1px solid ${onlyMismatches ? "rgba(208,166,90,.4)" : "rgba(231,225,213,.16)"}` }}>Mismatches</button>
+            <button type="button" onClick={() => setOnlyOffline((value) => !value)} aria-pressed={onlyOffline} className="rounded-md px-2.5 py-2 font-mono text-[10px] uppercase" style={{ color: onlyOffline ? "#da6b6b" : "#9ba59f", background: onlyOffline ? "rgba(218,107,107,.12)" : "transparent", border: `1px solid ${onlyOffline ? "rgba(218,107,107,.4)" : "rgba(231,225,213,.16)"}` }}>Offline only</button>
+            <button type="button" onClick={() => { setSearchQuery(""); setDeviceTypeFilter("all"); setHealthFilter("all"); setVerificationFilter("all"); setOnlyMismatches(false); setOnlyOffline(false) }} className="rounded-md px-2.5 py-2 font-mono text-[10px] uppercase" style={{ color: "#9ba59f", border: "1px solid rgba(231,225,213,.16)" }}>Clear</button>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 font-mono text-[9px] uppercase" style={{ color: "#7f8984" }}>
+            <span>{filteredDevices.length} devices · {filteredLinks.length} connections shown</span>
+            <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full" style={{ background: "#79c69a" }} /> verified</span>
+            <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full" style={{ background: "#d7aa59" }} /> mismatch / pending</span>
+            <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full" style={{ background: "#da6b6b" }} /> offline / unexpected</span>
+            <span className="ml-auto" style={{ color: reconcileLoading ? "#d0a65a" : actualTopology ? "#7f8984" : "#da6b6b" }}>{reconcileLoading ? "Verifying live SNMP topology..." : actualTopology ? `Last verification ${new Date(actualTopology.timestamp ?? Date.now()).toLocaleString()}` : "SNMP verification not available"}</span>
+          </div>
+        </section>
+
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
             [workspace.devices.length, "Devices"],
@@ -1587,6 +2315,43 @@ export default function ManualTopology() {
             </GlassCard>
           ))}
         </section>
+
+        <GlassCard className="p-4 md:p-5" style={{ border: `1px solid ${verificationCounts.issues ? "rgba(215,170,89,.28)" : "rgba(121,198,154,.24)"}` }}>
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full" style={{ background: verificationCounts.issues ? "#d7aa59" : "#79c69a" }} />
+                <h2 className="font-display text-lg font-semibold" style={{ color: "#e7e1d5" }}>Topology Verification</h2>
+              </div>
+              <p className="font-mono text-[10px] mt-1" style={{ color: "#8e9690" }}>
+                {actualTopology ? `Manual baseline compared with live SNMP physical topology · ${verificationView.toUpperCase()} VIEW` : "Run live reconciliation to compare the manual baseline with SNMP physical connectivity."}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 min-w-0">
+              {[
+                [verificationCounts.total, "Manual links", "#d8d2c6"],
+                [verificationCounts.verified, "Verified", "#79c69a"],
+                [verificationCounts.issues, "Mismatched", "#d7aa59"],
+                [verificationCounts.unexpected, "Unexpected", "#da6b6b"],
+                [verificationCounts.offline, "Offline", "#da6b6b"],
+              ].map(([value, label, color]) => (
+                <div key={label} className="rounded-md px-3 py-2 min-w-[82px]" style={{ background: "#121615", border: "1px solid rgba(231,225,213,.10)" }}>
+                  <div className="font-mono text-lg" style={{ color: String(color) }}>{value}</div>
+                  <div className="font-mono text-[8px] uppercase tracking-wider" style={{ color: "#7f8984" }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mt-4 pt-3" style={{ borderTop: "1px solid rgba(231,225,213,.08)" }}>
+            <span className="font-mono text-[9px] uppercase" style={{ color: "#7f8984" }}>Last verification: {actualTopology?.timestamp ? new Date(actualTopology.timestamp).toLocaleString() : "NOT RUN"}</span>
+            <div className="flex flex-wrap gap-2">
+              {verification.filter((item) => item.status !== "VERIFIED").slice(0, 6).map((item) => {
+                const meta = statusMeta(item.status)
+                return <button key={item.id} type="button" onClick={() => focusVerification(item)} className="rounded-md px-2.5 py-1.5 font-mono text-[9px] uppercase" style={{ color: meta.color, border: `1px solid ${meta.color}55`, background: `${meta.color}10` }} title="Focus issue on canvas">{meta.icon} {meta.label}</button>
+              })}
+            </div>
+          </div>
+        </GlassCard>
 
         {(topologyChanges.length > 0 || reconcileError) && (
           <GlassCard className="p-5" glow="red">
@@ -1688,41 +2453,76 @@ export default function ManualTopology() {
         <div
           ref={workspaceGridRef}
           className={isCanvasFullscreen
-            ? "fixed inset-0 z-50 grid lg:grid-cols-[150px_minmax(0,1fr)_320px] gap-3 items-stretch p-4 md:p-6 overflow-hidden"
-            : "grid lg:grid-cols-[112px_minmax(0,1fr)_300px] gap-3 items-stretch"}
-          style={isCanvasFullscreen ? { background: "var(--t-bg, #080a0d)" } : undefined}
+            ? "fixed inset-0 z-50 grid lg:grid-cols-[190px_minmax(0,1fr)_320px] gap-3 items-stretch p-4 md:p-6 overflow-hidden"
+            : "grid lg:grid-cols-[190px_minmax(0,1fr)_320px] gap-3 items-stretch"}
+          style={isCanvasFullscreen ? { background: "var(--t-bg)" } : undefined}
         >
           <aside
-            className={isCanvasFullscreen ? "flex flex-col rounded-xl p-2 gap-1.5 min-h-0 overflow-y-auto" : "hidden lg:flex flex-col rounded-xl p-2 gap-1.5"}
+            className={isCanvasFullscreen ? "flex flex-col rounded-xl p-3 gap-1.5 min-h-0 overflow-y-auto" : "hidden lg:flex flex-col rounded-xl p-3 gap-1.5"}
             style={{
               background: "var(--t-card)",
               border: "1px solid var(--t-border-alpha)",
             }}
           >
-            <div className="font-mono text-[9px] uppercase tracking-widest px-2 py-2" style={{ color: "var(--t-muted)" }}>
-              Library
+            <div className="flex items-center justify-between px-1 py-1">
+              <div>
+                <div className="font-mono text-[9px] uppercase tracking-[.18em]" style={{ color: "var(--t-text)" }}>Palette</div>
+                <div className="font-mono text-[8px] mt-1" style={{ color: "#7f8984" }}>Drag to canvas</div>
+              </div>
+              <button type="button" onClick={() => setPaletteCollapsed((value) => !value)} className="rounded p-1" style={{ color: "#9ba59f" }} aria-label="Collapse device palette">
+                {paletteCollapsed ? "›" : "‹"}
+              </button>
             </div>
-            {realDevices.length > 0 ? realDevices.map((device, index) => {
-              const label = device.hostname || device.name || device.ip_address
-              const type = device.device_type || "Network device"
-              const imported = workspace.devices.some((item) => item.backendId === device.id)
+            {!paletteCollapsed && paletteItems.map(([label, type], index) => {
+              const category = type === "Network device" ? (label === "Others" ? "Others" : label) : type === "Internet / Cloud" ? "Cloud" : type
+              const matchingDevices = inventoryItems.filter((item) => item.category === category)
+              const expanded = expandedPaletteCategories[label] === true
               return (
-                <button
-                  type="button"
-                  key={device.id}
-                  onClick={() => importAvailableDevice(device)}
-                  className="flex flex-col items-center gap-1 rounded-lg px-1 py-2.5 transition-colors hover:bg-white/5"
-                  title={imported ? `${label} is already on canvas` : `Import ${label}`}
-                  style={{ opacity: imported ? 0.55 : 1 }}
-                >
-                  <svg width="22" height="22" viewBox="0 0 48 48"><DeviceGlyph type={type} tone={tones[index % tones.length]} /></svg>
-                  <span className="font-mono text-[9px] text-center leading-tight line-clamp-2" style={{ color: "var(--t-text)" }}>{label}</span>
-                  <span className="font-mono text-[8px] truncate max-w-full" style={{ color: "var(--t-muted)" }}>{imported ? "IMPORTED" : device.ip_address}</span>
-                </button>
+                <div key={label}>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      draggable
+                      onDragStart={(event) => event.dataTransfer.setData("manual-topology/device-type", type)}
+                      onClick={() => setExpandedPaletteCategories((current) => ({ ...current, [label]: !current[label] }))}
+                      className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white/[.05]"
+                      title={matchingDevices.length ? `Show ${label} devices` : `Add ${label} to canvas`}
+                      aria-expanded={matchingDevices.length ? expanded : undefined}
+                    >
+                      <span className="flex h-8 w-8 items-center justify-center rounded-md" style={{ background: "#202624", border: "1px solid rgba(231,225,213,.12)" }}>
+                        <svg width="28" height="28" viewBox="0 0 48 48"><DeviceGlyph type={type} tone={tones[index % tones.length]} /></svg>
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block font-mono text-[10px]" style={{ color: "var(--t-text)" }}>{label}{matchingDevices.length > 0 && <span style={{ color: "var(--t-muted)" }}> ({matchingDevices.length})</span>}</span>
+                        <span className="mt-0.5 block font-mono text-[8px]" style={{ color: "#7f8984" }}>{matchingDevices.length ? (expanded ? "HIDE DEVICES" : "SHOW DEVICES") : "NODE"}</span>
+                      </span>
+                    </button>
+                    <button type="button" onClick={() => startNew(type)} className="rounded px-1.5 py-1 font-mono text-[11px]" style={{ color: "#9bb5a3" }} title={`Add new ${label}`} aria-label={`Add new ${label}`}>+</button>
+                  </div>
+                  {expanded && matchingDevices.map(({ device, canvasDevice }, deviceIndex) => {
+                    const deviceLabel = canvasDevice?.name || device.hostname || device.name || device.ip_address
+                    const deviceType = canvasDevice?.type || device.device_type || category
+                    const imported = Boolean(canvasDevice)
+                    return (
+                      <button
+                        type="button"
+                        key={device.id}
+                        onClick={() => importAvailableDevice(device)}
+                        className="ml-11 flex w-[calc(100%-2.75rem)] items-center gap-2 rounded-md px-1 py-1.5 text-left transition-colors hover:bg-white/5"
+                        title={imported ? `${deviceLabel} is already on canvas` : `Import ${deviceLabel}`}
+                        style={{ opacity: imported ? 0.55 : 1 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 48 48" className="shrink-0"><DeviceGlyph type={deviceType} tone={tones[(index + deviceIndex + 1) % tones.length]} /></svg>
+                        <span className="min-w-0">
+                          <span className="block truncate font-mono text-[8px]" style={{ color: "var(--t-text)" }}>{deviceLabel}</span>
+                          <span className="block truncate font-mono text-[7px]" style={{ color: "var(--t-muted)" }}>{imported ? "IMPORTED" : device.ip_address}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
               )
-            }) : (
-              <div className="px-2 py-4 text-center font-mono text-[9px]" style={{ color: "var(--t-muted)" }}>No available devices</div>
-            )}
+            })}
             <div className="mt-auto pt-2 border-t" style={{ borderColor: "var(--t-border-light)" }}>
               <button type="button" onClick={() => setConnectMode((value) => !value)} className="w-full rounded-lg px-1 py-2.5" style={{ color: connectMode ? PEN_COLOR : "var(--t-muted)", background: connectMode ? PEN_SURFACE : "transparent" }}>
                 <svg className="mx-auto" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 12h12M12 6v12" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="12" r="3" /></svg>
@@ -1758,6 +2558,13 @@ export default function ManualTopology() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <div className="flex items-center gap-1 rounded-md p-1" style={{ border: "1px solid var(--t-border-alpha)", background: "var(--t-bg)" }} aria-label="Topology verification view">
+                {(["manual", "actual", "compare"] as const).map((view) => (
+                  <button key={view} type="button" onClick={() => setVerificationView(view)} className="px-2.5 py-1.5 rounded font-mono text-[10px] uppercase" style={{ color: verificationView === view ? "var(--t-text)" : "var(--t-muted)", background: verificationView === view ? "var(--t-card)" : "transparent" }} title={`${view} topology view`}>
+                    {view}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 onClick={() => void toggleCanvasFullscreen()}
@@ -1771,6 +2578,18 @@ export default function ManualTopology() {
                 <button type="button" onClick={() => setCanvasZoom(1)} className="px-1.5 h-6 rounded font-mono text-[9px]" style={{ color: "var(--t-muted)" }} aria-label="Reset zoom">{Math.round(canvasZoom * 100)}%</button>
                 <button type="button" onClick={() => setCanvasZoom((value) => Math.min(1.8, Number((value + 0.1).toFixed(1))))} className="w-7 h-6 rounded font-mono text-xs" style={{ color: "var(--t-text)" }} aria-label="Zoom in">+</button>
               </div>
+              <button type="button" onClick={fitCanvas} className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase" style={{ color: "#d0a65a", border: "1px solid rgba(208,166,90,.28)" }}>FIT</button>
+              <button type="button" onClick={autoLayout} disabled={verificationView === "actual"} className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase disabled:opacity-30" style={{ color: "#9bb5a3", border: "1px solid rgba(155,181,163,.28)" }} title="Auto-layout devices (L)">LAYOUT</button>
+              <div className="flex items-center gap-1 rounded-md p-1" style={{ border: "1px solid var(--t-border-alpha)", background: "var(--t-bg)" }} aria-label="Export topology">
+                <button type="button" onClick={exportSvg} className="px-2 h-6 rounded font-mono text-[10px]" style={{ color: "var(--t-text)" }} title="Export SVG">SVG</button>
+                <button type="button" onClick={exportPng} className="px-2 h-6 rounded font-mono text-[10px]" style={{ color: "var(--t-text)" }} title="Export PNG">PNG</button>
+                <button type="button" onClick={() => window.print()} className="px-2 h-6 rounded font-mono text-[10px]" style={{ color: "var(--t-text)" }} title="Print or save as PDF">PDF</button>
+              </div>
+              <div className="flex items-center gap-1 rounded-md p-1" style={{ border: "1px solid var(--t-border-alpha)", background: "var(--t-bg)" }}>
+                <button type="button" onClick={undo} disabled={!historyRef.current.length} className="px-2 h-6 rounded font-mono text-[10px] disabled:opacity-30" style={{ color: "var(--t-text)" }} title="Undo (Ctrl/Cmd+Z)">UNDO</button>
+                <button type="button" onClick={redo} disabled={!futureRef.current.length} className="px-2 h-6 rounded font-mono text-[10px] disabled:opacity-30" style={{ color: "var(--t-text)" }} title="Redo (Ctrl/Cmd+Shift+Z)">REDO</button>
+              </div>
+              <button type="button" onClick={() => setSnapToGrid((value) => !value)} className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase" style={{ color: snapToGrid ? "#9bd3ad" : "#7f8984", border: `1px solid ${snapToGrid ? "rgba(121,198,154,.35)" : "rgba(231,225,213,.12)"}`, background: snapToGrid ? "rgba(121,198,154,.08)" : "transparent" }}>SNAP {snapToGrid ? "ON" : "OFF"}</button>
               <button
                 type="button"
                 onClick={() => {
@@ -1785,7 +2604,7 @@ export default function ManualTopology() {
                     setSourcePort(null)
                   }
                 }}
-                disabled={!selectedId && !connectMode}
+                disabled={verificationView === "actual" || (!selectedId && !connectMode)}
                 className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase"
                 style={{
                   color: connectMode ? PEN_COLOR : "var(--t-accent)",
@@ -1862,7 +2681,7 @@ export default function ManualTopology() {
               <button
                 type="button"
                 onClick={editSelectedDevice}
-                disabled={!selected}
+                disabled={verificationView === "actual" || !selected}
                 className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase"
                 style={{
                   color: "var(--t-text)",
@@ -1875,7 +2694,7 @@ export default function ManualTopology() {
               <button
                 type="button"
                 onClick={deleteSelected}
-                disabled={!selected}
+                disabled={verificationView === "actual" || !selected}
                 className="px-3 py-1.5 rounded-md font-mono text-[10px] uppercase"
                 style={{
                   color: "#ff3366",
@@ -1913,27 +2732,47 @@ export default function ManualTopology() {
             </div>
           </div>
           {activeView === "physical" ? (
-            <div className={isCanvasFullscreen ? "overflow-auto p-3 md:p-5 flex-1 min-h-0" : "overflow-auto p-3 md:p-6"}>
+            <div
+              className={isCanvasFullscreen
+                ? "relative flex-1 min-h-0 min-w-0"
+                : "relative min-h-[560px] max-h-[calc(100vh-280px)] min-w-0"}
+            >
+              <div
+                ref={canvasScrollRef}
+                className={isCanvasFullscreen
+                  ? "h-full min-h-0 overflow-auto overscroll-contain p-3 md:p-5"
+                  : "min-h-[560px] max-h-[calc(100vh-280px)] overflow-auto overscroll-contain p-3 md:p-6"}
+                style={{
+                  backgroundColor: "var(--topology-canvas)",
+                  backgroundImage: "radial-gradient(circle, var(--topology-grid-dot) 1px, transparent 1.2px)",
+                  backgroundSize: "24px 24px",
+                  scrollbarColor: "var(--t-muted) var(--topology-canvas)",
+                  scrollbarWidth: "thin",
+                  scrollbarGutter: "stable",
+                }}
+              >
               <svg
                 ref={svgRef}
-                viewBox={`${480 - 480 / canvasZoom} ${285 - 285 / canvasZoom} ${960 / canvasZoom} ${570 / canvasZoom}`}
-                className={isCanvasFullscreen ? "w-full h-full min-h-[520px] rounded-lg" : "w-full min-w-[720px] h-auto min-h-[520px] 2xl:min-h-[680px] rounded-lg"}
+                viewBox={`${CANVAS_WIDTH / 2 - CANVAS_WIDTH / 2 / canvasZoom - canvasPan.x} ${CANVAS_HEIGHT / 2 - CANVAS_HEIGHT / 2 / canvasZoom - canvasPan.y} ${CANVAS_WIDTH / canvasZoom} ${CANVAS_HEIGHT / canvasZoom}`}
+                className={isCanvasFullscreen ? "w-full h-full min-h-[520px] rounded-lg" : "w-[1600px] h-[1000px] max-w-none rounded-lg"}
                 style={{
                   touchAction: "none",
-                  background: "#101114",
+                  userSelect: "none",
+                  background: "transparent",
+                  border: "1px solid rgba(231,225,213,.10)",
                   cursor: connectMode
                     ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M4 20l4-1L20 7l-3-3L5 16z' fill='%23f4f1ea' stroke='%23101318'/%3E%3C/svg%3E\") 2 22, crosshair"
                     : "default",
                 }}
+                onPointerDown={startCanvasPointer}
                 onPointerMove={moveCanvasItem}
-                onPointerUp={() => {
-                  setDragState(null)
-                  setResizeState(null)
-                }}
+                onPointerUp={finishCanvasPointer}
+                onPointerCancel={finishCanvasPointer}
                 onPointerLeave={() => {
-                  setDragState(null)
-                  setResizeState(null)
+                  finishCanvasPointer()
                 }}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={handleCanvasDrop}
                 onWheel={(event) => {
                   event.preventDefault()
                   setCanvasZoom((value) => Math.max(0.6, Math.min(1.8, Number((value + (event.deltaY < 0 ? 0.1 : -0.1)).toFixed(1)))))
@@ -1941,24 +2780,6 @@ export default function ManualTopology() {
                 role="img"
                 aria-label="Editable manual network topology"
               >
-                <defs>
-                  <pattern
-                    id="manual-topology-grid"
-                    width="24"
-                    height="24"
-                    patternUnits="userSpaceOnUse"
-                  >
-                    <circle cx="2" cy="2" r="1.15" fill="var(--t-muted)" opacity=".48" />
-                  </pattern>
-                </defs>
-                <rect
-                  x="0"
-                  y="0"
-                  width="100%"
-                  height="100%"
-                  fill="url(#manual-topology-grid)"
-                  opacity=".82"
-                />
                 {workspace.devices.length === 0 && (
                   <g>
                     <text
@@ -1983,20 +2804,30 @@ export default function ManualTopology() {
                     </text>
                   </g>
                 )}
-                {workspace.links.map((link) => {
-                  const from = deviceById.get(link.from)
-                  const to = deviceById.get(link.to)
+                {workspace.devices.length > 0 && filteredDevices.length === 0 && (
+                  <g>
+                    <text x="480" y="260" textAnchor="middle" fill="var(--t-text)" fontSize="18" fontWeight="700">No matching topology items</text>
+                    <text x="480" y="290" textAnchor="middle" fill="var(--t-muted)" fontSize="12" fontFamily="JetBrains Mono, monospace">Clear search or filters to restore the full topology</text>
+                  </g>
+                )}
+                {filteredLinks.map((link) => {
+                  const from = visibleDeviceById.get(link.from)
+                  const to = visibleDeviceById.get(link.to)
                   if (!from || !to) return null
                   const pairKey = [link.from, link.to].sort().join("::")
-                  const parallelLinks = workspace.links.filter(
+                  const parallelLinks = filteredLinks.filter(
                     (candidate) => [candidate.from, candidate.to].sort().join("::") === pairKey,
                   )
                   const lane = parallelLinks.findIndex((candidate) => candidate.id === link.id)
                   const geometry = parallelLinkGeometry(from, to, lane, parallelLinks.length, link.geometry)
+                  const verificationItem = verificationForLink(link.id)
+                  const linkStatus = verificationItem?.status ?? (verificationView === "actual" ? "VERIFIED" : "UNKNOWN")
+                  const linkMeta = statusMeta(linkStatus)
                   return (
                     <g
                       key={link.id}
                       onClick={() => setSelectedLinkId(link.id)}
+                      onContextMenu={(event) => openContextMenu(event, { linkId: link.id })}
                       className="cursor-pointer"
                     >
                       <path
@@ -2011,19 +2842,20 @@ export default function ManualTopology() {
                         fill="none"
                         stroke={
                           selectedLinkId === link.id
-                            ? "#ff3366"
-                            : "rgba(34, 211, 238, .95)"
+                            ? "#e7e1d5"
+                            : linkMeta.color
                         }
-                        strokeOpacity={selectedLinkId === link.id ? ".95" : ".72"}
+                        strokeOpacity={selectedLinkId === link.id ? ".98" : ".82"}
                         strokeWidth={selectedLinkId === link.id ? "4" : "2.5"}
                         strokeLinecap="round"
                         strokeLinejoin="round"
+                        strokeDasharray={linkStatus === "DISCONNECTED" || linkStatus === "PORT_MISMATCH" ? "8 6" : linkStatus === "UNEXPECTED" ? "3 4" : undefined}
                       />
                       <circle
                         cx={geometry.midpoint.x}
                         cy={geometry.midpoint.y}
                         r="4"
-                        fill={selectedLinkId === link.id ? "#ff3366" : "#00ff88"}
+                        fill={selectedLinkId === link.id ? "#e7e1d5" : linkMeta.color}
                       >
                         <animate
                           attributeName="r"
@@ -2038,6 +2870,7 @@ export default function ManualTopology() {
                           repeatCount="indefinite"
                         />
                       </circle>
+                      <title>{`${linkMeta.icon} ${linkMeta.label}: ${link.fromPort || "unknown port"} ↔ ${link.toPort || "unknown port"}`}</title>
                     </g>
                   )
                 })}
@@ -2076,13 +2909,13 @@ export default function ManualTopology() {
                     </circle>
                   </g>
                 )}
-                {workspace.devices.map((device) => (
+                {filteredDevices.map((device) => (
                   <NodeCard
                     key={device.id}
                     device={device}
                     warning={deviceHasTopologyWarning(device)}
                     selected={
-                      selectedId === device.id || connectFrom === device.id
+                      selectedIds.includes(device.id) || connectFrom === device.id
                     }
                     expanded={expandedDeviceId === device.id}
                     hovered={hoveredDeviceId === device.id}
@@ -2101,21 +2934,23 @@ export default function ManualTopology() {
                       )
                     }
                     onPortClick={(port) => {
+                      if (verificationView === "actual") return
                       setSelectedId(device.id)
                       selectPort(device.id, port)
                     }}
                     onPortPointerDown={(port) =>
-                      beginPortConnection(device.id, port)
+                      verificationView === "actual" ? undefined : beginPortConnection(device.id, port)
                     }
                     onDragStart={(event) => startDrag(device, event)}
                     onResizeStart={(event) => startResize(device, event)}
+                    onContextMenu={(event) => openContextMenu(event, { deviceId: device.id })}
                     sourcePort={sourcePort}
-                    onClick={() => selectNode(device.id)}
+                    onClick={(event) => verificationView === "actual" ? selectNode(device.id) : selectNode(device.id, event.shiftKey)}
                   />
                 ))}
-                {workspace.links.map((link) => {
-                  const from = deviceById.get(link.from)
-                  const to = deviceById.get(link.to)
+                {filteredLinks.map((link) => {
+                  const from = visibleDeviceById.get(link.from)
+                  const to = visibleDeviceById.get(link.to)
                   if (!from || !to) return null
                   const dx = to.x - from.x
                   const dy = to.y - from.y
@@ -2205,7 +3040,32 @@ export default function ManualTopology() {
                     </g>
                   )
                 })}
+                {selectionBox && (
+                  <rect
+                    x={Math.min(selectionBox.start.x, selectionBox.end.x)}
+                    y={Math.min(selectionBox.start.y, selectionBox.end.y)}
+                    width={Math.abs(selectionBox.end.x - selectionBox.start.x)}
+                    height={Math.abs(selectionBox.end.y - selectionBox.start.y)}
+                    fill="rgba(121,198,154,.08)"
+                    stroke="#79c69a"
+                    strokeDasharray="5 4"
+                    pointerEvents="none"
+                  />
+                )}
               </svg>
+              </div>
+              <div className="absolute bottom-5 right-5 w-36 h-24 rounded-lg p-2 hidden sm:block" style={{ background: "var(--t-card-alpha)", border: "1px solid var(--t-border-alpha)", boxShadow: "0 10px 28px var(--topology-node-shadow)" }}>
+                <div className="font-mono text-[8px] uppercase tracking-widest mb-1" style={{ color: "#7f8984" }}>Minimap</div>
+                <svg viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`} className="w-full h-[76px]">
+                  {workspace.links.map((link) => {
+                    const from = deviceById.get(link.from)
+                    const to = deviceById.get(link.to)
+                    return from && to ? <line key={link.id} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="#77847d" strokeWidth="5" /> : null
+                  })}
+                  {workspace.devices.map((device) => <circle key={device.id} cx={device.x} cy={device.y} r="12" fill={device.tone} opacity=".9" />)}
+                  <rect x={canvasViewport.x} y={canvasViewport.y} width={canvasViewport.width} height={canvasViewport.height} fill="none" stroke="var(--t-accent)" strokeWidth="4" opacity=".7" />
+                </svg>
+              </div>
             </div>
           ) : (
             <div className="p-4 md:p-6 grid md:grid-cols-2 gap-3">
@@ -2769,6 +3629,45 @@ export default function ManualTopology() {
           </GlassCard>
         </section>
       </div>
+      {contextMenu && (
+        <div className="fixed z-[90] min-w-[180px] rounded-lg p-1 shadow-2xl" style={{ left: Math.min(contextMenu.x, window.innerWidth - 210), top: Math.min(contextMenu.y, window.innerHeight - 180), background: "#171b1a", border: "1px solid rgba(231,225,213,.2)" }} role="menu" aria-label="Topology context menu" onClick={(event) => event.stopPropagation()}>
+          {contextMenu.deviceId && (
+            <>
+              <button type="button" role="menuitem" className="block w-full rounded px-3 py-2 text-left font-mono text-[10px] uppercase hover:bg-white/5" style={{ color: "#e7e1d5" }} onClick={() => { setSelectedId(contextMenu.deviceId!); setSelectedIds([contextMenu.deviceId!]); setContextMenu(null) }}>Select device</button>
+              <button type="button" role="menuitem" disabled={verificationView === "actual"} className="block w-full rounded px-3 py-2 text-left font-mono text-[10px] uppercase hover:bg-white/5 disabled:opacity-30" style={{ color: "#d8d2c6" }} onClick={() => { const device = workspace.devices.find((item) => item.id === contextMenu.deviceId); if (device) setEditing({ ...device, ipAddress: device.ipAddress ?? device.subtitle, macAddress: device.macAddress ?? "", location: device.location ?? "" }); setSelectedId(contextMenu.deviceId!); setContextMenu(null) }}>Edit details</button>
+              <button type="button" role="menuitem" disabled={verificationView === "actual"} className="block w-full rounded px-3 py-2 text-left font-mono text-[10px] uppercase hover:bg-white/5 disabled:opacity-30" style={{ color: "#da6b6b" }} onClick={() => { deleteSelected(contextMenu.deviceId!); setContextMenu(null) }}>Remove device</button>
+            </>
+          )}
+          {contextMenu.linkId && (
+            <>
+              <button type="button" role="menuitem" className="block w-full rounded px-3 py-2 text-left font-mono text-[10px] uppercase hover:bg-white/5" style={{ color: "#e7e1d5" }} onClick={() => { setSelectedLinkId(contextMenu.linkId!); setContextMenu(null) }}>Select connection</button>
+              <button type="button" role="menuitem" disabled={verificationView === "actual"} className="block w-full rounded px-3 py-2 text-left font-mono text-[10px] uppercase hover:bg-white/5 disabled:opacity-30" style={{ color: "#da6b6b" }} onClick={() => { disconnectLink(contextMenu.linkId!); setContextMenu(null) }}>Disconnect</button>
+            </>
+          )}
+        </div>
+      )}
+      {confirmRequest ? (
+        <SafetyConfirmDialog
+          request={confirmRequest}
+          step={confirmStep}
+          onCancel={cancelConfirmation}
+          onConfirm={confirmPendingChange}
+        />
+      ) : navigationBlocker.state === "blocked" ? (
+        <SafetyConfirmDialog
+          request={{
+            title: "Leave topology editor?",
+            description: "This page has changes that are still being saved. Leaving now may discard them.",
+            details: [["Saved state", "Manual topology has pending changes"], ["Action", "Stay to finish saving, or leave without saving"]],
+            confirmLabel: "Leave Without Saving",
+            tone: "amber",
+            onConfirm: () => navigationBlocker.proceed(),
+          }}
+          step={1}
+          onCancel={() => navigationBlocker.reset()}
+          onConfirm={confirmPendingChange}
+        />
+      ) : null}
     </main>
   )
 }

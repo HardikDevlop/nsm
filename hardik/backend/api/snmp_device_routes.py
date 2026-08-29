@@ -47,13 +47,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.orm import Session, joinedload, load_only, selectinload
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from backend.database.session import get_db
-from backend.dependencies import get_current_user, require_permission
-from backend.models import Device, DeviceCredential, Event, Interface, Vendor, DeviceType
+from backend.dependencies import require_permission
+from backend.models import Device, DeviceCredential, Event, Vendor, DeviceType
 from backend.models.identity import DeviceCapabilities, DeviceIdentity
-from backend.models.snmp import DeviceInterface, LatestInterface, MonitoringStatus
+from backend.models.snmp import DeviceInterface, LatestInterface
 
 logger = logging.getLogger(__name__)
 

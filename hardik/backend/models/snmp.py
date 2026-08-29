@@ -8,7 +8,7 @@ typed and indexed for PostgreSQL queries.
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from enum import Enum as PyEnum
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, Boolean
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.database.session import Base
 

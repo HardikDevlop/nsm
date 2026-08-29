@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.database.session import get_db
-from backend.dependencies import require_permission
 from backend.models import Device
 from backend.models.snmp import (
     LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment,

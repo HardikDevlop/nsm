@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .poll_scheduler import POLL_INTERVALS
-from .statistics_engine import counter_delta, percentile95
+from .statistics_engine import counter_delta
 
 
 def interface_rates(previous: dict[str, Any], current: dict[str, Any], elapsed: float, speed_bps: float | None = None) -> dict[str, float | None]:

@@ -27,11 +27,7 @@ const ManualTopology = lazyRetry(() => import('./pages/ManualTopology'))
 const ISPMonitoring = lazyRetry(() => import('./pages/ISPMonitoring'))
 const Incidents = lazyRetry(() => import('./pages/Incidents'))
 const PacketAnalysis = lazyRetry(() => import('./pages/PacketAnalysis'))
-// const NginxMonitoring = lazyRetry(() => import('./pages/NginxMonitoring'))
-const Firewall = lazyRetry(() => import('./pages/Firewall'))
 const LinuxServerMonitoring = lazyRetry(() => import('./pages/LinuxServerMonitoring'))
-const Forensics = lazyRetry(() => import('./pages/Forensics'))
-const Compliance = lazyRetry(() => import('./pages/Compliance'))
 const DeviceMonitoring = lazyRetry(() => import('./pages/DeviceMonitoring'))
 const DeviceMonitoringList = lazyRetry(() => import('./pages/DeviceMonitoringList'))
 const RoleManagement = lazyRetry(() => import('./pages/RoleManagement'))
@@ -70,12 +66,8 @@ export const router = createBrowserRouter([
           { path: 'incidents', Component: withPermission(Incidents, 'incidents:read') },
           { path: 'alerts', Component: withPermission(AlertsManagement, 'alerts:read') },
           { path: 'packet-analysis', Component: withPermission(PacketAnalysis, 'packet_analysis:read') },
-          // { path: 'nginx', Component: withPermission(NginxMonitoring, 'nginx:read') },
-          // { path: 'firewall', Component: withPermission(Firewall, 'firewall:read') },
           ...snmpRoutes,
           { path: 'linux-servers', Component: withPermission(LinuxServerMonitoring, 'linux_servers:read') },
-          // { path: 'forensics', Component: withPermission(Forensics, 'forensics:read') },
-          // { path: 'compliance', Component: withPermission(Compliance, 'compliance:read') },
           { path: 'device-monitoring', Component: withPermission(DeviceMonitoringList, 'device_monitoring:read') },
           { path: 'device-monitoring/:deviceId', Component: withPermission(DeviceMonitoring, 'device_monitoring:read') },
           { path: 'roles', Component: withPermission(RoleManagement, 'roles:read') },
@@ -89,7 +81,6 @@ export const router = createBrowserRouter([
           { path: 'events', Component: withPermission(Events, 'events:read') },
           { path: 'notifications', Component: withPermission(Notifications, 'notifications:read') },
           { path: 'audit-logs', Component: withPermission(AuditLogs, 'audit_logs:read') },
-          // { path: 'thresholds', Component: withPermission(Thresholds, 'thresholds:read') },
           { path: 'monitoring-jobs', Component: withPermission(MonitoringJobs, 'monitoring_jobs:read') },
           { path: 'device-credentials', Component: withPermission(DeviceCredentials, 'device_credentials:read') },
           { path: 'device-types', Component: withPermission(DeviceTypes, 'device_types:read') },

@@ -9,10 +9,8 @@ const ALERT_CACHE_KEY = 'nms.layout.alerts.v1'
 const ALERT_HIDDEN_KEY = 'nms.layout.hidden-alert-ids.v1'
 const ALERT_REFRESH_MS = 60_000
 
-const loadNotificationPanel = () => import('./NotificationPanel')
-const loadThemePicker = () => import('./ThemePicker')
-const NotificationPanel = lazy(loadNotificationPanel)
-const ThemePicker = lazy(loadThemePicker)
+const NotificationPanel = lazy(() => import('./NotificationPanel'))
+const ThemePicker = lazy(() => import('./ThemePicker'))
 
 export default function Layout() {
   const [notifOpen, setNotifOpen] = useState(false)
@@ -249,13 +247,6 @@ export default function Layout() {
                 </div>
               </button>
 
-              {/* Active incidents badge 
-              <div className={`${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1 md:gap-2 cursor-pointer transition-colors`}
-                style={{ border: '1px solid rgba(255,51,102,0.35)' }}>
-                <span className="status-dot offline" />
-                <span className="hidden sm:inline font-mono text-xs" style={{ color: '#ff3366' }}>7 ACTIVE</span>
-              </div>
-                  */}
               {/* Notifications */}
               <button onClick={() => setNotifOpen(o => !o)}
                 className={`relative ${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1 md:gap-2 cursor-pointer transition-all`}
