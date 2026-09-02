@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useAuth } from '../components/AuthContext'
+import { useBranding } from '../components/BrandingContext'
 
 export default function Login() {
   const { login } = useAuth()
+  const branding = useBranding()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -34,9 +36,9 @@ export default function Login() {
         <div className="flex flex-col items-center mb-8">
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
             style={{ background: 'rgb(239 231 231 / 15%)', border: '1px solid var(--t-accent-border)' }}>
-            <img src="/favicon.png" alt="" className="w-10 h-10 object-contain" />
+            {branding.logo_url && <img src={branding.logo_url} alt={branding.application_name} className="w-10 h-10 object-contain" />}
           </div>
-          <img src="/header-logo.png" alt="Agnigate" className="h-8 w-auto object-contain mb-2" />
+          <div className="font-display font-bold text-xl mb-2" style={{ color: 'var(--t-text)' }}>{branding.application_name}</div>
           <p className="font-mono text-xs tracking-widest" style={{ color: 'var(--t-muted)' }}>
             NETWORK MANAGEMENT SYSTEM
           </p>

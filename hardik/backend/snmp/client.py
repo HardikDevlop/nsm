@@ -43,6 +43,7 @@ _snmp_executor = concurrent.futures.ThreadPoolExecutor(
 # Hard cap: never walk more than this many rows per OID tree.
 # Prevents runaway walks on large ARP/MAC tables.
 _MAX_WALK_ROWS = 2000
+_CANCELLATION_MARGIN_SECONDS = 0.05
 
 
 def _run_in_thread(coro: Any, timeout: float) -> Any:
@@ -66,7 +67,13 @@ def _run_in_thread(coro: Any, timeout: float) -> Any:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(coro)
+            # Enforce the deadline inside the worker as well as on the
+            # executor future so asyncio can cancel the in-flight SNMP task.
+            worker_timeout = max(
+                timeout * 0.9,
+                timeout - _CANCELLATION_MARGIN_SECONDS,
+            )
+            return loop.run_until_complete(asyncio.wait_for(coro, timeout=worker_timeout))
         finally:
             # Cancel pysnmp's pending timer tasks without awaiting them.
             # Awaiting would hang because those tasks wait on unresolvable futures.
@@ -77,9 +84,9 @@ def _run_in_thread(coro: Any, timeout: float) -> Any:
     future = _snmp_executor.submit(_worker)
     try:
         return future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError as exc:
+    except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as exc:
         future.cancel()
-        raise TimeoutError(f"SNMP operation exceeded {timeout:.1f}s timeout") from exc
+        raise TimeoutError(f"SNMP operation timed out after {timeout:.1f}s") from exc
 
 
 class SNMPClient:
@@ -135,6 +142,10 @@ class SNMPClient:
             )
         return UsmUserData(**kwargs)
 
+    # Kept for compatibility with older internal callers and regression tests.
+    def _auth(self) -> Any:
+        return self._make_auth()
+
     # ------------------------------------------------------------------
     # GET — single request for a list of scalar OIDs
     # ------------------------------------------------------------------
@@ -163,9 +174,13 @@ class SNMPClient:
                 *(ObjectType(ObjectIdentity(oid)) for oid in oids),
             )
 
-        errInd, errSt, _errIdx, var_binds = _run_in_thread(
-            _run(), self.operation_timeout
-        )
+        try:
+            errInd, errSt, _errIdx, var_binds = _run_in_thread(
+                _run(), self.operation_timeout
+            )
+        finally:
+            from backend.observability import record_snmp_duration  # noqa: PLC0415
+            record_snmp_duration((time.perf_counter() - t0) * 1000)
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
 
         if errInd or errSt:
@@ -268,7 +283,11 @@ class SNMPClient:
 
             return result
 
-        result  = _run_in_thread(_run(), self.operation_timeout)
+        try:
+            result = _run_in_thread(_run(), self.operation_timeout)
+        finally:
+            from backend.observability import record_snmp_duration  # noqa: PLC0415
+            record_snmp_duration((time.perf_counter() - t0) * 1000)
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
         logger.debug(
             "WALK %s root=%s rows=%d ms=%.1f",

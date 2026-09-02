@@ -30,10 +30,21 @@ class Settings(BaseSettings):
     snmp_operation_timeout: float = 120.0
     redis_url: str = "redis://localhost:6379/0"
     redis_cache_ttl_seconds: int = 10
+    flow_enabled: bool = False
+    flow_bind_host: str = "0.0.0.0"
+    flow_netflow_port: int = 2055
+    flow_sflow_port: int = 6343
+    branding_application_name: str = "NMS"
+    branding_logo_url: str = ""
+    branding_allowed_themes: str = "light,dark"
 
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.backend_cors_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_themes(self) -> list[str]:
+        return [theme.strip() for theme in self.branding_allowed_themes.split(",") if theme.strip() in {"light", "dark"}]
 
 
 @lru_cache

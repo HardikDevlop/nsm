@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import csv
 import io
+import logging
 from threading import Lock
 from typing import Literal
 
@@ -37,12 +38,14 @@ from backend.models import (
     Vendor,
 )
 from backend.repositories.crud import CRUDRouterMixin
+from backend.config.settings import get_settings
 from backend.schemas.nms import (
     AlertCreate,
     AlertRead,
     AlertUpdate,
     AssignRoleRequest,
     AuditLogRead,
+    BrandingRead,
     DashboardSummary,
     DeviceCreate,
     DeviceCredentialCreate,
@@ -110,10 +113,12 @@ from backend.schemas.nms import (
 from backend.services.discovery import discover_network
 from backend.services.monitoring import run_monitoring_check
 from backend.services.alerting import _notify, create_device_added_alert
+from backend.incidents.service import create_incident_from_alert, process_alert_recovery
 from backend.utils.crypto import encrypt_secret
 
 
 router = APIRouter(prefix="/api/v1")
+incident_logger = logging.getLogger(__name__)
 _DASHBOARD_SUMMARY_TTL_SECONDS = 10
 _dashboard_summary_cache: dict[str, object] = {}
 _dashboard_summary_lock = Lock()
@@ -619,7 +624,18 @@ def delete_user(item_id: int, db: Session = Depends(get_db), current_user: User 
     return result
 
 
-# ---------------------------------------------------------------- Organizations
+# ---------------------------------------------------------------- Branding / Organizations
+@router.get("/branding", response_model=BrandingRead)
+def get_branding() -> BrandingRead:
+    """Expose non-sensitive tenant branding configured by the backend."""
+    settings = get_settings()
+    return BrandingRead(
+        application_name=settings.branding_application_name,
+        logo_url=settings.branding_logo_url or None,
+        allowed_themes=settings.allowed_themes or ["light"],
+    )
+
+
 @router.get("/organizations", response_model=list[OrganizationRead])
 def list_organizations(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("organizations:read"))):
     return organization_crud.list(db, skip, limit)
@@ -1331,6 +1347,15 @@ def create_alert(payload: AlertCreate, db: Session = Depends(get_db), current_us
     db.add(Event(device_id=item.device_id, event_type="ALERT_CREATED", description=item.title))
     db.commit()
     db.refresh(item)
+    # Incident automation is additive; an incident persistence problem must
+    # not turn an already committed source alert into a failed alert request.
+    try:
+        auto_incident = create_incident_from_alert(db, item, current_user.id)
+        if auto_incident is not None:
+            db.commit()
+    except Exception:
+        db.rollback()
+        incident_logger.exception("Incident automation failed for alert %s", item.id)
     audit(db, current_user.id, "CREATE", "alerts")
     return item
 
@@ -1343,6 +1368,13 @@ def get_alert(item_id: int, db: Session = Depends(get_db), _: User = Depends(req
 @router.patch("/alerts/{item_id}", response_model=AlertRead)
 def update_alert(item_id: int, payload: AlertUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:update"))):
     item = alert_crud.update(db, item_id, payload)
+    if item.status == "resolved":
+        try:
+            process_alert_recovery(db, item.id, current_user.id)
+            db.commit()
+        except Exception:
+            db.rollback()
+            incident_logger.exception("Incident recovery processing failed for alert %s", item.id)
     audit(db, current_user.id, "UPDATE", "alerts")
     return item
 
@@ -1374,6 +1406,12 @@ def acknowledge_alert(item_id: int, db: Session = Depends(get_db), current_user:
 @router.post("/alerts/{item_id}/resolve", response_model=AlertRead)
 def resolve_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:update"))):
     item = alert_crud.update(db, item_id, {"status": "resolved", "resolved_at": datetime.utcnow()})
+    try:
+        process_alert_recovery(db, item.id, current_user.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        incident_logger.exception("Incident recovery processing failed for alert %s", item.id)
     audit(db, current_user.id, "RESOLVE", "alerts")
     return item
 

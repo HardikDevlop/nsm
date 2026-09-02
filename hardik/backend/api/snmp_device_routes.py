@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -59,6 +59,194 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["SNMP Device Monitoring"])
 MAX_SNMP_TABLE_ROWS = 500
+
+
+class TopologySnapshotPayload(BaseModel):
+    device_id: int
+    devices: list[dict[str, Any]] = []
+    links: list[dict[str, Any]] = []
+    collected_at: str
+    source: str = "live_refresh"
+
+
+def _topology_timestamp_is_newer(candidate: str, current: str | None) -> bool:
+    """Prevent an older collector response from replacing a newer snapshot."""
+    if not current:
+        return True
+    try:
+        candidate_dt = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        current_dt = datetime.fromisoformat(current.replace("Z", "+00:00"))
+        if candidate_dt.tzinfo is None:
+            candidate_dt = candidate_dt.replace(tzinfo=timezone.utc)
+        if current_dt.tzinfo is None:
+            current_dt = current_dt.replace(tzinfo=timezone.utc)
+        return candidate_dt >= current_dt
+    except (TypeError, ValueError):
+        # An unparseable candidate must not displace a valid persisted time.
+        return bool(candidate and not current)
+
+
+def _topology_identity(value: Any, *, link: bool = False) -> tuple[str, ...]:
+    """Build a stable identity without depending on collector-specific fields."""
+    if not isinstance(value, dict):
+        return ("",)
+    if link:
+        source = value.get("from") or value.get("source") or value.get("source_node") or value.get("source_id")
+        target = value.get("to") or value.get("target") or value.get("target_node") or value.get("target_id")
+        local = value.get("localPort") or value.get("local_port") or value.get("source_port")
+        remote = value.get("remotePort") or value.get("remote_port") or value.get("target_port")
+        if source or target or local or remote:
+            return ("link", str(source or ""), str(target or ""), str(local or ""), str(remote or ""))
+        return ("link-id", str(value.get("id") or ""))
+    for field in ("id", "device_id", "ip_address", "ip", "mac_address", "mac", "hostname", "name"):
+        current = value.get(field)
+        if current is not None and str(current).strip():
+            return (field, str(current).strip().lower())
+    return ("node", "")
+
+
+def _topology_link_endpoints(value: Any) -> tuple[str, str]:
+    if not isinstance(value, dict):
+        return ("", "")
+    source = value.get("from") or value.get("source") or value.get("source_node") or value.get("source_id")
+    target = value.get("to") or value.get("target") or value.get("target_node") or value.get("target_id")
+    return (str(source or ""), str(target or ""))
+
+
+def _topology_positive_removal(value: Any) -> bool:
+    """Only explicit fresh removal evidence may delete a persisted entity."""
+    if not isinstance(value, dict):
+        return False
+    return any(value.get(field) is True for field in ("removed", "deleted", "disappeared", "removal_confirmed")) or value.get("present") is False
+
+
+def _merge_collector_topology(
+    existing_devices: list[dict[str, Any]],
+    existing_links: list[dict[str, Any]],
+    fresh_devices: list[dict[str, Any]],
+    fresh_links: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Merge a partial collector cycle over the last complete topology."""
+    devices = [dict(item) for item in existing_devices if isinstance(item, dict)]
+    links = [dict(item) for item in existing_links if isinstance(item, dict)]
+
+    for candidate in fresh_devices:
+        if not isinstance(candidate, dict):
+            continue
+        identity = _topology_identity(candidate)
+        index = next((i for i, item in enumerate(devices) if _topology_identity(item) == identity), None)
+        if _topology_positive_removal(candidate):
+            if index is not None:
+                devices.pop(index)
+            continue
+        if index is None:
+            devices.append(dict(candidate))
+        else:
+            devices[index] = {**devices[index], **candidate}
+
+    for candidate in fresh_links:
+        if not isinstance(candidate, dict):
+            continue
+        identity = _topology_identity(candidate, link=True)
+        index = next((i for i, item in enumerate(links) if _topology_identity(item, link=True) == identity), None)
+        if index is None and candidate.get("id"):
+            same_id = [i for i, item in enumerate(links) if item.get("id") == candidate.get("id")]
+            if len(same_id) == 1:
+                index = same_id[0]
+        if index is None:
+            endpoints = _topology_link_endpoints(candidate)
+            same_endpoints = [i for i, item in enumerate(links) if _topology_link_endpoints(item) == endpoints and endpoints != ("", "")]
+            if len(same_endpoints) == 1:
+                index = same_endpoints[0]
+        if _topology_positive_removal(candidate):
+            if index is not None:
+                links.pop(index)
+            continue
+        if index is None:
+            links.append(dict(candidate))
+        else:
+            links[index] = {**links[index], **candidate}
+    return devices, links
+
+
+def _persist_topology_snapshot(
+    db: Session,
+    device_id: int,
+    devices: list[dict[str, Any]],
+    links: list[dict[str, Any]],
+    collected_at: str,
+    source: str = "live_refresh",
+) -> bool:
+    cap = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    if cap is None:
+        cap = DeviceCapabilities(device_id=device_id, capability_detail={})
+        db.add(cap)
+        db.flush()
+    detail = dict(cap.capability_detail or {})
+    current = detail.get("topology") if isinstance(detail.get("topology"), dict) else {}
+    current_timestamp = current.get("timestamp") or current.get("collected_at")
+    if not _topology_timestamp_is_newer(collected_at, current_timestamp):
+        logger.info(
+            "[TOPOLOGY-BE] persist ignored device_id=%s row_id=%s candidate_timestamp=%s "
+            "current_timestamp=%s nodes=%s links=%s accepted=False",
+            device_id,
+            cap.id,
+            collected_at,
+            current_timestamp,
+            len(devices),
+            len(links),
+        )
+        return False
+    if source == "collector":
+        current_data = current.get("data") if isinstance(current.get("data"), dict) else {}
+        devices, links = _merge_collector_topology(
+            current_data.get("nodes") or [],
+            current_data.get("links") or [],
+            devices,
+            links,
+        )
+    detail["topology"] = {
+        **current,
+        "supported": True,
+        "data": {"nodes": devices, "links": links},
+        "timestamp": collected_at,
+        "collected_at": collected_at,
+        "source": source,
+    }
+    cap.cap_topology = True
+    cap.capability_detail = detail
+    cap.updated_at = datetime.utcnow()
+    db.flush()
+    logger.info(
+        "[TOPOLOGY-BE] persist accepted device_id=%s row_id=%s timestamp=%s nodes=%s links=%s accepted=True",
+        device_id,
+        cap.id,
+        collected_at,
+        len(devices),
+        len(links),
+    )
+    return True
+
+
+def _latest_cached_topology(capabilities: dict[int, DeviceCapabilities]) -> dict[str, Any] | None:
+    """Return the newest non-empty topology snapshot across active devices."""
+    candidates: list[tuple[datetime, dict[str, Any]]] = []
+    for capability in capabilities.values():
+        topology = (capability.capability_detail or {}).get("topology")
+        if not isinstance(topology, dict):
+            continue
+        data = topology.get("data") or {}
+        if not data.get("nodes") and not data.get("links"):
+            continue
+        raw_timestamp = topology.get("timestamp") or topology.get("collected_at")
+        try:
+            timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            timestamp = datetime.min.replace(tzinfo=timezone.utc)
+        candidates.append((timestamp, topology))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,12 +295,19 @@ def _get_credentials_map(device_ids: list[int], db: Session) -> dict[int, Device
     return by_device_id
 
 
-def _live_collect(device: Device, cred: DeviceCredential | None, domain: str | None = None) -> dict[str, Any]:
+def _live_collect(
+    device: Device,
+    cred: DeviceCredential | None,
+    domain: str | None = None,
+    *,
+    acquire_guard: bool = True,
+) -> dict[str, Any]:
     """Run a live SNMP collect on the device using stored credentials."""
     from backend.snmp.collector import SNMPService  # noqa: PLC0415
     from backend.snmp.credentials import SNMPCredentials  # noqa: PLC0415
     from backend.utils.crypto import decrypt_secret  # noqa: PLC0415
     from backend.observability import record_snmp_duration  # noqa: PLC0415
+    from backend.services.snmp_poll_guard import poll_guard  # noqa: PLC0415
 
     if not cred:
         raise HTTPException(
@@ -153,33 +348,36 @@ def _live_collect(device: Device, cred: DeviceCredential | None, domain: str | N
         security_level=cred.security_level,
     )
     service = SNMPService(credentials=credentials)
+    guard = poll_guard(device.id, domain or "__full__", blocking=False) if acquire_guard else None
+    if guard is not None and not guard.__enter__():
+        guard.__exit__(None, None, None)
+        raise HTTPException(status_code=409, detail="Poll already in progress for this device and module")
     snmp_started = time.perf_counter()
-    if not domain:
-        try:
-            return service.collect(device.ip_address)
-        finally:
-            record_snmp_duration((time.perf_counter() - snmp_started) * 1000)
-
-    # collect_domain returns the collector payload directly, while the HTTP
-    # routes use the same stable envelope as a full collection. Keep the
-    # envelope here so every module route can read its real data consistently.
     try:
+        if not domain:
+            return service.collect(device.ip_address)
+
+        # collect_domain returns the collector payload directly, while the HTTP
+        # routes use the same stable envelope as a full collection. Keep the
+        # envelope here so every module route can read its real data consistently.
         domain_result = service.collect_domain(device.ip_address, domain)
+        return {
+            "api_version": "2.0",
+            "ip": device.ip_address,
+            "reachable": domain_result.get("supported") is not False,
+            "snmp_enabled": True,
+            "snmp_version": version,
+            "vendor": device.vendor.vendor_name if device.vendor else None,
+            "device_type": device.device_type.name if device.device_type else None,
+            "hostname": device.hostname,
+            "collection_ms": domain_result.get("collection_ms", 0),
+            "collectors": {domain: domain_result},
+            "unsupported": [] if domain_result.get("supported") else [domain],
+        }
     finally:
         record_snmp_duration((time.perf_counter() - snmp_started) * 1000)
-    return {
-        "api_version": "2.0",
-        "ip": device.ip_address,
-        "reachable": domain_result.get("supported") is not False,
-        "snmp_enabled": True,
-        "snmp_version": version,
-        "vendor": device.vendor.vendor_name if device.vendor else None,
-        "device_type": device.device_type.name if device.device_type else None,
-        "hostname": device.hostname,
-        "collection_ms": domain_result.get("collection_ms", 0),
-        "collectors": {domain: domain_result},
-        "unsupported": [] if domain_result.get("supported") else [domain],
-    }
+        if guard is not None:
+            guard.__exit__(None, None, None)
 
 
 def _collector_data(result: dict[str, Any], name: str) -> dict[str, Any]:
@@ -454,6 +652,26 @@ def _persist_collect_result(device_id: int, result: dict[str, Any], db: Session)
         attr = f"cap_{name}"
         if hasattr(cap, attr):
             setattr(cap, attr, collector.get("supported", False))
+        if name == "topology":
+            existing_topology = detail.get("topology") if isinstance(detail.get("topology"), dict) else {}
+            candidate_timestamp = collector.get("timestamp") or datetime.utcnow().isoformat()
+            current_timestamp = existing_topology.get("timestamp") or existing_topology.get("collected_at")
+            if not _topology_timestamp_is_newer(candidate_timestamp, current_timestamp):
+                continue
+            candidate_data = collector.get("data") if isinstance(collector.get("data"), dict) else {}
+            if collector.get("supported") is not True or not (candidate_data.get("nodes") or candidate_data.get("links")):
+                continue
+            current_data = existing_topology.get("data") if isinstance(existing_topology.get("data"), dict) else {}
+            merged_nodes, merged_links = _merge_collector_topology(
+                current_data.get("nodes") or [],
+                current_data.get("links") or [],
+                candidate_data.get("nodes") or [],
+                candidate_data.get("links") or [],
+            )
+            collector = {
+                **collector,
+                "data": {**candidate_data, "nodes": merged_nodes, "links": merged_links},
+            }
         detail[name] = {
             **(detail.get(name, {}) if isinstance(detail.get(name), dict) else {}),
             **collector,
@@ -980,7 +1198,7 @@ def poll_device_now(
         guard.__exit__(None, None, None)
         raise HTTPException(status_code=409, detail="Poll already in progress for this device and module")
     try:
-        result = _live_collect(device, cred, domain=module or None)
+        result = _live_collect(device, cred, domain=module or None, acquire_guard=False)
         _persist_collect_result(device_id, result, db)
         return result
     finally:
@@ -1655,7 +1873,7 @@ def get_snmp_health(device_id: int, db: Session = Depends(get_db), _: Any = Depe
 @router.get("/snmp/devices/{device_id}/firewall")
 def get_snmp_firewall(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="firewall")
     col = _collector_data(result, "firewall")
     return {
         "api_version":   result.get("api_version", "2.0"),
@@ -1680,7 +1898,7 @@ def get_snmp_firewall(device_id: int, db: Session = Depends(get_db), _: Any = De
 @router.get("/snmp/devices/{device_id}/wireless")
 def get_snmp_wireless(device_id: int, db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db))
+    result = _live_collect(device, _get_credentials(device_id, db), domain="wireless")
     col = _collector_data(result, "wireless")
     return {
         "api_version":   result.get("api_version", "2.0"),
@@ -1824,9 +2042,25 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
     exact_gateway = next((d for d in all_devices if d.ip_address in ("192.168.1.0", "192.168.100.1")), None)
     d_list = [exact_gateway] if exact_gateway else gateway_devices[:1] or core_devices[:1] or all_devices[:1]
     if not refresh and d_list:
-        cached_cap = capability_map.get(d_list[0].id)
-        cached_topology = ((cached_cap.capability_detail or {}).get("topology") or {}) if cached_cap else {}
+        # A live refresh may be rooted at the core switch while the normal
+        # collector root is the gateway. Always return the newest persisted
+        # snapshot instead of assuming d_list[0] owns the latest graph.
+        cached_topology = _latest_cached_topology(capability_map) or {}
         cached_data = cached_topology.get("data") or {}
+        selected_capability = next(
+            (cap for cap in capability_map.values()
+             if (cap.capability_detail or {}).get("topology") is cached_topology),
+            None,
+        )
+        logger.info(
+            "[TOPOLOGY-BE] GET cached selected_capability_id=%s selected_device_id=%s "
+            "timestamp=%s nodes=%s links=%s",
+            selected_capability.id if selected_capability else None,
+            selected_capability.device_id if selected_capability else None,
+            cached_topology.get("timestamp") or cached_topology.get("collected_at"),
+            len(cached_data.get("nodes") or []),
+            len(cached_data.get("links") or []),
+        )
         if cached_data.get("nodes") or cached_data.get("links"):
             return {
                 "devices": cached_data.get("nodes", []),
@@ -1858,6 +2092,11 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                 "mac_address": enriched.get("mac_address"),
                 "display_name": enriched.get("display_name"),
             })
+        logger.info(
+            "[TOPOLOGY-BE] GET inventory fallback selected_capability_id=None "
+            "selected_device_id=None timestamp=None nodes=%s links=0",
+            len(inventory_nodes),
+        )
         return {
             "devices": inventory_nodes,
             "links": [],
@@ -1911,10 +2150,14 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                     cap = DeviceCapabilities(device_id=d.id, capability_detail={})
                     db.add(cap)
                     capability_map[d.id] = cap
-                detail = dict(cap.capability_detail or {})
-                detail["topology"] = topology
-                cap.capability_detail = detail
-                db.flush()
+                _persist_topology_snapshot(
+                    db,
+                    d.id,
+                    data.get("nodes") or [],
+                    data.get("links") or [],
+                    topology.get("timestamp") or datetime.utcnow().isoformat(),
+                    source="collector",
+                )
             else:
                 cached = capability_map.get(d.id)
                 data = ((cached.capability_detail or {}).get("topology") or {}).get("data") or {} if cached else {}
@@ -1982,7 +2225,34 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                     links.append({**link, "verified": True})
             continue
     db.commit()
+    logger.info(
+        "[TOPOLOGY-BE] GET live/assembled selected_device_ids=%s timestamp=%s nodes=%s links=%s",
+        [device.id for device in d_list],
+        None,
+        len(nodes),
+        len(links),
+    )
     return {"devices": list(nodes.values()), "links": links, "verified_only": True}
+
+
+@router.post("/snmp/topology/snapshot")
+def persist_snmp_topology_snapshot(
+    payload: TopologySnapshotPayload,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("devices:read")),
+) -> dict[str, Any]:
+    """Persist a successfully assembled live topology for future GETs."""
+    _get_device_or_404(payload.device_id, db)
+    persisted = _persist_topology_snapshot(
+        db,
+        payload.device_id,
+        payload.devices,
+        payload.links,
+        payload.collected_at,
+        source=payload.source,
+    )
+    db.commit()
+    return {"persisted": persisted, "collected_at": payload.collected_at}
 
 
 # ---------------------------------------------------------------------------
@@ -2000,21 +2270,19 @@ class MonitoringConfigUpdateRequest(BaseModel):
 
 
 @router.get("/snmp/devices/{device_id}/monitoring")
-def get_device_monitoring_configs(
+async def get_device_monitoring_configs(
     device_id: int,
     db: Session = Depends(get_db),
     _: Any = Depends(require_permission("devices:read")),
 ) -> list[dict[str, Any]]:
     """Get all monitoring configurations for a device."""
     from backend.services.snmp_polling import get_polling_scheduler
-    import asyncio
-
-    scheduler = asyncio.run(get_polling_scheduler())
-    return asyncio.run(scheduler.get_device_jobs(device_id))
+    scheduler = await get_polling_scheduler()
+    return await scheduler.get_device_jobs(device_id)
 
 
 @router.post("/snmp/devices/{device_id}/monitoring/{module}/start")
-def start_module_monitoring(
+async def start_module_monitoring(
     device_id: int,
     module: str,
     payload: MonitoringConfigRequest,
@@ -2024,8 +2292,6 @@ def start_module_monitoring(
     """Start monitoring a specific module on a device."""
     from backend.services.snmp_polling import get_polling_scheduler, ALLOWED_INTERVALS
     from backend.services.snmp_poll_guard import poll_guard
-    import asyncio
-
     if payload.interval_seconds not in ALLOWED_INTERVALS:
         raise HTTPException(status_code=400, detail=f"Invalid interval. Allowed: {ALLOWED_INTERVALS}")
 
@@ -2043,8 +2309,8 @@ def start_module_monitoring(
         guard.__exit__(None, None, None)
         raise HTTPException(status_code=409, detail="Poll or monitoring start already in progress for this device and module")
     try:
-        scheduler = asyncio.run(get_polling_scheduler())
-        config = asyncio.run(scheduler.add_job(device_id, module, payload.interval_seconds))
+        scheduler = await get_polling_scheduler()
+        config = await scheduler.add_job(device_id, module, payload.interval_seconds)
     finally:
         guard.__exit__(None, None, None)
     return {
@@ -2058,7 +2324,7 @@ def start_module_monitoring(
 
 
 @router.post("/snmp/devices/{device_id}/monitoring/{module}/stop")
-def stop_module_monitoring(
+async def stop_module_monitoring(
     device_id: int,
     module: str,
     db: Session = Depends(get_db),
@@ -2066,10 +2332,8 @@ def stop_module_monitoring(
 ) -> dict[str, Any]:
     """Stop monitoring a specific module on a device."""
     from backend.services.snmp_polling import get_polling_scheduler
-    import asyncio
-
-    scheduler = asyncio.run(get_polling_scheduler())
-    stopped = asyncio.run(scheduler.stop_job(device_id, module))
+    scheduler = await get_polling_scheduler()
+    stopped = await scheduler.stop_job(device_id, module)
     return {
         "device_id": device_id,
         "module_name": module,
@@ -2079,7 +2343,7 @@ def stop_module_monitoring(
 
 
 @router.put("/snmp/devices/{device_id}/monitoring/{module}")
-def update_module_monitoring(
+async def update_module_monitoring(
     device_id: int,
     module: str,
     payload: MonitoringConfigUpdateRequest,
@@ -2088,19 +2352,17 @@ def update_module_monitoring(
 ) -> dict[str, Any]:
     """Update monitoring configuration (interval, enabled) for a module."""
     from backend.services.snmp_polling import get_polling_scheduler, ALLOWED_INTERVALS
-    import asyncio
-
     if payload.interval_seconds is not None and payload.interval_seconds not in ALLOWED_INTERVALS:
         raise HTTPException(status_code=400, detail=f"Invalid interval. Allowed: {ALLOWED_INTERVALS}")
 
-    scheduler = asyncio.run(get_polling_scheduler())
+    scheduler = await get_polling_scheduler()
 
     if payload.interval_seconds is not None:
-        updated = asyncio.run(scheduler.update_job_interval(device_id, module, payload.interval_seconds))
+        updated = await scheduler.update_job_interval(device_id, module, payload.interval_seconds)
         if not updated:
             raise HTTPException(status_code=404, detail="Monitoring config not found")
 
-    status = asyncio.run(scheduler.get_job_status(device_id, module))
+    status = await scheduler.get_job_status(device_id, module)
     if not status:
         raise HTTPException(status_code=404, detail="Monitoring config not found")
 
@@ -2109,18 +2371,18 @@ def update_module_monitoring(
         if payload.enabled:
             # Start if not running
             if status["status"] != "running":
-                asyncio.run(scheduler.add_job(device_id, module, status["interval_seconds"]))
+                await scheduler.add_job(device_id, module, status["interval_seconds"])
         else:
             # Stop if running
             if status["status"] == "running":
-                asyncio.run(scheduler.stop_job(device_id, module))
-        status = asyncio.run(scheduler.get_job_status(device_id, module))
+                await scheduler.stop_job(device_id, module)
+        status = await scheduler.get_job_status(device_id, module)
 
     return status
 
 
 @router.get("/snmp/devices/{device_id}/monitoring/{module}/status")
-def get_module_monitoring_status(
+async def get_module_monitoring_status(
     device_id: int,
     module: str,
     db: Session = Depends(get_db),
@@ -2128,10 +2390,8 @@ def get_module_monitoring_status(
 ) -> dict[str, Any]:
     """Get monitoring status for a specific module."""
     from backend.services.snmp_polling import get_polling_scheduler
-    import asyncio
-
-    scheduler = asyncio.run(get_polling_scheduler())
-    status = asyncio.run(scheduler.get_job_status(device_id, module))
+    scheduler = await get_polling_scheduler()
+    status = await scheduler.get_job_status(device_id, module)
     if not status:
         raise HTTPException(status_code=404, detail="Monitoring config not found")
     return status
@@ -2215,7 +2475,7 @@ def get_latest_metrics(
                 ),
                 '[]'::json
             ) AS environment
-    """)).mappings().one()
+    """), {"device_id": device_id}).mappings().one()
     cpu = metrics["cpu"]
     mem = metrics["memory"]
     storage = metrics["storage"] or []
@@ -2456,6 +2716,40 @@ def get_latest_environment(
 # Optimized Device List & Details Endpoints
 # ---------------------------------------------------------------------------
 
+def _load_device_list_metadata(
+    db: Session,
+    device_ids: list[int],
+    DeviceIdentity: Any,
+    MonitoringConfig: Any,
+) -> tuple[dict[int, DeviceCredential], dict[int, Any], dict[int, list[Any]]]:
+    """Load page metadata in one batched read instead of three N+1-style reads."""
+    if not device_ids:
+        return {}, {}, {}
+
+    rows = db.query(DeviceCredential, DeviceIdentity, MonitoringConfig).select_from(Device).outerjoin(
+        DeviceCredential, DeviceCredential.device_id == Device.id,
+    ).outerjoin(
+        DeviceIdentity, DeviceIdentity.device_id == Device.id,
+    ).outerjoin(
+        MonitoringConfig, MonitoringConfig.device_id == Device.id,
+    ).filter(Device.id.in_(device_ids)).order_by(DeviceCredential.id.asc()).all()
+
+    credentials_by_device: dict[int, DeviceCredential] = {}
+    identities: dict[int, Any] = {}
+    configs_by_device: dict[int, list[Any]] = {}
+    config_ids_by_device: dict[int, set[int]] = {}
+    for credential, identity, config in rows:
+        if credential is not None:
+            credentials_by_device.setdefault(credential.device_id, credential)
+        if identity is not None:
+            identities[identity.device_id] = identity
+        if config is not None:
+            seen = config_ids_by_device.setdefault(config.device_id, set())
+            if config.id not in seen:
+                seen.add(config.id)
+                configs_by_device.setdefault(config.device_id, []).append(config)
+    return credentials_by_device, identities, configs_by_device
+
 @router.get("/snmp/devices")
 def list_snmp_devices_optimized(
     page: int = Query(default=1, ge=1),
@@ -2559,44 +2853,9 @@ def list_snmp_devices_optimized(
     total = query.count()
     devices = query.offset((page - 1) * page_size).limit(page_size).all()
     device_ids = [device.id for device in devices]
-    credential_rows = (
-        db.query(DeviceCredential)
-        .options(load_only(
-            DeviceCredential.id,
-            DeviceCredential.device_id,
-            DeviceCredential.snmp_version,
-        ))
-        .filter(DeviceCredential.device_id.in_(device_ids))
-        .order_by(DeviceCredential.id.asc())
-        .all()
-        if device_ids else []
+    credentials_by_device, identities, configs_by_device = _load_device_list_metadata(
+        db, device_ids, DeviceIdentity, MonitoringConfig,
     )
-    credentials_by_device: dict[int, DeviceCredential] = {}
-    for row in credential_rows:
-        credentials_by_device.setdefault(row.device_id, row)
-
-    identities = {
-        row.device_id: row
-        for row in db.query(DeviceIdentity)
-        .options(load_only(
-            DeviceIdentity.device_id,
-            DeviceIdentity.vendor,
-            DeviceIdentity.hostname,
-            DeviceIdentity.sys_name,
-            DeviceIdentity.mac_addresses,
-        ))
-        .filter(DeviceIdentity.device_id.in_(device_ids)).all()
-    } if device_ids else {}
-    configs_by_device: dict[int, list[MonitoringConfig]] = {}
-    if device_ids:
-        configs = db.query(MonitoringConfig).options(load_only(
-            MonitoringConfig.device_id,
-            MonitoringConfig.enabled,
-            MonitoringConfig.status,
-            MonitoringConfig.last_poll_at,
-        )).filter(MonitoringConfig.device_id.in_(device_ids)).all()
-        for config in configs:
-            configs_by_device.setdefault(config.device_id, []).append(config)
 
     # Build response with all needed data
     items = []

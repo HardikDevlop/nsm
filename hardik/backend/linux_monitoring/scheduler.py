@@ -105,46 +105,67 @@ class LinuxMonitoringScheduler:
     async def _run(self, server_id: int) -> None:
         try:
             while True:
-                payload = None
-                missing_credentials = False
-                with SessionLocal() as db:
-                    config = db.query(LinuxServerMonitoringConfig).filter_by(linux_server_id=server_id).first()
-                    if config is None or not config.enabled:
-                        return
-                    credential = db.query(LinuxServerSNMPCredential).filter_by(
-                        linux_server_id=server_id, enabled=True
-                    ).first()
-                    if credential is None:
-                        missing_credentials = True
-                    else:
-                        payload = service.metrics_payload_from_credential(credential)
-                if missing_credentials:
-                    self._record_failure(server_id, "SNMPv3 credentials are not configured")
-                elif payload is not None:
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(self._executor, self._collect_once, server_id, payload)
+                try:
+                    payload = None
+                    missing_credentials = False
+                    with SessionLocal() as db:
+                        config = db.query(LinuxServerMonitoringConfig).filter_by(linux_server_id=server_id).first()
+                        if config is None or not config.enabled:
+                            return
+                        credential = db.query(LinuxServerSNMPCredential).filter_by(
+                            linux_server_id=server_id, enabled=True
+                        ).first()
+                        if credential is None:
+                            missing_credentials = True
+                        else:
+                            payload = service.metrics_payload_from_credential(credential)
+                    if missing_credentials:
+                        self._record_failure(server_id, "SNMPv3 credentials are not configured")
+                    elif payload is not None:
+                        loop = asyncio.get_running_loop()
+                        collected = False
+                        for attempt in range(2):
+                            collected = await loop.run_in_executor(
+                                self._executor, self._collect_once, server_id, payload
+                            )
+                            if collected or attempt == 1:
+                                break
+                            # Retry one transient SNMP response before exposing
+                            # the cycle as failed to the operator.
+                            await asyncio.sleep(2)
+                except Exception as exc:
+                    # A single bad response or collector error must not kill an
+                    # enabled server's monitoring task. The next cycle can recover.
+                    self._record_failure(server_id, str(exc))
                 await asyncio.sleep(LINUX_POLL_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            self._record_failure(server_id, str(exc))
 
     @staticmethod
-    def _collect_once(server_id: int, payload) -> None:
+    def _collect_once(server_id: int, payload) -> bool:
         with SessionLocal() as db:
+            attempt_started_at = linux_now()
             sample, error = service.collect_metrics(db, server_id, payload)
             config = db.query(LinuxServerMonitoringConfig).filter_by(linux_server_id=server_id).first()
             if config is None:
-                return
+                return False
             config.last_run_at = linux_now()
             if error:
-                config.monitoring_status = "failed"
-                config.last_error = error.message
+                # Another worker may have completed a newer successful poll
+                # while this attempt was in flight. Do not let that stale
+                # failure overwrite a healthy status.
+                if not config.last_success_at or config.last_success_at < attempt_started_at:
+                    config.monitoring_status = "failed"
+                    config.last_error = error.message
+                else:
+                    config.monitoring_status = "running"
+                    config.last_error = None
             else:
                 config.monitoring_status = "running"
                 config.last_success_at = sample.collected_at if sample else linux_now()
                 config.last_error = None
             db.commit()
+            return error is None
 
     @staticmethod
     def _record_failure(server_id: int, message: str) -> None:

@@ -14,6 +14,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from pathlib import Path
@@ -26,6 +27,11 @@ from pydantic import BaseModel, Field
 router = APIRouter(tags=["Discovery / Monitoring (modules)"])
 logger = logging.getLogger(__name__)
 MAX_DISCOVERY_HOSTS = 255
+# Discovery support modules live beside the backend package. Resolve that
+# directory from this file instead of relying on the process working directory.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 _monitor_start_lock = Lock()
 _monitoring_start_inflight: set[str] = set()
 
@@ -728,6 +734,17 @@ def get_chunked_scan_status(job_id: str):
     }
 
 
+@router.post("/discovery/chunked-scan/{job_id}/cancel")
+def cancel_chunked_scan(job_id: str):
+    """Request cooperative cancellation of a running chunked scan."""
+    from backend.services.chunked_discovery import cancel_job
+
+    job = cancel_job(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found")
+    return {"job_id": job.job_id, "status": job.status, "cancel_requested": job.status in ("pending", "running") or job._cancel_event.is_set()}
+
+
 @router.get("/discovery/chunked-scan/{job_id}/progress")
 async def chunked_scan_progress(job_id: str):
     """SSE stream for live progress updates during a chunked scan.
@@ -764,15 +781,17 @@ async def chunked_scan_progress(job_id: str):
             sent_discovered = len(job.discovered)
 
             # Check if job is done
-            if job.status in ("completed", "failed"):
+            if job.status in ("completed", "failed", "cancelled"):
                 if job.status == "completed":
                     final = {
                         **progress,
                         "discovered": job.discovered,
                     }
                     yield f"event: complete\ndata: {json.dumps(final)}\n\n"
-                else:
+                elif job.status == "failed":
                     yield f"event: error\ndata: {json.dumps({'error': job.error or 'Unknown error'})}\n\n"
+                else:
+                    yield f"event: cancelled\ndata: {json.dumps(progress)}\n\n"
                 break
 
     return StreamingResponse(
@@ -886,6 +905,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                             PollJob(device_id=device_id, module_name=module_name, collector_name=module_name, interval_seconds=0, config_id=0),
                             collector.get("data") or {},
                             collector.get("supported") is True,
+                            commit=False,
                         ))
 
             def persist_device_scalars(device: Device, discovered: dict[str, Any]) -> None:
@@ -910,6 +930,49 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     if mac:
                         device.mac_address = str(mac)[:32]
 
+            def persist_added_alert(device: Device, discovery_method: str) -> None:
+                # Inventory persistence must not be rolled back if the optional
+                # informational alert/notification path has a DB or SMTP issue.
+                try:
+                    with db.begin_nested():
+                        create_device_added_alert(
+                            db,
+                            device.id,
+                            device.hostname,
+                            device.ip_address,
+                            discovery_method,
+                            device.status,
+                            device.mac_address,
+                        )
+                except Exception:
+                    logger.exception("Could not create device-added alert for device %s", device.id)
+
+            # Resolve all existing devices once. The discovery payload can
+            # contain a full subnet, so two lookups per device creates a
+            # predictable N+1 query pattern.
+            requested_ips = {
+                str(dev.get("ip_address") or dev.get("ip"))
+                for dev in payload.devices
+                if dev.get("ip_address") or dev.get("ip")
+            }
+            active_by_ip = {}
+            soft_deleted_by_ip = {}
+            if requested_ips:
+                active_by_ip = {
+                    device.ip_address: device
+                    for device in db.query(Device).filter(
+                        Device.ip_address.in_(requested_ips),
+                        Device.deleted_at.is_(None),
+                    ).all()
+                }
+                soft_deleted_by_ip = {
+                    device.ip_address: device
+                    for device in db.query(Device).filter(
+                        Device.ip_address.in_(requested_ips),
+                        Device.deleted_at.isnot(None),
+                    ).all()
+                }
+
             for dev in payload.devices:
                 source = payload.discovery_source or (
                     "snmp" if dev.get("collectors") or dev.get("snmp_version") else "icmp"
@@ -920,7 +983,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     continue
 
                 # Check if device with this IP already exists (active)
-                existing = db.query(Device).filter(Device.ip_address == ip, Device.deleted_at.is_(None)).first()
+                existing = active_by_ip.get(ip)
                 if existing:
                     hostname = dev.get("hostname") or dev.get("sysName") or dev.get("sysDescr") or existing.hostname
                     if str(hostname).strip().lower() in {"(none)", "none", "null"}:
@@ -949,7 +1012,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     continue
 
                 # Check if a soft-deleted device with this IP exists — undelete it
-                soft_deleted = db.query(Device).filter(Device.ip_address == ip, Device.deleted_at.isnot(None)).first()
+                soft_deleted = soft_deleted_by_ip.get(ip)
                 if soft_deleted:
                     hostname = dev.get("hostname") or dev.get("dns_hostname") or soft_deleted.hostname
                     mac = dev.get("mac_address") or dev.get("mac")
@@ -972,15 +1035,9 @@ def add_discovered_devices(payload: AddDevicesRequest):
                         persist_device_scalars(soft_deleted, dev)
                         persist_snmp_identity(soft_deleted, dev)
                     persist_collectors(soft_deleted.id, dev.get("collectors") or {})
-                    create_device_added_alert(
-                        db,
-                        soft_deleted.id,
-                        soft_deleted.hostname,
-                        soft_deleted.ip_address,
-                        "SNMP" if source == "snmp" else "ICMP",
-                        soft_deleted.status,
-                        soft_deleted.mac_address,
-                    )
+                    active_by_ip[ip] = soft_deleted
+                    soft_deleted_by_ip.pop(ip, None)
+                    persist_added_alert(soft_deleted, "SNMP" if source == "snmp" else "ICMP")
                     added.append({"id": soft_deleted.id, "ip": ip, "hostname": soft_deleted.hostname})
                     continue
 
@@ -1001,6 +1058,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                 )
                 db.add(device)
                 db.flush()
+                active_by_ip[ip] = device
                 device.topology_metadata = {
                     "discovery_source": source,
                 }
@@ -1030,15 +1088,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                     temperature=float((dev.get("environment") or {}).get("temperature") or 0) if (dev.get("environment") or {}).get("temperature") is not None else None,
                 ))
                 persist_collectors(device.id, dev.get("collectors") or {})
-                create_device_added_alert(
-                    db,
-                    device.id,
-                    device.hostname,
-                    device.ip_address,
-                    "SNMP" if source == "snmp" else "ICMP",
-                    device.status,
-                    device.mac_address,
-                )
+                persist_added_alert(device, "SNMP" if source == "snmp" else "ICMP")
                 added.append({"id": device.id, "ip": ip, "hostname": hostname})
 
             db.commit()

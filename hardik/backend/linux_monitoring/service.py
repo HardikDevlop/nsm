@@ -160,6 +160,7 @@ def collect_metrics(db: Session, server_id: int, payload: LinuxServerMetricsColl
     try:
         values = collect_linux_metrics(server.ip_address, payload, previous)
     except LinuxMetricCollectionError as exc:
+        server.last_error = exc.message
         failed = LinuxServerMetricSample(
             linux_server_id=server.id,
             collection_status="error",
@@ -176,7 +177,12 @@ def collect_metrics(db: Session, server_id: int, payload: LinuxServerMetricsColl
         "load_1m", "load_5m", "load_15m", "uptime_seconds",
     )
     if not any(values.get(field) is not None for field in metric_fields):
-        error = LinuxMetricCollectionError("unavailable", "SNMPv3 returned no Linux metric values")
+        error = LinuxMetricCollectionError(
+            "unavailable",
+            "SNMPv3 authenticated, but no Linux metric OIDs are accessible; "
+            "check the snmpd view includes .1.3.6.1.2.1.25 and .1.3.6.1.4.1.2021",
+        )
+        server.last_error = error.message
         failed = LinuxServerMetricSample(
             linux_server_id=server.id,
             collected_at=linux_now(),

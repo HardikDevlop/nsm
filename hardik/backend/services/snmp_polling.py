@@ -230,8 +230,13 @@ class SNMPPoller:
         data: dict,
         supported: bool,
         duration_ms: float | None = None,
+        commit: bool = True,
     ) -> None:
-        """Persist poll results to latest-value tables and history."""
+        """Persist poll results to latest-value tables and history.
+
+        Discovery can persist several collector payloads in one transaction;
+        normal scheduler polls retain the existing per-poll commit behavior.
+        """
         module = job.module_name
         device_id = job.device_id
         now = now_ist()
@@ -274,7 +279,8 @@ class SNMPPoller:
             # Always persist to history tables
             await self._persist_history(device_id, module, data, supported, now, duration_ms)
 
-            self.db.commit()
+            if commit:
+                self.db.commit()
         except Exception as exc:
             logger.error("Failed to persist results for %s: %s", job.job_id, exc)
             self.db.rollback()
@@ -405,44 +411,65 @@ class SNMPPoller:
         from backend.models.snmp import InterfaceStatistic, LatestInterface
         from backend.models import Interface
         interfaces = data.get("interfaces", [])
+        valid_interfaces = [
+            iface for iface in interfaces
+            if isinstance(iface, dict) and iface.get("ifIndex")
+        ]
+        if not valid_interfaces:
+            return
 
-        # Get previous counters for rate calculation
+        # Discovery commonly carries dozens of interfaces, so preload related
+        # rows instead of issuing SELECTs for every interface.
+        names = {
+            str(iface.get("name") or iface.get("description") or f"IF-{iface['ifIndex']}")
+            for iface in valid_interfaces
+        }
+        interface_rows = self.db.query(Interface).filter(
+            Interface.device_id == device_id,
+            Interface.interface_name.in_(names),
+        ).all()
+        interface_by_name = {row.interface_name: row for row in interface_rows}
+        for name in names:
+            if name not in interface_by_name:
+                row = Interface(device_id=device_id, interface_name=name[:120])
+                self.db.add(row)
+                interface_by_name[name] = row
+        self.db.flush()
+
+        if_indexes = {iface.get("ifIndex") for iface in valid_interfaces}
+        interface_ids = {row.id for row in interface_by_name.values()}
+        stat_rows = self.db.query(InterfaceStatistic).filter(
+            InterfaceStatistic.device_id == device_id,
+            InterfaceStatistic.interface_id.in_(interface_ids | if_indexes),
+        ).order_by(InterfaceStatistic.id.desc()).all()
+        previous_by_id = {}
+        for row in stat_rows:
+            previous_by_id.setdefault(row.interface_id, {
+                "rx_octets": row.rx_octets,
+                "tx_octets": row.tx_octets,
+                "rx_packets": getattr(row, "rx_packets", 0) or 0,
+                "tx_packets": getattr(row, "tx_packets", 0) or 0,
+                "errors": row.error_rate,
+                "created_at": row.created_at,
+            })
+
+        latest_rows = self.db.query(LatestInterface).filter(
+            LatestInterface.device_id == device_id,
+            LatestInterface.interface_id.in_(interface_ids),
+        ).all()
+        latest_by_id = {row.interface_id: row for row in latest_rows}
+
+        # Retain the ifIndex fallback for historical rows written before the
+        # interface foreign key was consistently used.
         prev_counters = {}
-        for iface in interfaces:
-            if_index = iface.get("ifIndex")
-            if if_index:
-                prev = self.db.query(InterfaceStatistic).filter(
-                    InterfaceStatistic.device_id == device_id,
-                    InterfaceStatistic.interface_id == if_index,
-                ).order_by(InterfaceStatistic.id.desc()).first()
-                if prev:
-                    prev_counters[if_index] = {
-                        "rx_octets": prev.rx_octets,
-                        "tx_octets": prev.tx_octets,
-                        "rx_packets": prev.rx_packets,
-                        "tx_packets": prev.tx_packets,
-                        "errors": prev.error_rate,
-                        "created_at": prev.created_at,
-                    }
 
-        for iface in interfaces:
-            if not isinstance(iface, dict):
-                continue
+        for iface in valid_interfaces:
             if_index = iface.get("ifIndex")
-            if not if_index:
-                continue
 
             iface_name = iface.get("name") or iface.get("description") or f"IF-{if_index}"
 
-            # Find or create legacy interface row; latest/history tables FK to interfaces.id.
-            iface_rec = self.db.query(Interface).filter(
-                Interface.device_id == device_id,
-                Interface.interface_name == str(iface_name),
-            ).first()
-            if not iface_rec:
-                iface_rec = Interface(device_id=device_id, interface_name=str(iface_name)[:120])
-                self.db.add(iface_rec)
-                self.db.flush()
+            # Latest/history tables reference the legacy interface row.
+            iface_rec = interface_by_name[str(iface_name)]
 
             in_oct = iface.get("in_octets") or iface.get("hc_in_octets")
             out_oct = iface.get("out_octets") or iface.get("hc_out_octets")
@@ -459,18 +486,15 @@ class SNMPPoller:
             iface_rec.packet_errors = int(errors or 0)
             iface_rec.last_updated = now
 
-            prev = self.db.query(InterfaceStatistic).filter(
-                InterfaceStatistic.device_id == device_id,
-                InterfaceStatistic.interface_id == iface_rec.id,
-            ).order_by(InterfaceStatistic.id.desc()).first()
+            prev = previous_by_id.get(iface_rec.id) or previous_by_id.get(if_index)
             if prev:
                 prev_counters[if_index] = {
-                    "rx_octets": prev.rx_octets,
-                    "tx_octets": prev.tx_octets,
-                    "rx_packets": 0,
-                    "tx_packets": 0,
-                    "errors": prev.error_rate,
-                    "created_at": prev.created_at,
+                    "rx_octets": prev["rx_octets"],
+                    "tx_octets": prev["tx_octets"],
+                    "rx_packets": prev["rx_packets"],
+                    "tx_packets": prev["tx_packets"],
+                    "errors": prev["errors"],
+                    "created_at": prev["created_at"],
                 }
 
             # Calculate rates if we have previous data
@@ -490,13 +514,11 @@ class SNMPPoller:
                     error_rate = round(err_delta / max(pkt_delta, 1) * 100, 4)
 
             # Latest
-            latest = self.db.query(LatestInterface).filter(
-                LatestInterface.device_id == device_id,
-                LatestInterface.interface_id == iface_rec.id,
-            ).first()
+            latest = latest_by_id.get(iface_rec.id)
             if not latest:
                 latest = LatestInterface(device_id=device_id, interface_id=iface_rec.id)
                 self.db.add(latest)
+                latest_by_id[iface_rec.id] = latest
             latest.if_index = if_index
             latest.name = str(iface_name)
             latest.oper_status = (iface.get("oper_status") or "UNKNOWN").upper()
@@ -881,20 +903,25 @@ class PollingScheduler:
 
 # Global scheduler instance
 _scheduler: PollingScheduler | None = None
+_scheduler_lifecycle_lock = asyncio.Lock()
 
 
 async def get_polling_scheduler() -> PollingScheduler:
     """Get or create the global polling scheduler."""
     global _scheduler
-    if _scheduler is None:
-        _scheduler = PollingScheduler(worker_count=8)
-        await _scheduler.start()
-    return _scheduler
+    async with _scheduler_lifecycle_lock:
+        if _scheduler is None:
+            scheduler = PollingScheduler(worker_count=8)
+            await scheduler.start()
+            _scheduler = scheduler
+        return _scheduler
 
 
 async def shutdown_polling_scheduler() -> None:
     """Shutdown the global polling scheduler."""
     global _scheduler
-    if _scheduler:
-        await _scheduler.stop()
-        _scheduler = None
+    async with _scheduler_lifecycle_lock:
+        if _scheduler:
+            scheduler = _scheduler
+            await scheduler.stop()
+            _scheduler = None

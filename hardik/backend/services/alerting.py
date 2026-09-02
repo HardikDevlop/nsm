@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def _process_incident_safely(db: Session, alert: Alert) -> None:
+    try:
+        from backend.incidents.service import process_alert_for_incident
+        process_alert_for_incident(db, alert.id)
+    except Exception:
+        logger.exception("Incident processing failed for alert %s", alert.id)
+
+
 def now_ist() -> datetime:
     """Naive IST timestamp for PostgreSQL TIMESTAMP columns."""
     return datetime.now(IST).replace(tzinfo=None)
@@ -49,6 +57,8 @@ def create_offline_alert(db: Session, device_id: int, hostname: str, ip_address:
     )
     db.add(alert)
     db.flush()
+
+    _process_incident_safely(db, alert)
 
     _notify(db, alert)
     return alert
@@ -95,6 +105,7 @@ def create_device_added_alert(
     )
     db.add(alert)
     db.flush()
+    _process_incident_safely(db, alert)
     _notify(db, alert)
     return alert
 
@@ -113,6 +124,7 @@ def create_threshold_alert(db: Session, device_id: int, title: str, description:
                   description=description, status="open", created_at=now_ist())
     db.add(alert)
     db.flush()
+    _process_incident_safely(db, alert)
     _notify(db, alert)
     return alert
 

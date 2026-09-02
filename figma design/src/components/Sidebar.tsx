@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTheme } from './ThemeContext'
 import { useAuth } from './AuthContext'
 import { requestJson, type DashboardSummary } from '../lib/api'
+import { useBranding } from './BrandingContext'
 
 type Props = { 
   collapsed: boolean
@@ -20,6 +21,19 @@ const nav = [
   // { to: '/incidents', label: 'Incidents', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', permission: 'incidents:read' },
   // { to: '/attack-path', label: 'Attack Path', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7', permission: 'attack_path:read' },
   { to: '/packet-analysis', label: 'Packet Analysis', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', permission: 'packet_analysis:read' },
+  { to: '/flow-analytics', label: 'Flow Analytics', icon: 'M4 19V5m0 14h16M8 16v-5m4 5V7m4 9v-8', permission: 'flows:read' },
+  { to: '/apm', label: 'APM Service Health', icon: 'M4 19h16M6 16v-5m4 5V7m4 9v-3m4 3V4', permission: 'apm:read' },
+  { to: '/cmdb', label: 'CMDB', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'cmdb:read' },
+  { to: '/rca', label: 'Root Cause Analysis', icon: 'M12 3v18M3 12h18M5 5l14 14M19 5L5 19', permission: 'rca:read' },
+  { to: '/incident-management', label: 'Incident Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'incidents:read' },
+  { to: '/problem-management', label: 'Problem Management', icon: 'M12 3a9 9 0 100 18 9 9 0 000-18zm0 5v5m0 3h.01', permission: 'problems:read' },
+  { to: '/change-management', label: 'Change Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'changes:read' },
+  { to: '/knowledge-base', label: 'Knowledge Base', icon: 'M4 5h16v14H4zM8 9h8M8 13h6M8 17h4', permission: 'knowledge:read' },
+  { to: '/configuration-backups', label: 'Configuration Backups', icon: 'M5 4h14v16H5zM8 8h8M8 12h8M8 16h5', permission: 'config_backups:read' },
+  { to: '/configuration-compliance', label: 'Configuration Compliance', icon: 'M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7zM9 12l2 2 4-4', permission: 'config_compliance:read' },
+  { to: '/availability', label: 'Availability Reports', icon: 'M4 19h16M6 16v-5M10 16V7M14 16v-3M18 16V4', permission: 'availability:read' },
+  { to: '/qos', label: 'QoS Monitoring', icon: 'M4 19h16M6 16v-5M10 16V7M14 16v-3M18 16V4', permission: 'qos:read' },
+  { to: '/bgp', label: 'BGP Monitoring', icon: 'M4 19h16M5 15l4-5 4 3 6-8', permission: 'bgp:read' },
   // { to: '/nginx', label: 'Nginx Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01', permission: 'nginx:read' },
   // { to: '/firewall', label: 'Firewall', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', permission: 'firewall:read' },
   { to: '/snmp/devices', label: 'SNMP Devices', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z', permission: 'devices:read' },
@@ -52,6 +66,7 @@ const nav = [
 export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Props) {
   const { theme, colors } = useTheme()
   const { hasPermission, user, logout } = useAuth()
+  const branding = useBranding()
   const isDark = theme === 'dark'
   const [onlineCount, setOnlineCount] = useState(0)
   const [healthScore, setHealthScore] = useState(0)
@@ -134,6 +149,16 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
     '/isp': () => import('../pages/ISPMonitoring'),
     '/device-monitoring': () => import('../pages/DeviceMonitoringList'),
     '/packet-analysis': () => import('../pages/PacketAnalysis'),
+    '/flow-analytics': () => import('../pages/FlowAnalytics'),
+    '/apm': () => import('../pages/APM'),
+    '/cmdb': () => import('../pages/CMDB'),
+    '/rca': () => import('../pages/RCA'),
+    '/incident-management': () => import('../pages/IncidentManagement'),
+    '/problem-management': () => import('../pages/ProblemManagement'),
+    '/change-management': () => import('../pages/ChangeManagement'),
+    '/knowledge-base': () => import('../pages/KnowledgeBase'),
+    '/configuration-backups': () => import('../pages/ConfigurationBackups'),
+    '/configuration-compliance': () => import('../pages/ConfigurationCompliance'),
     '/nginx': () => import('../pages/NginxMonitoring'),
     '/firewall': () => import('../pages/Firewall'),
     '/forensics': () => import('../pages/Forensics'),
@@ -179,8 +204,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
-            <img src="/header-logo.png" alt="Agnigate" className="h-6 w-auto object-contain" />
-            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted)' }}>v4.2.1 · NMS</div>
+            {branding.logo_url ? <img src={branding.logo_url} alt={branding.application_name} className="h-6 w-auto object-contain" /> : <div className="font-display font-bold text-sm" style={{ color: 'var(--t-text)' }}>{branding.application_name}</div>}
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted)' }}>{branding.application_name}</div>
           </div>
         )}
         <button onClick={() => {
@@ -189,7 +214,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
           } else {
             onToggle()
           }
-        }} className="ml-auto transition-colors shrink-0" style={{ color: 'var(--t-muted)' }}>
+        }} aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'} className="ml-auto transition-colors shrink-0" style={{ color: 'var(--t-muted)' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             {collapsed
               ? <path d="M9 18l6-6-6-6" />

@@ -3,6 +3,9 @@ import { Outlet, useLocation, useNavigate } from 'react-router'
 import Sidebar from './Sidebar'
 import { useTheme } from './ThemeContext'
 import { listAlerts, recordPageView, type AlertRecord } from '../lib/api'
+import { useI18n } from '../i18n/I18nContext'
+import { useBranding } from './BrandingContext'
+import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 
 const PAGE_VIEW_THROTTLE_MS = 30_000
 const ALERT_CACHE_KEY = 'nms.layout.alerts.v1'
@@ -19,12 +22,16 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const { theme, toggleTheme, colors } = useTheme()
+  const { locale, setLocale, t } = useI18n()
+  const branding = useBranding()
   const isDark = theme === 'dark'
   const navigate = useNavigate()
   const location = useLocation()
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
   const [hiddenAlertIds, setHiddenAlertIds] = useState<number[]>([])
   const showBack = location.pathname !== '/'
+
+  useKeyboardShortcuts(() => setNotifOpen(open => !open))
 
   const persistAlerts = (nextAlerts: AlertRecord[]) => {
     try {
@@ -104,8 +111,6 @@ export default function Layout() {
 
   useEffect(() => {
     const warm = () => {
-      void loadNotificationPanel().catch(() => undefined)
-      void loadThemePicker().catch(() => undefined)
     }
     if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
       const idleId = window.requestIdleCallback(warm, { timeout: 1500 })
@@ -177,6 +182,7 @@ export default function Layout() {
           {/* Mobile menu button */}
           <button 
             onClick={() => setSidebarOpen(true)}
+            aria-label="Open navigation"
             className="md:hidden p-2 rounded-lg transition-colors"
             style={{ color: 'var(--t-muted)' }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -192,20 +198,21 @@ export default function Layout() {
                 className={`${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1.5 cursor-pointer transition-all hover:bg-cyan-400/10`}
                 style={{ border: '1px solid var(--t-border-alpha)', color: 'var(--t-accent)' }}
                 title="Go back"
+                aria-label="Go back"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M19 12H5" />
                   <path d="M12 19l-7-7 7-7" />
                 </svg>
-                <span className="hidden sm:inline font-mono text-xs">BACK</span>
+                <span className="hidden sm:inline font-mono text-xs">{t.back}</span>
               </button>
             )}
             <div className="hidden sm:flex items-center gap-2">
               <span className="status-dot online" />
-              <span className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>SYSTEM OPERATIONAL</span>
+              <span className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{t.systemOperational}</span>
             </div>
             <div className="hidden sm:block h-4 w-px" style={{ background: 'var(--t-border-light)' }} />
-            <span className="hidden sm:inline font-mono text-xs neon-cyan">THREAT LEVEL: ELEVATED</span>
+            <span className="hidden sm:inline font-mono text-xs neon-cyan">{t.threatLevel}</span>
           </div>
 
           <div className="flex items-center gap-2 md:gap-6">
@@ -216,7 +223,7 @@ export default function Layout() {
 
             <div className="flex items-center gap-2">
               {/* Theme toggle */}
-              <button onClick={toggleTheme}
+              <button onClick={toggleTheme} disabled={branding.allowed_themes.length < 2} aria-label="Toggle theme"
                 className={`${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1 md:gap-2 cursor-pointer transition-all`}
                 style={{ border: '1px solid var(--t-border-alpha)' }}>
                 {isDark ? (
@@ -233,7 +240,7 @@ export default function Layout() {
               </button>
 
               {/* Theme color picker */}
-              <button onClick={() => setPickerOpen(true)}
+              <button onClick={() => setPickerOpen(true)} aria-label="Customize theme"
                 className={`${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1 md:gap-2 cursor-pointer transition-all`}
                 style={{ border: '1px solid var(--t-border-alpha)' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--t-accent)" strokeWidth="2">
@@ -247,8 +254,10 @@ export default function Layout() {
                 </div>
               </button>
 
+              <select aria-label={t.language} value={locale} onChange={event => setLocale(event.target.value as 'en' | 'hi')} className="rounded px-2 py-1.5 font-mono text-xs" style={{ background: 'var(--t-card)', color: 'var(--t-muted)', border: '1px solid var(--t-border-alpha)' }}><option value="en">{t.english}</option><option value="hi">{t.hindi}</option></select>
+
               {/* Notifications */}
-              <button onClick={() => setNotifOpen(o => !o)}
+              <button onClick={() => setNotifOpen(o => !o)} aria-label="Open notifications"
                 className={`relative ${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1 md:gap-2 cursor-pointer transition-all`}
                 style={{ border: '1px solid var(--t-border-alpha)' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--t-muted)" strokeWidth="2">

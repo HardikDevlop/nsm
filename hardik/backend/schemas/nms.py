@@ -14,6 +14,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class BrandingRead(BaseModel):
+    application_name: str
+    logo_url: str | None = None
+    allowed_themes: list[str]
+
+
 # ---------------------------------------------------------------- Roles / RBAC
 class RoleBase(BaseModel):
     role_name: str

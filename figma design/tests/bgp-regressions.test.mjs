@@ -1,0 +1,1 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';test('BGP UI exposes persisted neighbor fields',()=>{const a=fs.readFileSync('src/lib/api.ts','utf8'),p=fs.readFileSync('src/pages/BGP.tsx','utf8');assert.match(a,/listBGPNeighbors/);assert.match(p,/AS path/);assert.match(p,/Prefixes/)})

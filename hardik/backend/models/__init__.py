@@ -1,11 +1,25 @@
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database.session import Base
+from backend.models.flow import FlowRecord  # noqa: F401
+from backend.models.apm import APMApplication, APMService, APMTransaction, APMMetricSample, APMDependency  # noqa: F401
+from backend.models.rca import RCAIncident, RCAEvidence  # noqa: F401
+from backend.models.incident import Incident, IncidentAlert, IncidentComment, IncidentAttachment, IncidentHistory, IncidentSLAConfig, IncidentSLATimer, IncidentSLAHistory  # noqa: F401
+from backend.models.problem import Problem, ProblemIncident, ProblemHistory  # noqa: F401
+from backend.models.change import ChangeRequest, ChangeCI, ChangeIncident, ChangeHistory  # noqa: F401
+from backend.models.knowledge import KnowledgeArticle, KnowledgeArticleVersion, KnowledgeIncidentLink, KnowledgeProblemLink, KnowledgeDeviceLink, KnowledgeServiceLink  # noqa: F401
+from backend.models.config_backup import DeviceConfigurationVersion, ConfigurationComparison  # noqa: F401
+from backend.models.config_compliance import ConfigurationCompliancePolicy, ConfigurationComplianceViolation  # noqa: F401
+from backend.models.availability import AvailabilityOutage, AvailabilityReport  # noqa: F401
+from backend.models.virtualization import VirtualObject  # noqa: F401
+from backend.models.qos import QoSSample  # noqa: F401
+from backend.models.bgp import BGPObservation  # noqa: F401
+from backend.models.syslog import SyslogRecord  # noqa: F401
+from backend.models.syslog_rule import SyslogCorrelationRule  # noqa: F401
 
 
 role_permissions = Table(
@@ -333,3 +347,4 @@ from backend.models.identity import (  # noqa: E402,F401
 from backend.models.manual_topology import (  # noqa: E402,F401
     ManualTopologyChange, ManualTopologySnapshot,
 )
+from backend.models.cmdb import CIType, ConfigurationItem, CIRelationship, CIHistory  # noqa: E402,F401

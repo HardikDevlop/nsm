@@ -67,6 +67,12 @@ textarea:focus {
   outline-offset: 1px;
 }
 
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--t-accent, #ff0015);
+  outline-offset: 2px;
+}
+
 [data-theme="light"] input,
 [data-theme="light"] select,
 [data-theme="light"] textarea,

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { useBranding } from './BrandingContext'
 
 type Theme = 'dark' | 'light'
 
@@ -71,6 +72,7 @@ function applyCSS(colors: ThemeColors) {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  const { allowed_themes } = useBranding()
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme-mode')
     if (saved === 'dark' || saved === 'light') return saved as Theme
@@ -91,6 +93,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   })
 
   const defaults = theme === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS
+  const canToggle = allowed_themes.length > 1
+
+  useEffect(() => {
+    if (!allowed_themes.includes(theme)) setTheme(allowed_themes[0] ?? 'light')
+  }, [allowed_themes, theme])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -103,6 +110,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [colors])
 
   const toggleTheme = useCallback(() => {
+    if (!canToggle) return
     setTheme(t => {
       const next = t === 'dark' ? 'light' : 'dark'
       const nextDefaults = next === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS
@@ -116,7 +124,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       })
       return next
     })
-  }, [])
+  }, [canToggle])
 
   const setColor = useCallback((key: keyof ThemeColors, value: string) => {
     setColors(prev => ({ ...prev, [key]: value }))

@@ -39,16 +39,22 @@ class ScanJob:
     chunks_completed: int = 0
     ips_scanned: int = 0
     discovered: list[dict[str, Any]] = field(default_factory=list)
-    status: str = "pending"  # pending | running | completed | failed
+    status: str = "pending"  # pending | running | completed | failed | cancelled
     error: str | None = None
     started_at: float = 0.0
     finished_at: float = 0.0
     # Threading event for cross-thread signaling (scan thread -> SSE async gen)
     _event: threading.Event = field(default_factory=threading.Event, repr=False)
+    _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def signal_update(self) -> None:
         """Wake up any SSE coroutines waiting for progress."""
         self._event.set()
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation of the background scan."""
+        self._cancel_event.set()
+        self.signal_update()
 
     def progress_pct(self) -> int:
         if self.chunks_total == 0:
@@ -78,6 +84,14 @@ _jobs: dict[str, ScanJob] = {}
 
 def get_job(job_id: str) -> ScanJob | None:
     return _jobs.get(job_id)
+
+
+def cancel_job(job_id: str) -> ScanJob | None:
+    """Request cancellation for a known scan and wake progress consumers."""
+    job = get_job(job_id)
+    if job and job.status in ("pending", "running"):
+        job.cancel()
+    return job
 
 
 def list_jobs() -> list[str]:
@@ -179,6 +193,12 @@ def _enrich_host(
     return record
 
 
+def _enrich_host_task(args: tuple[str, list[str], list[int], int]) -> tuple[str, dict[str, Any]]:
+    """Adapter for bounded executor.map without sharing mutable job state."""
+    ip, modules, ports, timeout_ms = args
+    return ip, _enrich_host(ip, modules, ports, timeout_ms)
+
+
 def _execute_chunked_scan(
     job: ScanJob,
     all_ips: list[str],
@@ -201,7 +221,7 @@ def _execute_chunked_scan(
     from vendor_map import lookup_vendor  # type: ignore
 
     # Active enrichment modules (always include ip_discovery + icmp_discovery as core)
-    active_modules = modules or ["ip_discovery", "icmp_discovery"]
+    active_modules = list(modules or ["ip_discovery", "icmp_discovery"])
     if "ip_discovery" not in active_modules:
         active_modules.insert(0, "ip_discovery")
     if "icmp_discovery" not in active_modules:
@@ -211,28 +231,53 @@ def _execute_chunked_scan(
     job.started_at = time.time()
     job.signal_update()
 
-    # Split into chunks of 25
-    chunks = [all_ips[i:i + job.chunk_size] for i in range(0, len(all_ips), job.chunk_size)]
+    # Normalize duplicate targets and cap chunks so a large subnet cannot
+    # create an unbounded executor workload.
+    unique_ips = list(dict.fromkeys(all_ips))
+    job.chunk_size = max(1, min(job.chunk_size, 25))
+    chunks = [unique_ips[i:i + job.chunk_size] for i in range(0, len(unique_ips), job.chunk_size)]
     job.chunks_total = len(chunks)
-    job.total_ips = len(all_ips)
+    job.total_ips = len(unique_ips)
     job.signal_update()
 
     try:
         for chunk_idx, chunk in enumerate(chunks):
+            if job._cancel_event.is_set():
+                job.status = "cancelled"
+                job.finished_at = time.time()
+                job.signal_update()
+                return
             # --- Phase 1: ICMP ping to find alive hosts (parallel) ---
             alive_ips: list[str] = []
             with ThreadPoolExecutor(max_workers=min(len(chunk), 20), thread_name_prefix="chunk-ping") as pool:
                 futures = {pool.submit(_ping, ip, timeout_ms): ip for ip in chunk}
                 for future in as_completed(futures):
+                    if job._cancel_event.is_set():
+                        for pending in futures:
+                            pending.cancel()
+                        job.status = "cancelled"
+                        job.finished_at = time.time()
+                        job.signal_update()
+                        return
                     try:
                         if future.result():
                             alive_ips.append(futures[future])
                     except Exception:
                         pass
 
-            # --- Phase 2: Enrich alive hosts ---
-            for ip in alive_ips:
-                record = _enrich_host(ip, active_modules, ports, timeout_ms)
+            # --- Phase 2: Enrich alive hosts with bounded concurrency ---
+            tasks = [(ip, active_modules, ports, timeout_ms) for ip in alive_ips]
+            if alive_ips:
+                with ThreadPoolExecutor(max_workers=min(len(alive_ips), 8), thread_name_prefix="chunk-enrich") as pool:
+                    enriched_records = list(pool.map(_enrich_host_task, tasks))
+            else:
+                enriched_records = []
+            for ip, record in enriched_records:
+                if job._cancel_event.is_set():
+                    job.status = "cancelled"
+                    job.finished_at = time.time()
+                    job.signal_update()
+                    return
 
                 # Resolve vendor from MAC
                 mac = None

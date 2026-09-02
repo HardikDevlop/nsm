@@ -45,6 +45,41 @@
       "key": "permissionId",
       "value": "1",
       "type": "string"
+    },
+    {
+      "key": "serviceId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "ciId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "incidentId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "problemId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "changeId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "articleId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "rcaIncidentId",
+      "value": "1",
+      "type": "string"
     }
   ],
   "auth": {
@@ -3511,6 +3546,961 @@
                 "summary"
               ]
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "29 - APM",
+      "item": [
+        {
+          "name": "Ingest Metrics",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/apm/metrics",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"metrics\": [\n    {\n      \"application_id\": 1,\n      \"service_id\": 1,\n      \"observed_at\": \"2026-01-01T00:00:00Z\",\n      \"response_time_ms\": 120,\n      \"request_count\": 100,\n      \"error_count\": 2,\n      \"slow_transaction_count\": 1,\n      \"availability_percent\": 99.9\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Applications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/apm/applications"
+          }
+        },
+        {
+          "name": "List Services",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/apm/services?application_id=1"
+          }
+        },
+        {
+          "name": "APM Overview",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/apm/overview?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Service Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/apm/services/{{serviceId}}/metrics?hours=24&page=1&page_size=100"
+          }
+        },
+        {
+          "name": "Dependencies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/apm/dependencies?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Run Retention",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/apm/retention/run?retention_days=30"
+          }
+        }
+      ]
+    },
+    {
+      "name": "30 - Availability",
+      "item": [
+        {
+          "name": "Generate SLA Report",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/availability/reports",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entity_type\": \"device\",\n  \"entity_id\": 1,\n  \"start\": \"2026-01-01T00:00:00Z\",\n  \"end\": \"2026-01-02T00:00:00Z\",\n  \"sla_target\": 99\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Availability History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/availability/reports?entity_type=device&entity_id=1&skip=0&limit=100"
+          }
+        },
+        {
+          "name": "Export SLA CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/availability/reports/export.csv?entity_type=device&entity_id=1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "31 - BGP",
+      "item": [
+        {
+          "name": "Ingest Observation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/bgp/observations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"neighbor\": \"192.0.2.1\",\n  \"state\": \"established\",\n  \"remote_as\": 64512,\n  \"prefixes\": 10,\n  \"observed_at\": \"2026-01-01T00:00:00Z\",\n  \"raw_fields\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Neighbors",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/bgp/neighbors?device_id=1&hours=24"
+          }
+        }
+      ]
+    },
+    {
+      "name": "32 - CMDB",
+      "item": [
+        {
+          "name": "List CI Types",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/cmdb/types"
+          }
+        },
+        {
+          "name": "Create CI Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/cmdb/types",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Network Device\",\n  \"category\": \"device\",\n  \"description\": \"Managed network equipment\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Configuration Items",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/cmdb/items?skip=0&limit=100"
+          }
+        },
+        {
+          "name": "Create Configuration Item",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/cmdb/items",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ci_type_id\": 1,\n  \"name\": \"Core Router\",\n  \"lifecycle_state\": \"active\",\n  \"device_id\": 1,\n  \"attributes\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Update Configuration Item",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/cmdb/items/{{ciId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ci_type_id\": 1,\n  \"name\": \"Core Router\",\n  \"lifecycle_state\": \"active\",\n  \"device_id\": 1,\n  \"attributes\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "CI History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/cmdb/items/{{ciId}}/history"
+          }
+        },
+        {
+          "name": "CI Relationships",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/cmdb/items/{{ciId}}/relationships"
+          }
+        },
+        {
+          "name": "Create CI Relationship",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/cmdb/items/{{ciId}}/relationships",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target_ci_id\": 2,\n  \"relationship_type\": \"depends_on\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Sync Inventory Relationships",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/cmdb/relationships/sync"
+          }
+        },
+        {
+          "name": "Sync Topology Relationships",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/cmdb/relationships/sync/topology",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"links\": [\n    {\n      \"source_id\": 1,\n      \"target_id\": 2,\n      \"relationship\": \"connected_to\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "33 - Configuration",
+      "item": [
+        {
+          "name": "Capture Configuration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/config-backups/capture",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"source\": \"manual\",\n  \"content\": \"version 1 configuration\",\n  \"is_startup\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Device Configurations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/config-backups/devices/{{deviceId}}?include_content=false&skip=0&limit=100"
+          }
+        },
+        {
+          "name": "Get Configuration Version",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/config-backups/devices/{{deviceId}}/versions/1"
+          }
+        },
+        {
+          "name": "Compare Configurations",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/config-backups/compare",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"from_version\": 1,\n  \"to_version\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Compare Baseline Current",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/config-backups/devices/{{deviceId}}/compare/baseline-current"
+          }
+        },
+        {
+          "name": "List Compliance Policies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/config-compliance/policies"
+          }
+        },
+        {
+          "name": "Create Compliance Policy",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/config-compliance/policies",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Baseline Policy\",\n  \"description\": \"Required baseline checks\",\n  \"rules\": {\n    \"required_lines\": [\n      \"ntp enabled\"\n    ]\n  },\n  \"enabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Evaluate Compliance",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/config-compliance/evaluate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policy_id\": 1,\n  \"device_id\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Compliance Violations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/config-compliance/violations?status=open"
+          }
+        }
+      ]
+    },
+    {
+      "name": "34 - Flow Analytics",
+      "item": [
+        {
+          "name": "Top Talkers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/talkers?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Sources",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/sources?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Destinations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/destinations?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Applications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/applications?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Protocols",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/protocols?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Conversations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/conversations?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Interfaces",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/interfaces?hours=24&page=1&page_size=50"
+          }
+        },
+        {
+          "name": "Trends",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/flows/analytics/trends?hours=24&bucket=hour"
+          }
+        }
+      ]
+    },
+    {
+      "name": "35 - ITSM",
+      "item": [
+        {
+          "name": "List Incidents",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/incidents?skip=0&limit=100"
+          }
+        },
+        {
+          "name": "Create Incident",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/incidents",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Interface down\",\n  \"description\": \"Network interface unavailable\",\n  \"category\": \"availability\",\n  \"priority\": \"p2\",\n  \"alert_ids\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get Incident",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/incidents/{{incidentId}}"
+          }
+        },
+        {
+          "name": "Update Incident",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/incidents/{{incidentId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"investigating\",\n  \"priority\": \"p2\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Incident SLA Policies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/incidents/sla/policies"
+          }
+        },
+        {
+          "name": "Create Incident SLA Policy",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/incidents/sla/policies",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Default P1 SLA\",\n  \"priority\": \"p1\",\n  \"response_minutes\": 15,\n  \"resolution_minutes\": 60\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Add Incident Comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/incidents/{{incidentId}}/comments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Investigation started\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Create Problem",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/problems",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Recurring packet loss\",\n  \"description\": \"Investigate recurring issue\",\n  \"category\": \"performance\",\n  \"incident_ids\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Problems",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/problems?skip=0&limit=100"
+          }
+        },
+        {
+          "name": "Get Problem",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/problems/{{problemId}}"
+          }
+        },
+        {
+          "name": "Update Problem",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/problems/{{problemId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"in_progress\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Problem History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/problems/{{problemId}}/history"
+          }
+        },
+        {
+          "name": "Create Change",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/changes",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Upgrade edge router\",\n  \"description\": \"Planned maintenance\",\n  \"category\": \"normal\",\n  \"risk\": \"medium\",\n  \"impact\": \"medium\",\n  \"ci_ids\": [],\n  \"incident_ids\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Changes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/changes?skip=0&limit=100"
+          }
+        },
+        {
+          "name": "Get Change",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/changes/{{changeId}}"
+          }
+        },
+        {
+          "name": "Approve Change",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/changes/{{changeId}}/approve",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"comment\": \"Approved for maintenance window\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Create Knowledge Article",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/knowledge",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Router restart runbook\",\n  \"article_type\": \"runbook\",\n  \"body\": \"Document the restart procedure.\",\n  \"incident_ids\": [],\n  \"problem_ids\": [],\n  \"device_ids\": [],\n  \"service_ids\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Knowledge Articles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/knowledge?status=published&skip=0&limit=100"
+          }
+        },
+        {
+          "name": "Get Knowledge Article",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/knowledge/{{articleId}}"
+          }
+        },
+        {
+          "name": "Knowledge Versions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/knowledge/{{articleId}}/versions"
+          }
+        }
+      ]
+    },
+    {
+      "name": "36 - RCA",
+      "item": [
+        {
+          "name": "Analyze Root Cause",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/rca/analyze",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hours\": 1,\n  \"alert_ids\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List RCA Incidents",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/rca/incidents?hours=24&skip=0&limit=50"
+          }
+        },
+        {
+          "name": "Get RCA Incident",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/rca/incidents/{{rcaIncidentId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "37 - QoS, Syslog & Virtualization",
+      "item": [
+        {
+          "name": "Ingest QoS Sample",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/qos/samples",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": 1,\n  \"observed_at\": \"2026-01-01T00:00:00Z\",\n  \"dscp\": 46,\n  \"queue_utilization\": 25,\n  \"queue_drops\": 0,\n  \"source\": \"standard\",\n  \"raw_fields\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List QoS Samples",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/qos/samples?device_id=1&hours=24"
+          }
+        },
+        {
+          "name": "List Syslog Records",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/syslog/records?device_id=1&severity=4&limit=100"
+          }
+        },
+        {
+          "name": "List Syslog Rules",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/syslog/rules"
+          }
+        },
+        {
+          "name": "Create Syslog Rule",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/syslog/rules",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Link Down\",\n  \"pattern\": \"LINK_DOWN\",\n  \"min_severity\": 4,\n  \"alert_severity\": \"warning\",\n  \"cooldown_seconds\": 300\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List Virtual Objects",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/virtualization/objects?provider=vmware"
+          }
+        },
+        {
+          "name": "Ingest Virtualization Inventory",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/virtualization/inventory",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider\": \"vmware\",\n  \"objects\": [\n    {\n      \"external_key\": \"host-01\",\n      \"object_type\": \"host\",\n      \"name\": \"Host 01\",\n      \"state\": \"up\",\n      \"attributes\": {}\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Virtualization Topology",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/virtualization/topology"
           }
         }
       ]

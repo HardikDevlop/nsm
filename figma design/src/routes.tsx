@@ -46,6 +46,19 @@ const MonitoringJobs = lazyRetry(() => import('./pages/MonitoringJobs'))
 const DeviceCredentials = lazyRetry(() => import('./pages/DeviceCredentials'))
 const DeviceTypes = lazyRetry(() => import('./pages/DeviceTypes'))
 const InterfacesList = lazyRetry(() => import('./pages/InterfacesList'))
+const FlowAnalytics = lazyRetry(() => import('./pages/FlowAnalytics'))
+const APM = lazyRetry(() => import('./pages/APM'))
+const CMDB = lazyRetry(() => import('./pages/CMDB'))
+const RCA = lazyRetry(() => import('./pages/RCA'))
+const IncidentManagement = lazyRetry(() => import('./pages/IncidentManagement'))
+const ProblemManagement = lazyRetry(() => import('./pages/ProblemManagement'))
+const ChangeManagement = lazyRetry(() => import('./pages/ChangeManagement'))
+const KnowledgeBase = lazyRetry(() => import('./pages/KnowledgeBase'))
+const ConfigurationBackups = lazyRetry(() => import('./pages/ConfigurationBackups'))
+const ConfigurationCompliance = lazyRetry(() => import('./pages/ConfigurationCompliance'))
+const Availability = lazyRetry(() => import('./pages/Availability'))
+const QoS = lazyRetry(() => import('./pages/QoS'))
+const BGP = lazyRetry(() => import('./pages/BGP'))
 
 export const router = createBrowserRouter([
   { path: '/login', Component: Login },
@@ -66,6 +79,19 @@ export const router = createBrowserRouter([
           { path: 'incidents', Component: withPermission(Incidents, 'incidents:read') },
           { path: 'alerts', Component: withPermission(AlertsManagement, 'alerts:read') },
           { path: 'packet-analysis', Component: withPermission(PacketAnalysis, 'packet_analysis:read') },
+          { path: 'flow-analytics', Component: withPermission(FlowAnalytics, 'flows:read') },
+          { path: 'apm', Component: withPermission(APM, 'apm:read') },
+          { path: 'cmdb', Component: withPermission(CMDB, 'cmdb:read') },
+          { path: 'rca', Component: withPermission(RCA, 'rca:read') },
+          { path: 'incident-management', Component: withPermission(IncidentManagement, 'incidents:read') },
+          { path: 'problem-management', Component: withPermission(ProblemManagement, 'problems:read') },
+          { path: 'change-management', Component: withPermission(ChangeManagement, 'changes:read') },
+          { path: 'knowledge-base', Component: withPermission(KnowledgeBase, 'knowledge:read') },
+          { path: 'configuration-backups', Component: withPermission(ConfigurationBackups, 'config_backups:read') },
+          { path: 'configuration-compliance', Component: withPermission(ConfigurationCompliance, 'config_compliance:read') },
+          { path: 'availability', Component: withPermission(Availability, 'availability:read') },
+          { path: 'qos', Component: withPermission(QoS, 'qos:read') },
+          { path: 'bgp', Component: withPermission(BGP, 'bgp:read') },
           ...snmpRoutes,
           { path: 'linux-servers', Component: withPermission(LinuxServerMonitoring, 'linux_servers:read') },
           { path: 'device-monitoring', Component: withPermission(DeviceMonitoringList, 'device_monitoring:read') },

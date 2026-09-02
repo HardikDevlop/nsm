@@ -14,6 +14,18 @@ function buildUrl(path: string) {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`
 }
 
+export interface BrandingRecord {
+  application_name: string
+  logo_url: string | null
+  allowed_themes: Array<"light" | "dark">
+}
+
+export async function getBranding(signal?: AbortSignal): Promise<BrandingRecord> {
+  const response = await fetch(buildUrl("/branding"), { signal })
+  if (!response.ok) throw new Error("Unable to load application branding")
+  return response.json() as Promise<BrandingRecord>
+}
+
 /** Load token from localStorage if present. Does NOT auto-login. */
 async function ensureAuth(): Promise<string> {
   if (authToken) return authToken
@@ -91,6 +103,10 @@ export function clearNmsClientState() {
   authToken = null
   authPromise = null
   clearRequestCache()
+}
+
+export function invalidateNmsGetCache() {
+  invalidateGetCache()
 }
 
 function friendlyApiMessage(status: number, detail: string): string {
@@ -172,7 +188,10 @@ export async function requestJson<T>(
 ): Promise<T> {
   const token = await ensureAuth()
   const method = (init.method ?? "GET").toUpperCase()
-  const canCache = method === "GET" && !init.signal && !init.body
+  // React Query supplies an AbortSignal for cancellable requests. Cancellation
+  // and GET deduplication are independent concerns: keep both enabled so
+  // concurrent page consumers share one request without losing cancellation.
+  const canCache = method === "GET" && !init.body && init.cache !== "no-store"
   const isMutation =
     method === "POST" ||
     method === "PUT" ||
@@ -249,6 +268,132 @@ export interface DashboardSummary {
   critical_alerts: number
   recent_events: number
 }
+
+export interface FlowAnalyticsItem {
+  name: string
+  bytes: number
+  packets: number
+  flows: number
+}
+
+export interface FlowTrendItem {
+  timestamp: string
+  bytes: number
+  packets: number
+  flows: number
+}
+
+export interface FlowAnalyticsResponse {
+  items: FlowAnalyticsItem[]
+  page?: number
+  page_size?: number
+  filters?: { hours?: number; device_id?: number | null; site_id?: number | null }
+  from?: string
+  to?: string
+}
+
+export interface FlowAnalyticsFilters {
+  hours: number
+  device_id?: number
+  site_id?: number
+  page?: number
+  page_size?: number
+}
+
+export async function getFlowAnalytics(
+  dimension: 'talkers' | 'sources' | 'destinations' | 'applications' | 'protocols' | 'conversations' | 'interfaces',
+  filters: FlowAnalyticsFilters,
+): Promise<FlowAnalyticsResponse> {
+  const query = new URLSearchParams({ hours: String(filters.hours), page: String(filters.page ?? 1), page_size: String(filters.page_size ?? 10) })
+  if (filters.device_id != null) query.set('device_id', String(filters.device_id))
+  if (filters.site_id != null) query.set('site_id', String(filters.site_id))
+  return requestJson<FlowAnalyticsResponse>(`/flows/analytics/${dimension}?${query}`)
+}
+
+export async function getFlowTrends(filters: FlowAnalyticsFilters): Promise<FlowTrendItem[]> {
+  const query = new URLSearchParams({ hours: String(filters.hours), bucket: filters.hours > 48 ? 'day' : 'hour' })
+  if (filters.device_id != null) query.set('device_id', String(filters.device_id))
+  if (filters.site_id != null) query.set('site_id', String(filters.site_id))
+  const response = await requestJson<{ items: FlowTrendItem[] }>(`/flows/analytics/trends?${query}`)
+  return response.items
+}
+
+export interface APMFilters {
+  hours: number
+  application_id?: number
+  service_id?: number
+  device_id?: number
+  site_id?: number
+  page?: number
+  page_size?: number
+}
+
+export interface APMOverviewItem {
+  application_id: number
+  service_id: number
+  application_name: string
+  service_name: string
+  request_count: number
+  error_count: number
+  error_rate: number
+  response_time_ms: number
+  slow_transaction_count: number
+  availability_percent: number
+}
+
+export interface APMServiceMetric {
+  observed_at: string
+  transaction_id?: number | null
+  response_time_ms: number
+  request_count: number
+  error_count: number
+  slow_transaction_count: number
+  availability_percent: number
+}
+
+export interface APMDependencyItem {
+  source_service_id: number
+  source_service_name: string
+  target_service_id?: number | null
+  target_name: string
+  dependency_type?: string | null
+  call_count: number
+  error_count: number
+  error_rate: number
+  response_time_ms: number
+}
+
+export interface APMApplicationOption { id: number; name: string; environment: string }
+export interface APMServiceOption { id: number; application_id: number; name: string; service_key: string; device_id?: number | null; site_id?: number | null; application_name: string }
+
+function apmQuery(filters: APMFilters): string {
+  const query = new URLSearchParams({ hours: String(filters.hours), page: String(filters.page ?? 1), page_size: String(filters.page_size ?? 50) })
+  for (const [key, value] of Object.entries(filters)) if (key !== 'hours' && key !== 'page' && key !== 'page_size' && value != null) query.set(key, String(value))
+  return `?${query}`
+}
+
+export async function listAPMApplications(): Promise<APMApplicationOption[]> { return requestJson('/apm/applications') }
+export async function listAPMServices(applicationId?: number): Promise<APMServiceOption[]> { return requestJson(`/apm/services${applicationId == null ? '' : `?application_id=${applicationId}`}`) }
+export async function getAPMOverview(filters: APMFilters): Promise<{ items: APMOverviewItem[]; from: string; to: string }> { return requestJson(`/apm/overview${apmQuery(filters)}`) }
+export async function getAPMServiceMetrics(serviceId: number, filters: APMFilters): Promise<{ items: APMServiceMetric[]; from: string; to: string }> { return requestJson(`/apm/services/${serviceId}/metrics${apmQuery(filters)}`) }
+export async function getAPMDependencies(filters: APMFilters): Promise<{ items: APMDependencyItem[]; from: string; to: string }> { return requestJson(`/apm/dependencies${apmQuery(filters)}`) }
+
+export interface CMDBType { id: number; name: string; category: string; description?: string | null; created_at: string; updated_at: string; deleted_at?: string | null }
+export interface CMDBItem { id: number; ci_type_id: number; name: string; external_key?: string | null; lifecycle_state: string; owner_user_id?: number | null; organization_id?: number | null; device_id?: number | null; interface_id?: number | null; site_id?: number | null; application_id?: number | null; environment?: string | null; attributes: Record<string, unknown>; created_at: string; updated_at: string; first_discovered?: string | null; last_seen?: string | null; last_synchronized?: string | null; sync_source?: string | null; deleted_at?: string | null }
+export interface CMDBRelationship { id: number; source_ci_id: number; target_ci_id: number; relationship_type: string; created_at: string; managed_by?: string; source_key?: string | null; deleted_at?: string | null }
+export interface CMDBHistory { id: number; ci_id: number; changed_by_user_id?: number | null; action: string; field_name?: string | null; old_value?: string | null; new_value?: string | null; changed_at: string }
+export interface CMDBItemFilters { search?: string; ci_type_id?: number; lifecycle_state?: string; owner_user_id?: number; device_id?: number; site_id?: number; application_id?: number; skip?: number; limit?: number }
+
+export async function listCMDBTypes(): Promise<CMDBType[]> { return requestJson('/cmdb/types') }
+export async function listCMDBItems(filters: CMDBItemFilters = {}): Promise<CMDBItem[]> {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) if (value != null && value !== '') query.set(key, String(value))
+  return requestJson(`/cmdb/items${query.toString() ? `?${query}` : ''}`)
+}
+export async function getCMDBRelationships(ciId: number): Promise<CMDBRelationship[]> { return requestJson(`/cmdb/items/${ciId}/relationships`) }
+export async function getCMDBHistory(ciId: number): Promise<CMDBHistory[]> { return requestJson(`/cmdb/items/${ciId}/history`) }
+export interface CMDBSyncResult { created: number; updated: number; unchanged: number; skipped: number; errors: number; relationships_created: number; relationships_updated: number; relationships_removed: number; relationships_unchanged: number; started_at: string; completed_at: string }
+export async function syncCMDB(): Promise<CMDBSyncResult> { return requestJson('/cmdb/sync', { method: 'POST' }) }
 
 export interface DeviceRecord {
   id: number
@@ -1589,6 +1734,16 @@ export async function getSNMPTopology(
     ? `/snmp/topology?device_id=${deviceId}`
     : "/snmp/topology"
   return requestJson<SNMPTopologyGraph>(path)
+}
+
+export async function persistSNMPTopologySnapshot(
+  deviceId: number,
+  snapshot: { devices: unknown[]; links: unknown[]; collected_at: string; source?: string },
+): Promise<{ persisted: boolean; collected_at: string }> {
+  return requestJson(`/snmp/topology/snapshot`, {
+    method: "POST",
+    body: JSON.stringify({ device_id: deviceId, ...snapshot }),
+  })
 }
 
 export interface ManualTopologyChange {
@@ -3157,4 +3312,71 @@ export interface LinuxMetricSnapshot {
 export async function getLinuxCurrentMetrics(id: number): Promise<LinuxMetricSnapshot> { return requestJson(`/linux-servers/${id}/metrics/latest`) }
 export async function getLinuxMetricHistory(id: number, since?: string): Promise<LinuxMetricSnapshot[]> { return requestJson(`/linux-servers/${id}/metrics/history${since ? `?since=${encodeURIComponent(since)}` : ''}`) }
 export async function listLinuxSecurityEvents(id: number): Promise<LinuxSecurityEvent[]> { return requestJson(`/linux-servers/${id}/security/events`) }
+
+export interface RCAEvidence { id: number; evidence_type: string; alert_id?: number | null; event_id?: number | null; relationship_id?: number | null; score: number; reason: string; payload?: Record<string, unknown> | null }
+export interface RCAAlert { id: number; device_id?: number | null; severity: string; title: string; description?: string | null; status: string; created_at: string }
+export interface RCAIncident { id: number; root_kind: string; root_label: string; root_device_id?: number | null; root_interface_id?: number | null; root_ci_id?: number | null; confidence: number; impact_summary: string; window_start: string; window_end: string; created_at?: string; updated_at?: string; evidence: RCAEvidence[]; raw_alerts?: RCAAlert[] }
+export async function analyzeRCA(hours: number): Promise<{ incident: RCAIncident | null; alerts_considered: number }> { return requestJson('/rca/analyze', { method: 'POST', body: JSON.stringify({ hours }) }) }
+export async function listRCAIncidents(hours = 24): Promise<{ items: RCAIncident[]; skip: number; limit: number }> { return requestJson(`/rca/incidents?hours=${hours}`) }
+export async function getRCAIncident(id: number): Promise<RCAIncident> { return requestJson(`/rca/incidents/${id}`) }
+export async function analyzeIncidentRCA(id: number): Promise<{ incident_id: number; rca: RCAIncident }> { return requestJson(`/incidents/${id}/rca`, { method: 'POST' }) }
+
+export interface ManagedIncident { id: number; title: string; description?: string | null; category: string; priority: string; status: string; correlation_key?: string | null; assigned_to?: number | null; created_by?: number | null; rca_incident_id?: number | null; rca?: RCAIncident | null; service_id?: number | null; acknowledged_at?: string | null; acknowledged_by?: number | null; resolved_at?: string | null; closed_at?: string | null; created_at?: string; updated_at?: string; alert_ids: number[]; alerts?: Array<RCAAlert & { device_name?: string | null; ip_address?: string | null; interface_name?: string | null; resolved_at?: string | null }>; sla?: { response_deadline: string; resolution_deadline: string; response_breached: boolean; resolution_breached: boolean; paused_at?: string | null; paused_seconds: number } | null; sla_history?: Array<{ id: number; action: string; details?: string | null; created_at: string }>; history?: Array<{ id: number; action: string; actor_id?: number | null; old_value?: string | null; new_value?: string | null; reason?: string | null; created_at: string }>; comments?: Array<{ id: number; body: string; author_id?: number | null; created_at: string }>; attachments?: Array<{ id: number; file_name: string; content_type?: string | null; size_bytes: number; storage_key: string; created_at: string }> }
+export async function listIncidents(params: { status_filter?: string; category?: string; priority?: string } = {}): Promise<{ items: ManagedIncident[]; skip: number; limit: number }> { const query = new URLSearchParams(params as Record<string, string>).toString(); return requestJson(`/incidents${query ? `?${query}` : ''}`) }
+export async function createIncident(data: { title: string; description?: string; category: string; priority: string; assigned_to?: number; service_id?: number; alert_ids?: number[]; rca_incident_id?: number }): Promise<ManagedIncident> { return requestJson('/incidents', { method: 'POST', body: JSON.stringify(data) }) }
+export interface SLAPolicy { id: number; priority: string; service_id?: number | null; response_target_minutes: number; resolution_target_minutes: number; pause_states: string[]; escalation_after_minutes?: number | null; enabled: boolean }
+export async function listIncidentSLAPolicies(): Promise<SLAPolicy[]> { return requestJson('/incidents/sla/policies') }
+export async function updateIncident(id: number, data: Record<string, unknown>): Promise<ManagedIncident> { return requestJson(`/incidents/${id}`, { method: 'PATCH', body: JSON.stringify(data) }) }
+export async function getManagedIncident(id: number): Promise<ManagedIncident> { return requestJson(`/incidents/${id}`) }
+export async function acknowledgeIncident(id: number): Promise<ManagedIncident> { return requestJson(`/incidents/${id}/acknowledge`, { method: 'POST' }) }
+export async function resolveIncident(id: number): Promise<ManagedIncident> { return requestJson(`/incidents/${id}/resolve`, { method: 'POST' }) }
+export async function reopenIncident(id: number): Promise<ManagedIncident> { return requestJson(`/incidents/${id}/reopen`, { method: 'POST' }) }
+export async function getIncidentHistory(id: number): Promise<ManagedIncident['history']> { return requestJson(`/incidents/${id}/history`) }
+export async function addIncidentComment(id: number, body: string): Promise<unknown> { return requestJson(`/incidents/${id}/comments`, { method: 'POST', body: JSON.stringify({ body }) }) }
+
+export interface ManagedProblemIncident { id: number; title: string; status: string; priority: string; rca?: { id: number; root_kind: string; root_label: string; confidence: number; impact_summary: string; updated_at?: string } | null }
+export interface ManagedProblem { id: number; number: string; title: string; description?: string | null; category: string; priority: string; status: string; root_cause?: string | null; workaround?: string | null; known_error?: string | null; permanent_fix?: string | null; owner_id?: number | null; incident_ids: number[]; incidents?: ManagedProblemIncident[]; history?: Array<{ id: number; action: string; field_name?: string | null; old_value?: string | null; new_value?: string | null; created_at: string }> }
+export async function listProblems(params: { status?: string; category?: string } = {}): Promise<{ items: ManagedProblem[]; skip: number; limit: number }> { const query = new URLSearchParams(params as Record<string, string>).toString(); return requestJson(`/problems${query ? `?${query}` : ''}`) }
+export async function createProblem(data: Record<string, unknown>): Promise<ManagedProblem> { return requestJson('/problems', { method: 'POST', body: JSON.stringify(data) }) }
+export async function getProblem(id: number): Promise<ManagedProblem> { return requestJson(`/problems/${id}`) }
+export async function updateProblem(id: number, data: Record<string, unknown>): Promise<ManagedProblem> { return requestJson(`/problems/${id}`, { method: 'PATCH', body: JSON.stringify(data) }) }
+export async function linkProblemIncident(problemId: number, incidentId: number): Promise<{ linked: boolean }> { return requestJson(`/problems/${problemId}/incidents/${incidentId}`, { method: 'POST' }) }
+
+export interface ChangeRequest { id: number; number: string; title: string; description?: string | null; category: string; risk: string; impact: string; status: string; requested_by?: number | null; approved_by?: number | null; maintenance_start?: string | null; maintenance_end?: string | null; implementation_plan?: string | null; rollback_plan?: string | null; closure_note?: string | null; ci_ids: number[]; incident_ids: number[]; history?: Array<{ id: number; action: string; field_name?: string | null; created_at: string }> }
+export async function listChanges(params: { status?: string; risk?: string } = {}): Promise<{ items: ChangeRequest[]; skip: number; limit: number }> { const query = new URLSearchParams(params as Record<string, string>).toString(); return requestJson(`/changes${query ? `?${query}` : ''}`) }
+export async function createChange(data: Record<string, unknown>): Promise<ChangeRequest> { return requestJson('/changes', { method: 'POST', body: JSON.stringify(data) }) }
+export async function updateChange(id: number, data: Record<string, unknown>): Promise<ChangeRequest> { return requestJson(`/changes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }) }
+export async function approveChange(id: number, comment?: string): Promise<ChangeRequest> { return requestJson(`/changes/${id}/approve`, { method: 'POST', body: JSON.stringify({ comment }) }) }
+export async function linkChangeCI(changeId: number, ciId: number): Promise<{ linked: boolean }> { return requestJson(`/changes/${changeId}/cis/${ciId}`, { method: 'POST' }) }
+export async function linkChangeIncident(changeId: number, incidentId: number): Promise<{ linked: boolean }> { return requestJson(`/changes/${changeId}/incidents/${incidentId}`, { method: 'POST' }) }
+
+export interface KnowledgeArticle { id: number; number: string; title: string; article_type: string; status: string; current_version: number; body?: string | null; incident_ids: number[]; problem_ids: number[]; device_ids: number[]; service_ids: number[]; versions?: Array<{ version: number; changed_by?: number | null; created_at: string }> }
+export async function listKnowledge(search?: string): Promise<{ items: KnowledgeArticle[]; skip: number; limit: number }> { return requestJson(`/knowledge${search ? `?search=${encodeURIComponent(search)}` : ''}`) }
+export async function createKnowledge(data: Record<string, unknown>): Promise<KnowledgeArticle> { return requestJson('/knowledge', { method: 'POST', body: JSON.stringify(data) }) }
+export async function getKnowledge(id: number): Promise<KnowledgeArticle> { return requestJson(`/knowledge/${id}`) }
+export async function updateKnowledge(id: number, data: Record<string, unknown>): Promise<KnowledgeArticle> { return requestJson(`/knowledge/${id}`, { method: 'PATCH', body: JSON.stringify(data) }) }
+
+export interface ConfigurationVersion { id: number; device_id: number; version: number; source: string; checksum: string; is_startup: boolean; captured_at: string; unchanged?: boolean; content?: string | null }
+export async function captureConfiguration(data: { device_id: number; source: string; content: string; is_startup?: boolean }): Promise<ConfigurationVersion> { return requestJson('/config-backups/capture', { method: 'POST', body: JSON.stringify(data) }) }
+export async function listConfigurationVersions(deviceId: number): Promise<{ items: ConfigurationVersion[]; skip: number; limit: number }> { return requestJson(`/config-backups/devices/${deviceId}`) }
+export async function getConfigurationVersion(deviceId: number, version: number): Promise<ConfigurationVersion> { return requestJson(`/config-backups/devices/${deviceId}/versions/${version}`) }
+export interface ConfigurationComparison { id: number; device_id: number; from_version: number; to_version: number; added_lines: string[]; removed_lines: string[]; changed_lines: Array<{ from_line: string[]; to_line: string[]; from_number: number; to_number: number }>; initiated_by?: number | null; created_at: string }
+export async function compareConfigurationVersions(deviceId: number, fromVersion: number, toVersion: number): Promise<ConfigurationComparison> { return requestJson('/config-backups/compare', { method: 'POST', body: JSON.stringify({ device_id: deviceId, from_version: fromVersion, to_version: toVersion }) }) }
+export async function compareBaselineCurrent(deviceId: number): Promise<ConfigurationComparison> { return requestJson(`/config-backups/devices/${deviceId}/compare/baseline-current`) }
+export interface ConfigurationCompliancePolicy { id: number; name: string; description?: string | null; rules: Record<string, unknown>; enabled: boolean; created_by?: number | null; created_at: string }
+export interface ConfigurationComplianceViolation { id: number; policy_id: number; device_id: number; version: number; severity: string; status: string; evidence: Record<string, unknown>; recommendation?: string | null; detected_at: string; resolved_at?: string | null }
+export async function listConfigurationCompliancePolicies(): Promise<{ items: ConfigurationCompliancePolicy[] }> { return requestJson('/config-compliance/policies') }
+export async function createConfigurationCompliancePolicy(data: { name: string; description?: string; rules: Record<string, unknown>; enabled?: boolean }): Promise<ConfigurationCompliancePolicy> { return requestJson('/config-compliance/policies', { method: 'POST', body: JSON.stringify(data) }) }
+export async function evaluateConfigurationCompliance(policy_id: number, device_id: number): Promise<{ compliant: boolean; violation: ConfigurationComplianceViolation | null }> { return requestJson('/config-compliance/evaluate', { method: 'POST', body: JSON.stringify({ policy_id, device_id }) }) }
+export async function listConfigurationComplianceViolations(status?: string): Promise<{ items: ConfigurationComplianceViolation[] }> { return requestJson(`/config-compliance/violations${status ? `?status=${encodeURIComponent(status)}` : ''}`) }
+export interface AvailabilityOutage { id:number; device_id?:number|null; start_time:string; end_time?:string|null; duration_seconds:number; ongoing:boolean; planned:boolean; reason?:string|null }
+export interface AvailabilityReport { id:number; entity_type:string; entity_id:number; device_name?:string|null; ip_address?:string|null; current_status?:string|null; requested_duration_seconds:number; monitored_duration_seconds:number; uptime_seconds:number; downtime_seconds:number; unknown_seconds:number; availability_percent:number|null; coverage_percent:number|null; planned_downtime_seconds:number; unplanned_downtime_seconds:number; outage_count:number; last_outage?:AvailabilityOutage|null; current_outage?:AvailabilityOutage|null; outages?:AvailabilityOutage[]; mttr_seconds:number|null; mtbf_seconds:number|null; sla_target_percent:number; achieved_percent:number|null; sla_breached:boolean|null; downtime_reasons:Record<string,number>; window_start:string; window_end:string; generated_at?:string }
+export interface AvailabilityReportRequest { entity_type:string; entity_id:number; start:string; end:string; sla_target?:number }
+export async function listAvailabilityReports(params?: { entity_type?:string; entity_id?:number; limit?:number }): Promise<{items: AvailabilityReport[]}> { const query = new URLSearchParams(); if (params?.entity_type) query.set('entity_type', params.entity_type); if (params?.entity_id != null) query.set('entity_id', String(params.entity_id)); if (params?.limit != null) query.set('limit', String(params.limit)); return requestJson(`/availability/reports${query.size ? `?${query.toString()}` : ''}`) }
+export async function createAvailabilityReport(payload: AvailabilityReportRequest): Promise<AvailabilityReport> { return requestJson('/availability/reports', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function getAvailabilityReport(id: number): Promise<AvailabilityReport> { return requestJson(`/availability/reports/${id}`) }
+export interface QoSSample { id:number; device_id:number; interface_id?:number|null; observed_at:string; tos?:number|null; dscp?:number|null; phb?:string|null; traffic_class?:string|null; queue_utilization?:number|null; queue_drops:number; source:string }
+export async function listQoSSamples(deviceId?: number): Promise<QoSSample[]> { return requestJson(`/qos/samples${deviceId ? `?device_id=${deviceId}` : ''}`) }
+export interface BGPObservation { id:number; device_id:number; neighbor:string; state:string; remote_as?:number|null; next_hop?:string|null; prefixes:number; as_path?:string|null; observed_at:string }
+export async function listBGPNeighbors(deviceId?: number): Promise<BGPObservation[]> { return requestJson(`/bgp/neighbors${deviceId ? `?device_id=${deviceId}` : ''}`) }
 export async function collectLinuxSecurity(id: number, data: Record<string, unknown>): Promise<{ success: boolean; status: string; message: string; collected_events: number; warnings: string[]; events: LinuxSecurityEvent[] }> { return requestJson(`/linux-servers/${id}/security/collect`, { method: 'POST', body: JSON.stringify(data) }) }
