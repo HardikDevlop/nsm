@@ -432,9 +432,23 @@ class MonitorEngine:
                 packet_loss=0.0 if reachable else 100.0,
             ))
 
-            # ---- 2. Detect status transition and record history ----
+            # A newly started monitor begins in memory as ``unknown``. Use the
+            # persisted device state as the transition baseline so a restart
+            # does not create false ``unknown -> online`` events.
             db_new_status = self._STATUS_MAP.get(dev.status, "unknown")
-            db_old_status = self._STATUS_MAP.get(prev_status, "unknown")
+            db_old_status = device.status if device.status in {"online", "offline"} else self._STATUS_MAP.get(prev_status, "unknown")
+
+            # Keep last_seen current for every successful ping, not only when
+            # the device changes state.
+            if reachable:
+                device.last_seen = now
+
+            # The monitor needs two consecutive results to confirm a state.
+            # Do not turn that warm-up value into a database transition (for
+            # example, an existing online device must not become unknown).
+            if db_new_status == "unknown":
+                db.commit()
+                return
 
             if db_old_status != db_new_status:
                 # Accumulate time spent in the previous status
@@ -445,19 +459,18 @@ class MonitorEngine:
                     elif db_old_status == "offline":
                         device.downtime_seconds = (device.downtime_seconds or 0) + elapsed
 
-                # Record the transition
-                db.add(DeviceStatusHistory(
-                    device_id=device.id,
-                    old_status=db_old_status,
-                    new_status=db_new_status,
-                    change_reason="Realtime ICMP check",
-                ))
+                # ``unknown -> known`` establishes a baseline, rather than a
+                # real up/down transition, so keep it out of the history.
+                if db_old_status != "unknown":
+                    db.add(DeviceStatusHistory(
+                        device_id=device.id,
+                        old_status=db_old_status,
+                        new_status=db_new_status,
+                        change_reason="Realtime ICMP check",
+                    ))
 
                 device.status = db_new_status
                 device.last_status_change = now
-
-                if reachable:
-                    device.last_seen = now
 
                 # Sync cumulative counters back to the in-memory model
                 with self._lock:

@@ -122,7 +122,10 @@ export const SNMP_MODULES: Record<string, SNMPModuleConfig> = {
     icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4',
     color: '#00bfff',
     route: 'interfaces',
-    apiEndpoint: '/snmp/devices/{deviceId}/interfaces',
+    // This page reads the scheduler's last successful snapshot. The plain
+    // /interfaces endpoint starts a blocking live SNMP walk and can return
+    // 409 while the background poll is already running.
+    apiEndpoint: '/snmp/devices/{deviceId}/interfaces/latest',
     queryKey: ['snmp', 'interfaces'],
     supportedCheck: (caps) => caps.interfaces === true,
     summaryFields: ['total', 'up', 'down'],
@@ -369,7 +372,7 @@ export const MODULE_ORDER = [
   'polling',
 ];
 
-export const INTERVAL_OPTIONS = [30, 60, 120, 300, 600];
+export const INTERVAL_OPTIONS = [15, 30, 60, 120, 300, 600];
 
 export function getSupportedModules(capabilities: Record<string, boolean>): SNMPModuleConfig[] {
   return MODULE_ORDER

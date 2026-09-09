@@ -112,7 +112,7 @@ from backend.schemas.nms import (
 )
 from backend.services.discovery import discover_network
 from backend.services.monitoring import run_monitoring_check
-from backend.services.alerting import _notify, create_device_added_alert
+from backend.services.alerting import _notify, create_device_added_alert, create_operational_alert
 from backend.incidents.service import create_incident_from_alert, process_alert_recovery
 from backend.utils.crypto import encrypt_secret
 
@@ -1047,6 +1047,8 @@ def delete_device(item_id: int, db: Session = Depends(get_db), current_user: Use
     device = db.query(Device).filter(Device.id == item_id).first()
     if device is None:
         raise HTTPException(status_code=404, detail="Device not found")
+    deleted_hostname = device.hostname
+    deleted_ip = device.ip_address
     try:
         # Some legacy device tables use RESTRICT/NO ACTION foreign keys,
         # while newer tables use database cascades. Delete the targeted
@@ -1075,6 +1077,13 @@ def delete_device(item_id: int, db: Session = Depends(get_db), current_user: Use
         db.rollback()
         logger.exception("Failed to permanently delete device %s", item_id)
         raise HTTPException(status_code=409, detail="Device cannot be deleted because related data is still in use") from exc
+    if hasattr(db, "add"):
+        create_operational_alert(
+            db,
+            title=f"Device Deleted: {deleted_hostname}",
+            description=f"Device {deleted_ip} was deleted from the NMS inventory.",
+        )
+        db.commit()
     audit(db, current_user.id, "DELETE", "devices")
     return {"deleted": True, "detail": f"Device {item_id} deleted"}
 
@@ -1093,6 +1102,13 @@ def delete_all_devices(db: Session = Depends(get_db), current_user: User = Depen
         db.delete(device)
     
     db.commit()
+    if hasattr(db, "add"):
+        create_operational_alert(
+            db,
+            title="Devices Deleted",
+            description=f"{count} device(s) were deleted from the NMS inventory.",
+        )
+        db.commit()
     audit(db, current_user.id, "DELETE", "devices")
     return {"deleted": count, "message": f"All {count} devices deleted successfully"}
 
@@ -1100,6 +1116,14 @@ def delete_all_devices(db: Session = Depends(get_db), current_user: User = Depen
 @router.post("/devices/{item_id}/monitoring/{enabled}", response_model=DeviceRead)
 def set_monitoring(item_id: int, enabled: bool, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:update"))):
     item = device_crud.update(db, item_id, {"monitoring_status": enabled})
+    if enabled:
+        create_operational_alert(
+            db,
+            title=f"Monitoring Started: {item.hostname}",
+            description=f"Monitoring enabled for device {item.ip_address}.",
+            device_id=item.id,
+        )
+        db.commit()
     audit(db, current_user.id, "UPDATE", "device_monitoring")
     return item
 
@@ -1325,6 +1349,7 @@ def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 10
     query = db.query(Alert).options(load_only(
         Alert.id,
         Alert.device_id,
+        Alert.interface_id,
         Alert.severity,
         Alert.title,
         Alert.description,
@@ -1831,18 +1856,12 @@ def get_audit_log(item_id: int, db: Session = Depends(get_db), _: User = Depends
 # ---------------------------------------------------------------- Dashboard
 @router.get("/dashboard/summary", response_model=DashboardSummary)
 def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:read"))):
-    from backend.cache.redis_cache import get_json, set_json
+    from backend.cache.redis_cache import set_json
 
     now = datetime.utcnow()
-    redis_value = get_json("nms:dashboard:summary:v1")
-    if isinstance(redis_value, dict):
-        return DashboardSummary.model_validate(redis_value)
-    with _dashboard_summary_lock:
-        cached_at = _dashboard_summary_cache.get("cached_at")
-        cached_value = _dashboard_summary_cache.get("value")
-        if isinstance(cached_at, datetime) and isinstance(cached_value, DashboardSummary):
-            if (now - cached_at).total_seconds() < _DASHBOARD_SUMMARY_TTL_SECONDS:
-                return cached_value
+    # Device availability is operational state, not a cacheable inventory
+    # value. Always read it from the current DB transaction so a stale Redis
+    # snapshot cannot make the UI report zero online devices.
 
     since = now - timedelta(hours=24)
     summary_counts = db.query(

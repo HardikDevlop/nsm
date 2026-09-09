@@ -29,6 +29,7 @@ from backend.api.bgp_routes import router as bgp_router
 from backend.api.syslog_routes import router as syslog_router
 from backend.flow.receiver import FlowReceiver
 from backend.flow.service import FlowIngestService
+from backend.syslog import SyslogIngestionService
 from backend.linux_monitoring.api import router as linux_monitoring_router
 import backend.linux_monitoring.models  # noqa: F401 (register Linux monitoring tables)
 from backend.linux_monitoring.models import LINUX_MONITORING_TABLES
@@ -73,12 +74,21 @@ async def lifespan(app: FastAPI):
         flow_receiver = FlowReceiver(
             flow_ingest,
             bind_host=settings.flow_bind_host,
-            netflow_port=settings.flow_netflow_port,
+            ipfix_port=settings.flow_ipfix_port,
             sflow_port=settings.flow_sflow_port,
         )
         await flow_receiver.start()
     app.state.flow_ingest = flow_ingest
     app.state.flow_receiver = flow_receiver
+    syslog_service = None
+    if settings.syslog_enabled:
+        syslog_service = SyslogIngestionService(SessionLocal)
+        try:
+            await syslog_service.start(settings.syslog_bind_host, settings.syslog_udp_port, settings.syslog_tcp_port, settings.syslog_enable_udp, settings.syslog_enable_tcp)
+        except Exception:
+            logger.exception("syslog_receiver_startup_failed")
+            syslog_service = None
+    app.state.syslog = syslog_service
 
     # Start centralized SNMP polling scheduler
     app.state.scheduler_lease = SchedulerLease()
@@ -93,6 +103,8 @@ async def lifespan(app: FastAPI):
         await flow_receiver.stop()
     if flow_ingest is not None:
         await flow_ingest.stop()
+    if syslog_service is not None:
+        await syslog_service.stop()
     await linux_scheduler.shutdown()
     if scheduler is not None:
         await shutdown_polling_scheduler()

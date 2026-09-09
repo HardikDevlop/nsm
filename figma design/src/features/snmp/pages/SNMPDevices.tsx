@@ -463,8 +463,7 @@ export default function SNMPDevicesPage() {
   const [pageSize, setPageSize] = useState(25)
   const [search, setSearch] = useState("")
   const deferredSearch = useDeferredValue(search.trim())
-  // Show only devices explicitly registered by SNMP discovery. ICMP
-  // inventory remains on the IP Scan page even when SNMP is reachable.
+  // This page is reserved for devices with verified SNMP identity.
   const [snmpStatusFilter] = useState<string>("verified")
   const [sortBy, setSortBy] = useState("id")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
@@ -491,12 +490,7 @@ export default function SNMPDevicesPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [
-    deferredSearch,
-    snmpStatusFilter,
-    sortBy,
-    sortOrder,
-  ])
+  }, [deferredSearch, snmpStatusFilter, sortBy, sortOrder])
 
   const devices = data?.items || []
   const total = data?.total || 0

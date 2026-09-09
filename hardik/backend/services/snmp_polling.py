@@ -23,6 +23,7 @@ from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.orm import Session
 
 from backend.database.session import SessionLocal
+from backend.models import Interface
 from backend.models.snmp import MonitoringConfig, MonitoringStatus, PollingHistory, PollStatus
 from backend.models.identity import DeviceCapabilities
 from backend.snmp.collector import SNMPService
@@ -72,8 +73,10 @@ DEFAULT_INTERVALS = {
     "lldp": 600,
     "cdp": 600,
     "routing": 600,
-    "arp": 300,
-    "mac_table": 300,
+    # FDB/ARP changes are high-value topology data; keep the DB snapshot fresh
+    # without making every frontend request perform a live SNMP walk.
+    "arp": 30,
+    "mac_table": 30,
     "inventory": 86400,
     "topology": 600,
     "firewall": 60,
@@ -82,7 +85,7 @@ DEFAULT_INTERVALS = {
 }
 
 # Allowed interval options for UI
-ALLOWED_INTERVALS = [30, 60, 120, 300, 600]
+ALLOWED_INTERVALS = [15, 30, 60, 120, 300, 600]
 
 
 @dataclass
@@ -145,6 +148,7 @@ class SNMPPoller:
             privacy_protocol=cred.privacy_protocol,
             privacy_password=priv_pass,
             security_level=cred.security_level,
+            port=getattr(cred, "snmp_port", None) or 161,
         )
 
     def _get_device_ip(self, device_id: int) -> str | None:
@@ -259,6 +263,8 @@ class SNMPPoller:
                     "missing": existing.get("missing", []),
                     "warnings": existing.get("warnings", []),
                     "reason": None if supported else existing.get("reason") or "Module not supported",
+                    "collection_status": "SUCCESS" if supported else "FAILED",
+                    "last_good_timestamp": now.isoformat() if supported else existing.get("last_good_timestamp") or existing.get("timestamp"),
                 }
                 cap.capability_detail = detail
                 cap.updated_at = now
@@ -297,8 +303,36 @@ class SNMPPoller:
             checks.append(("High Storage", data.get("utilization_percent"), 80, "%"))
         elif module == "interfaces":
             for iface in data.get("interfaces", []):
-                if str(iface.get("oper_status", iface.get("status", ""))).lower() in {"down", "2", "false"}:
-                    create_threshold_alert(self.db, device_id, f"Interface Down: {iface.get('name', iface.get('interface', 'unknown'))}", "SNMP reports interface is down", "critical")
+                interface_name = str(
+                    iface.get("name")
+                    or iface.get("interface")
+                    or iface.get("interface_name")
+                    or iface.get("description")
+                    or "unknown"
+                )
+                interface = self.db.query(Interface).filter(
+                    Interface.device_id == device_id,
+                    Interface.interface_name == interface_name,
+                ).first()
+                interface_id = interface.id if interface else None
+                admin_status = str(iface.get("admin_status", "")).lower()
+                oper_status = str(iface.get("oper_status", iface.get("status", ""))).lower()
+                # An administratively disabled/unused port is expected to be
+                # down. Alert only when the operator enabled the port but SNMP
+                # reports its operational link as down.
+                admin_up = admin_status in {"up", "1", "true", "enabled", "on"}
+                if admin_up and oper_status in {"down", "2", "false"}:
+                    create_threshold_alert(
+                        self.db,
+                        device_id,
+                        f"Interface Down: {interface_name}",
+                        "SNMP reports interface is down",
+                        "critical",
+                        interface_id=interface_id,
+                    )
+                elif oper_status in {"up", "1", "true"} and interface_id is not None:
+                    from backend.services.alerting import resolve_interface_down_alert
+                    resolve_interface_down_alert(self.db, device_id, interface_id, interface_name)
         elif module == "environment":
             for sensor in data.get("temperatures", []):
                 checks.append((f"High Temperature: {sensor.get('name', 'sensor')}", sensor.get("value"), 70, "°C"))
@@ -750,8 +784,10 @@ class PollingScheduler:
                     config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
                     db.commit()
 
-                    # Reschedule if still running
-                    if config.enabled and config.status == MonitoringStatus.RUNNING.value:
+                    # A transient poll error must not permanently disable a
+                    # configured monitor. Keep retrying enabled jobs; only a
+                    # device/module capability failure is terminal.
+                    if config.enabled and config.status != MonitoringStatus.NOT_SUPPORTED.value:
                         await self._schedule_config(config, db)
 
             except Exception as exc:
@@ -762,6 +798,8 @@ class PollingScheduler:
                     config.error_message = str(exc)
                     config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
                     db.commit()
+                    if config.enabled:
+                        await self._schedule_config(config, db)
             finally:
                 db.close()
 

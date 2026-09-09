@@ -72,7 +72,7 @@ class _Ingest:
 
 @pytest.mark.parametrize(
     ("listener", "payload", "protocol"),
-    [("netflow", v5_packet(), "netflow"), ("netflow", ipfix_packet(), "ipfix"), ("sflow", sflow_packet(), "sflow")],
+    [("ipfix", ipfix_packet(), "ipfix"), ("sflow", sflow_packet(), "sflow")],
 )
 def test_receiver_dispatches_protocols(listener, payload, protocol):
     ingest = _Ingest()
@@ -85,19 +85,19 @@ def test_receiver_dispatches_protocols(listener, payload, protocol):
     assert receiver.stats.parsed_records == 1
 
 
-def test_receiver_dispatches_netflow_v9():
+def test_receiver_rejects_netflow_v9():
     ingest = _Ingest()
     receiver = FlowReceiver(ingest)
-    receiver.handle_datagram("netflow", v9_packet(), "192.0.2.10")
+    receiver.handle_datagram("ipfix", v9_packet(), "192.0.2.10")
     assert receiver.stats.received_datagrams == 1
-    assert receiver.stats.parsed_records == 1
-    assert ingest.queue.get_nowait().source_version == "9"
+    assert receiver.stats.parsed_records == 0
+    assert receiver.stats.unsupported_datagrams == 1
 
 
 def test_receiver_drops_malformed_datagram_without_crashing():
     ingest = _Ingest()
     receiver = FlowReceiver(ingest)
-    receiver.handle_datagram("netflow", b"\x00", "192.0.2.10")
+    receiver.handle_datagram("ipfix", b"\x00", "192.0.2.10")
     assert receiver.stats.malformed_datagrams == 1
     assert ingest.queue.empty()
 
@@ -105,7 +105,7 @@ def test_receiver_drops_malformed_datagram_without_crashing():
 def test_receiver_drops_unsupported_version_without_crashing():
     ingest = _Ingest()
     receiver = FlowReceiver(ingest)
-    receiver.handle_datagram("netflow", b"\x00\x04", "192.0.2.10")
+    receiver.handle_datagram("ipfix", b"\x00\x04", "192.0.2.10")
     assert receiver.stats.unsupported_datagrams == 1
     assert ingest.queue.empty()
 
@@ -114,14 +114,14 @@ def test_receiver_handles_queue_full():
     ingest = _Ingest(maxsize=1)
     ingest.queue.put_nowait(object())
     receiver = FlowReceiver(ingest)
-    receiver.handle_datagram("netflow", v5_packet(), "192.0.2.10")
+    receiver.handle_datagram("ipfix", ipfix_packet(), "192.0.2.10")
     assert receiver.stats.dropped_records == 1
     assert ingest.dropped == 1
 
 
 def test_receiver_start_stop_binds_two_configured_listeners():
     ingest = _Ingest()
-    receiver = FlowReceiver(ingest, bind_host="127.0.0.1", netflow_port=0, sflow_port=0)
+    receiver = FlowReceiver(ingest, bind_host="127.0.0.1", ipfix_port=0, sflow_port=0)
     transports = [SimpleNamespace(close=lambda: None), SimpleNamespace(close=lambda: None)]
 
     async def fake_create_datagram_endpoint(factory, local_addr):
@@ -165,10 +165,10 @@ def test_lifespan_starts_writer_before_receiver_and_stops_both(monkeypatch):
             events.append("ingest_stop")
 
     class FakeFlowReceiver:
-        def __init__(self, ingest, bind_host, netflow_port, sflow_port):
+        def __init__(self, ingest, bind_host, ipfix_port, sflow_port):
             self.ingest = ingest
             self.bind_host = bind_host
-            self.netflow_port = netflow_port
+            self.ipfix_port = ipfix_port
             self.sflow_port = sflow_port
 
         async def start(self):
@@ -209,7 +209,7 @@ def test_lifespan_starts_writer_before_receiver_and_stops_both(monkeypatch):
     monkeypatch.setattr(main, "seed_ouis_and_products", lambda _db: events.append("seed_ouis"))
     monkeypatch.setattr(main.settings, "flow_enabled", True)
     monkeypatch.setattr(main.settings, "flow_bind_host", "127.0.0.1")
-    monkeypatch.setattr(main.settings, "flow_netflow_port", 2055)
+    monkeypatch.setattr(main.settings, "flow_ipfix_port", 4739)
     monkeypatch.setattr(main.settings, "flow_sflow_port", 6343)
 
     app = SimpleNamespace(state=SimpleNamespace())

@@ -31,7 +31,7 @@ interface SNMPModuleCardProps {
   isUpdating?: boolean;
 }
 
-const INTERVAL_OPTIONS = [30, 60, 120, 300, 600];
+const INTERVAL_OPTIONS = [15, 30, 60, 120, 300, 600];
 
 function formatTimestamp(timestamp: string | null | undefined): string {
   if (!timestamp) return 'Not polled';

@@ -27,8 +27,8 @@ class ManualTopologyResolvePayload(BaseModel):
 
 
 def _link_key(link: dict[str, Any]) -> tuple[tuple[str, str], tuple[str, str]]:
-    left = (str(link.get("from") or link.get("source_node") or ""), str(link.get("fromPort") or link.get("source_port") or ""))
-    right = (str(link.get("to") or link.get("target_node") or ""), str(link.get("toPort") or link.get("target_port") or ""))
+    left = (str(link.get("from") or link.get("source_node") or "").strip().lower(), str(link.get("fromPort") or link.get("source_port") or "").strip().lower())
+    right = (str(link.get("to") or link.get("target_node") or "").strip().lower(), str(link.get("toPort") or link.get("target_port") or "").strip().lower())
     return tuple(sorted((left, right)))  # type: ignore[return-value]
 
 
@@ -62,13 +62,27 @@ def _observed_links(live: dict[str, Any], payload: dict[str, Any]) -> list[dict[
             continue
         source_port = str(raw.get("source_port") or raw.get("local_port") or raw.get("from_port") or "")
         target_port = str(raw.get("target_port") or raw.get("remote_port") or raw.get("to_port") or "")
+        # MAC/ARP evidence normally identifies the switch-side port but has
+        # no way to know an endpoint's local interface. Keep that evidence
+        # instead of rejecting an otherwise valid device-pair observation.
+        if not source_port and not target_port:
+            continue
+        evidence_source = raw.get("evidence_source") or raw.get("source") or raw.get("collector")
+        evidence_available = bool(
+            raw.get("evidence_available") or raw.get("evidenceAvailable") or
+            evidence_source or raw.get("local_port") or raw.get("source_port")
+        )
         result.append({
             "from": source,
             "to": target,
             "fromPort": source_port,
             "toPort": target_port,
             "label": f"{source_port} -> {target_port}",
-            "verified": bool(raw.get("verified", True)),
+            "verified": bool(raw.get("verified", evidence_available)),
+            "evidence_source": str(evidence_source) if evidence_source else None,
+            "evidence_available": evidence_available,
+            "last_verified_at": raw.get("observed_at") or raw.get("timestamp"),
+            "confidence": raw.get("confidence"),
         })
     return result
 
@@ -125,7 +139,7 @@ def update_manual_topology_snapshot(
     snapshot.payload = request.payload
     db.commit()
     db.refresh(snapshot)
-    changes = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status == "pending").all()
+    changes = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status.in_(["pending", "kept_manual"])).all()
     return _snapshot_read(snapshot, changes)
 
 
@@ -137,7 +151,7 @@ def get_latest_manual_topology_snapshot(
     snapshot = db.query(ManualTopologySnapshot).filter(ManualTopologySnapshot.created_by == current_user.id).order_by(ManualTopologySnapshot.updated_at.desc()).first()
     if not snapshot:
         return None
-    changes = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status == "pending").all()
+    changes = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status.in_(["pending", "kept_manual"])).all()
     return _snapshot_read(snapshot, changes)
 
 
@@ -160,13 +174,15 @@ def reconcile_manual_topology(
     payload = snapshot.payload or {}
     baseline_links = [link for link in payload.get("links", []) if link.get("fromPort") and link.get("toPort")]
     observed_links = _observed_links(live, payload)
+    physical_evidence_available = any(link.get("evidence_available") for link in observed_links)
     baseline_by_key = {_link_key(link): link for link in baseline_links}
     observed_by_key = {_link_key(link): link for link in observed_links}
     differences: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
-    for key in baseline_by_key.keys() - observed_by_key.keys():
-        differences.append(("CONNECTION_DISCONNECTED", repr(key), baseline_by_key[key], None))
-    for key in observed_by_key.keys() - baseline_by_key.keys():
-        differences.append(("CONNECTION_ADDED", repr(key), None, observed_by_key[key]))
+    if physical_evidence_available:
+        for key in baseline_by_key.keys() - observed_by_key.keys():
+            differences.append(("CONNECTION_DISCONNECTED", repr(key), baseline_by_key[key], None))
+        for key in observed_by_key.keys() - baseline_by_key.keys():
+            differences.append(("CONNECTION_ADDED", repr(key), None, observed_by_key[key]))
 
     live_devices = {str(device.get("id")): device for device in live.get("devices", []) or []}
     for device in payload.get("devices", []):
@@ -199,8 +215,8 @@ def reconcile_manual_topology(
     snapshot.last_reconciled_at = now
     snapshot.reconcile_status = "changes_found" if differences else "in_sync"
     db.commit()
-    changes = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status == "pending").order_by(ManualTopologyChange.detected_at.desc()).all()
-    return {**_snapshot_read(snapshot, changes), "live": {"links": observed_links, "devices": live.get("devices", [])}}
+    changes = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status.in_(["pending", "kept_manual"])).order_by(ManualTopologyChange.detected_at.desc()).all()
+    return {**_snapshot_read(snapshot, changes), "live": {"links": observed_links, "devices": live.get("devices", []), "evidence_available": physical_evidence_available}}
 
 
 @router.post("/manual-topology/snapshots/{snapshot_id}/changes/{change_id}/resolve")
@@ -239,5 +255,5 @@ def resolve_manual_topology_change(
     change.resolved_by = current_user.id
     change.resolution_note = request.note
     db.commit()
-    pending = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status == "pending").all()
+    pending = db.query(ManualTopologyChange).filter(ManualTopologyChange.snapshot_id == snapshot.id, ManualTopologyChange.status.in_(["pending", "kept_manual"])).all()
     return _snapshot_read(snapshot, pending)

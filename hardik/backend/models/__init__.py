@@ -10,8 +10,8 @@ from backend.models.apm import APMApplication, APMService, APMTransaction, APMMe
 from backend.models.rca import RCAIncident, RCAEvidence  # noqa: F401
 from backend.models.incident import Incident, IncidentAlert, IncidentComment, IncidentAttachment, IncidentHistory, IncidentSLAConfig, IncidentSLATimer, IncidentSLAHistory  # noqa: F401
 from backend.models.problem import Problem, ProblemIncident, ProblemHistory  # noqa: F401
-from backend.models.change import ChangeRequest, ChangeCI, ChangeIncident, ChangeHistory  # noqa: F401
-from backend.models.knowledge import KnowledgeArticle, KnowledgeArticleVersion, KnowledgeIncidentLink, KnowledgeProblemLink, KnowledgeDeviceLink, KnowledgeServiceLink  # noqa: F401
+from backend.models.change import ChangeRequest, ChangeCI, ChangeIncident, ChangeProblem, ChangeHistory  # noqa: F401
+from backend.models.knowledge import KnowledgeArticle, KnowledgeArticleHistory, KnowledgeArticleVersion, KnowledgeIncidentLink, KnowledgeProblemLink, KnowledgeChangeLink, KnowledgeCILink, KnowledgeRelatedLink, KnowledgeFeedback, KnowledgeDeviceLink, KnowledgeServiceLink  # noqa: F401
 from backend.models.config_backup import DeviceConfigurationVersion, ConfigurationComparison  # noqa: F401
 from backend.models.config_compliance import ConfigurationCompliancePolicy, ConfigurationComplianceViolation  # noqa: F401
 from backend.models.availability import AvailabilityOutage, AvailabilityReport  # noqa: F401
@@ -182,6 +182,7 @@ class DeviceCredential(Base):
     privacy_protocol: Mapped[str | None] = mapped_column(String(20), nullable=True)
     privacy_password: Mapped[str | None] = mapped_column(Text, nullable=True)
     security_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    snmp_port: Mapped[int | None] = mapped_column(Integer, nullable=True, default=161)
     ssh_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     api_token: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -251,6 +252,7 @@ class Alert(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id"), nullable=True)
+    interface_id: Mapped[int | None] = mapped_column(ForeignKey("interfaces.id", ondelete="SET NULL"), nullable=True, index=True)
     severity: Mapped[str] = mapped_column(String(30), index=True)
     title: Mapped[str] = mapped_column(String(180))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

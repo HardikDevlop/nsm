@@ -8,14 +8,13 @@ Scope: read-only audit of the current Flow module. No code or data was changed.
 | Stage | Status | Current evidence |
 |---|---|---|
 | Flow API analytics routes | PASS | backend/api/flow_routes.py registers talkers, sources, destinations, applications, protocols, conversations, interfaces, and trends under /api/v1/flows/analytics. |
-| NetFlow v5 parser | PASS | backend/flow/parsers.py implements NetFlowParser._v5. |
-| NetFlow v9 parser | PASS | backend/flow/parsers.py implements templates and NetFlowParser._v9. |
-| IPFIX parser | PASS | IPFIXParser exists and reuses the template/data decoding path. |
+| NetFlow v5/v9 parser | REMOVED | No NetFlow parser is registered; v5/v9 packets are rejected by the IPFIX listener and no new NetFlow rows are accepted. |
+| IPFIX parser | PASS | IPFIXParser owns v10 header, template cache, set, and data-record processing. |
 | sFlow parser | PASS | SFlowParser implements sFlow v5 datagrams and flow samples. |
-| J-Flow/NetStream compatibility | PARTIAL | CompatibleVendorFlowParser reuses NetFlow/IPFIX decoders only when wire-compatible; vendor-specific fields are not independently decoded. |
-| Receiver/listener | NOT WIRED | No Flow UDP/TCP receiver or socket listener exists in backend/flow or the registered Flow routes. |
-| UDP/TCP ports | NOT WIRED | No Flow receiver port is configured or opened by the current Flow module. |
-| FastAPI startup integration | NOT WIRED | backend/main.py includes flow_router for analytics only; it does not instantiate/start a Flow receiver or FlowIngestService in lifespan. |
+| J-Flow/NetStream compatibility | REMOVED | Vendor compatibility adapters are not active protocols. |
+| Receiver/listener | PASS | FlowReceiver binds separate configurable IPFIX and sFlow UDP listeners. |
+| UDP ports | PASS | IPFIX and sFlow listener ports are configurable; no NetFlow-specific setting remains. |
+| FastAPI startup integration | PASS | backend/main.py starts FlowReceiver after FlowIngestService when flow collection is enabled. |
 | Queue/buffer | PASS | FlowIngestService uses a bounded asyncio.Queue with configurable queue_size and drops on QueueFull. |
 | Database flow model/table | PASS | FlowRecord maps to flow_records; migration 20260829_0011_flow_records creates the normalized table and indexes. |
 | Persistence/writer | PASS | FlowIngestService batches queued NormalizedFlow objects and executes INSERT ... ON CONFLICT (record_hash) DO NOTHING, then commits. |
@@ -53,27 +52,26 @@ normalized flow
   -> FlowAnalytics.tsx
 ```
 
-The missing production path is:
+The active production path is:
 
 ```text
-exporter UDP/TCP packet
-  -> Flow receiver/listener        MISSING
-  -> protocol selection/parser     NOT REACHABLE
-  -> FlowIngestService.submit()    NOT REACHABLE
-  -> flow_records                  NO LIVE INGESTION PROOF
+exporter UDP packet (IPFIX/sFlow)
+  -> Flow receiver/listener
+  -> protocol selection/parser
+  -> FlowIngestService.submit()
+  -> flow_records
 ```
 
-## Exact Missing Link
+## Active Runtime Path
 
-The current FastAPI application imports and registers flow_router, but only the analytics router is registered. There is no application-managed flow receiver startup task, no UDP/TCP socket binding, no exporter packet dispatch, and no code path connecting parsed NetFlow/sFlow/IPFIX payloads to FlowIngestService.submit().
+The FastAPI lifespan starts FlowIngestService and FlowReceiver when flow
+collection is enabled. FlowReceiver binds the configured IPFIX and sFlow UDP
+listeners, dispatches packets to their protocol-specific parsers, and submits
+normalized records to the bounded writer.
 
-Therefore:
-
-- Exporters have no current application listener to send packets to.
-- Parsers cannot receive production packets through the running FastAPI lifecycle.
-- The writer is implemented but has no live receiver-to-parser caller.
-- Analytics APIs and the frontend are read paths only.
-- The Flow module is not currently receiving real NetFlow, sFlow, or IPFIX data based on current source.
+Therefore, exporters can send IPFIX and sFlow to the configured listeners, while
+NetFlow v5/v9 packets are rejected and historical NetFlow rows remain stored but
+are excluded from active analytics.
 
 ## Database Verification Attempt
 
@@ -101,4 +99,3 @@ The real row count, latest flow timestamp, and protocol distribution are therefo
 ## Conclusion
 
 The Flow analytics read path is implemented and frontend-wired. The protocol parsers, normalized schema, bounded queue, batch writer, and aggregation queries are present. The exporter ingestion path is **NOT WIRED** because a Flow receiver/listener is absent from the current source and FastAPI lifespan. Real flow-record existence is **BLOCKED** by database access, not classified as empty.
-

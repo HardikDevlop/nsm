@@ -59,18 +59,6 @@ export default function SNMPMemoryMonitoring() {
     warnings: memoryModuleData?.warnings || [],
   }
 
-  // Debug logging
-  console.log('Memory Stats Data:', { 
-    stats, 
-    utilization, 
-    latestMemory,
-    memoryData,
-    monitoringData,
-    totalBytes,
-    usedBytes,
-    freeBytes
-  })
-
   return (
     <SNMPModuleShell module="memory" title="Memory Monitoring" showMonitoringControls={true}>
       {/* Stat Tiles */}

@@ -54,6 +54,7 @@ from backend.dependencies import require_permission
 from backend.models import Device, DeviceCredential, Event, Vendor, DeviceType
 from backend.models.identity import DeviceCapabilities, DeviceIdentity
 from backend.models.snmp import DeviceInterface, LatestInterface
+from backend.snmp.normalizer import mac as canonical_mac
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +285,7 @@ def _get_credentials_map(device_ids: list[int], db: Session) -> dict[int, Device
             DeviceCredential.privacy_protocol,
             DeviceCredential.privacy_password,
             DeviceCredential.security_level,
+            DeviceCredential.snmp_port,
         ))
         .filter(DeviceCredential.device_id.in_(device_ids))
         .order_by(DeviceCredential.id.asc())
@@ -346,6 +348,7 @@ def _live_collect(
         privacy_protocol=cred.privacy_protocol,
         privacy_password=priv_pass,
         security_level=cred.security_level,
+        port=getattr(cred, "snmp_port", None) or 161,
     )
     service = SNMPService(credentials=credentials)
     guard = poll_guard(device.id, domain or "__full__", blocking=False) if acquire_guard else None
@@ -433,15 +436,23 @@ def _infer_topology_type(device: Device | None, node: dict[str, Any]) -> str | N
 
 
 def _normalize_mac(value: Any) -> str:
-    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+    return canonical_mac(value) or ""
 
 
 def _display_mac(value: Any) -> str | None:
     """Return a stable human-readable MAC without assuming a vendor format."""
-    normalized = _normalize_mac(value)
+    normalized = _normalize_mac(value).replace(":", "")
     if len(normalized) != 12:
         return str(value) if value else None
     return ":".join(normalized[index:index + 2] for index in range(0, 12, 2)).upper()
+
+
+def _ip_sort_key(value: Any) -> tuple[Any, ...]:
+    text_value = str(value)
+    parts = text_value.split(".")
+    if len(parts) == 4 and all(part.isdigit() for part in parts):
+        return (0, *(int(part) for part in parts))
+    return (1, text_value)
 
 
 def _first_non_empty(*values: Any) -> str | None:
@@ -672,9 +683,16 @@ def _persist_collect_result(device_id: int, result: dict[str, Any], db: Session)
                 **collector,
                 "data": {**candidate_data, "nodes": merged_nodes, "links": merged_links},
             }
+        existing = detail.get(name) if isinstance(detail.get(name), dict) else {}
+        candidate_data = collector.get("data") if isinstance(collector.get("data"), dict) else {}
+        candidate_supported = collector.get("supported") is True
+        preserve_data = not candidate_supported and bool(existing.get("data"))
         detail[name] = {
-            **(detail.get(name, {}) if isinstance(detail.get(name), dict) else {}),
+            **existing,
             **collector,
+            "data": existing.get("data") if preserve_data else candidate_data,
+            "collection_status": "SUCCESS" if candidate_supported else "FAILED",
+            "last_good_timestamp": existing.get("timestamp") if preserve_data else collector.get("timestamp"),
         }
     cap.capability_detail = detail
     cap.updated_at = datetime.utcnow()
@@ -721,7 +739,7 @@ class ManualAddDeviceRequest(BaseModel):
     device_type_override: str | None = None
     site_id: int | None = None
     mac_address: str | None = None
-    auto_discover: bool = True  # run identity + capability discovery after adding
+    auto_discover: bool = False  # keep create fast; run discovery only when explicitly requested
 
 
 @router.post(
@@ -792,6 +810,7 @@ def add_device_manual(
     cred.privacy_protocol = payload.privacy_protocol
     cred.privacy_password = encrypt_secret(payload.privacy_password) if payload.privacy_password else None
     cred.security_level  = payload.security_level
+    cred.snmp_port       = payload.snmp_port or 161
 
     db.add(Event(
         device_id=device.id,
@@ -848,7 +867,24 @@ def _persist_domain_result(device_id: int, result: dict[str, Any], domain: str, 
         cap = DeviceCapabilities(device_id=device_id, capability_detail={})
         db.add(cap)
     detail = dict(cap.capability_detail or {})
-    detail[domain] = collector
+    existing = detail.get(domain) if isinstance(detail.get(domain), dict) else {}
+    candidate_data = collector.get("data") if isinstance(collector.get("data"), dict) else {}
+    candidate_supported = collector.get("supported") is True
+    candidate_has_rows = bool(
+        candidate_data.get("entries")
+        or candidate_data.get("port_groups")
+        or candidate_data.get("interfaces")
+    )
+    # An unsupported/failed poll is not a valid empty snapshot. Preserve the
+    # last good payload and expose the collection state separately.
+    preserve_data = not candidate_supported and bool(existing.get("data"))
+    detail[domain] = {
+        **existing,
+        **collector,
+        "data": existing.get("data") if preserve_data else candidate_data,
+        "collection_status": "SUCCESS" if candidate_supported and (candidate_has_rows or not existing.get("data")) else "FAILED",
+        "last_good_timestamp": existing.get("timestamp") if preserve_data else collector.get("timestamp"),
+    }
     cap.capability_detail = detail
     attr = f"cap_{domain}"
     if hasattr(cap, attr):
@@ -1337,6 +1373,8 @@ def get_snmp_cpu(
         "collector":     "cpu",
         "supported":     col.get("supported", False),
         "timestamp":     col.get("timestamp"),
+        "collection_status": col.get("collection_status", "NOT_COLLECTED"),
+        "last_good_timestamp": col.get("last_good_timestamp"),
         "missing":       col.get("missing", []),
         "warnings":      col.get("warnings", []),
         "reason":        col.get("reason"),
@@ -1381,6 +1419,8 @@ def get_snmp_memory(device_id: int, db: Session = Depends(get_db), _: Any = Depe
         "collector":     "memory",
         "supported":     col.get("supported", False),
         "timestamp":     col.get("timestamp"),
+        "collection_status": col.get("collection_status", "NOT_COLLECTED"),
+        "last_good_timestamp": col.get("last_good_timestamp"),
         "missing":       col.get("missing", []),
         "warnings":      col.get("warnings", []),
         "reason":        col.get("reason"),
@@ -1692,7 +1732,12 @@ def get_snmp_cdp(device_id: int, db: Session = Depends(get_db), _: Any = Depends
 @router.get("/snmp/devices/{device_id}/arp")
 def get_snmp_arp(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    cred = _get_credentials(device_id, db)
+    # This endpoint serves the stored snapshot and only needs the version for
+    # metadata. Do not decrypt passwords on every read; that also avoids the
+    # noisy cryptography deprecation warning from pysnmpcrypto.
+    cred = db.query(DeviceCredential).options(
+        load_only(DeviceCredential.snmp_version),
+    ).filter(DeviceCredential.device_id == device_id).first()
     stored_cap = db.query(DeviceCapabilities).options(load_only(
         DeviceCapabilities.capability_detail,
     )).filter(DeviceCapabilities.device_id == device_id).first()
@@ -1727,74 +1772,103 @@ def get_snmp_arp(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS,
 @router.get("/snmp/devices/{device_id}/mac-table")
 def get_snmp_mac_table(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    cred = _get_credentials(device_id, db)
-    result = _live_collect(device, cred, domain="mac_table")
-    col      = _collector_data(result, "mac_table")
-    col_data = col.get("data") or {}
-    arp_data = (_collector_data(result, "arp").get("data") or {})
-    # Keep the last successful ARP mapping so a transient/empty ARP walk does
-    # not make previously known device IPs disappear from the MAC table.
+    # The MAC table is DB-backed here; credential secrets are not required to
+    # render it. Avoid decrypting them for every page refresh.
+    cred = db.query(DeviceCredential).options(
+        load_only(DeviceCredential.snmp_version),
+    ).filter(DeviceCredential.device_id == device_id).first()
     stored_cap = db.query(DeviceCapabilities).options(load_only(
         DeviceCapabilities.capability_detail,
     )).filter(DeviceCapabilities.device_id == device_id).first()
-    stored_arp = ((stored_cap.capability_detail or {}).get("arp") or {}).get("data") or {} if stored_cap else {}
-    current_arp_entries = arp_data.get("entries") or []
-    arp_entries = current_arp_entries or (stored_arp.get("entries") or [])
-    if not arp_entries:
-        # MAC and ARP are collected independently. On a first visit there may
-        # be no ARP cache yet, so fetch it once and persist it for subsequent
-        # MAC-table requests. Later requests use the cached mapping unless the
-        # ARP endpoint has refreshed it.
-        arp_result = _live_collect(device, cred, domain="arp")
-        live_arp_data = (_collector_data(arp_result, "arp").get("data") or {})
-        current_arp_entries = live_arp_data.get("entries") or []
-        if current_arp_entries:
-            _persist_domain_result(device_id, arp_result, "arp", db)
-            db.commit()
-            arp_entries = current_arp_entries
+    stored_mac = ((stored_cap.capability_detail or {}).get("mac_table") or {}) if stored_cap else {}
+    stored_arp_snapshot = ((stored_cap.capability_detail or {}).get("arp") or {}) if stored_cap else {}
+    stored_arp = stored_arp_snapshot.get("data") or {}
+    col = stored_mac or {
+        "collector": "mac_table",
+        "supported": False,
+        "reason": "MAC table has not been collected by the background monitor yet.",
+        "missing": [],
+    }
+    col_data = col.get("data") or {}
+    # The scheduler persists both domains. Never start a blocking SNMP poll in
+    # a read request; this keeps page loads fast and avoids duplicate polls.
+    arp_entries = stored_arp.get("entries") or []
+    mac_updated_at = col.get("last_good_timestamp") or col.get("timestamp")
+    arp_updated_at = stored_arp_snapshot.get("last_good_timestamp") or stored_arp_snapshot.get("timestamp")
+    data_quality = "complete"
+    if col.get("collection_status") not in (None, "SUCCESS"):
+        data_quality = "stale"
+    elif not arp_entries or stored_arp_snapshot.get("collection_status") not in (None, "SUCCESS"):
+        data_quality = "partial"
+    else:
+        try:
+            mac_time = datetime.fromisoformat(str(mac_updated_at).replace("Z", "+00:00"))
+            arp_time = datetime.fromisoformat(str(arp_updated_at).replace("Z", "+00:00"))
+            if mac_time.tzinfo is None:
+                mac_time = mac_time.replace(tzinfo=timezone.utc)
+            if arp_time.tzinfo is None:
+                arp_time = arp_time.replace(tzinfo=timezone.utc)
+            if abs((mac_time - arp_time).total_seconds()) > 120:
+                data_quality = "stale"
+        except (TypeError, ValueError):
+            data_quality = "partial"
     arp_by_mac: dict[str, list[str]] = {}
     for arp_entry in arp_entries:
-        mac = "".join(ch for ch in str(arp_entry.get("mac") or "").lower() if ch.isalnum())
+        mac = _normalize_mac(arp_entry.get("mac"))
         ip = arp_entry.get("ip_address") or arp_entry.get("ip")
         if mac and ip:
             arp_by_mac.setdefault(mac, []).append(str(ip))
+
     port_groups = []
     for group in (col_data.get("port_groups") or [])[:limit]:
         enriched = dict(group)
+        canonical_macs = sorted({mac for mac in (_normalize_mac(value) for value in group.get("macs", [])) if mac})
+        enriched["macs"] = [_display_mac(mac) for mac in canonical_macs]
+        enriched["mac_count"] = len(canonical_macs)
         ips = list(group.get("ip_addresses") or group.get("ips") or [])
-        for mac_value in group.get("macs", []):
-            mac_key = "".join(ch for ch in str(mac_value).lower() if ch.isalnum())
-            ips.extend(arp_by_mac.get(mac_key, []))
-        enriched["ip_addresses"] = list(dict.fromkeys(ips))
+        for mac_value in canonical_macs:
+            ips.extend(arp_by_mac.get(_normalize_mac(mac_value), []))
+        enriched["ip_addresses"] = sorted(set(ips), key=_ip_sort_key)
+        enriched["data_quality"] = data_quality if ips else "partial"
+        enriched["mac_updated_at"] = mac_updated_at
+        enriched["arp_updated_at"] = arp_updated_at
         port_groups.append(enriched)
     enriched_entries = []
     for entry in (col_data.get("entries") or [])[:limit]:
         enriched_entry = dict(entry)
-        mac_key = "".join(ch for ch in str(entry.get("mac") or "").lower() if ch.isalnum())
+        mac_key = _normalize_mac(entry.get("mac"))
         mapped_ips = arp_by_mac.get(mac_key, [])
         if mapped_ips:
             enriched_entry["ip_address"] = mapped_ips[0]
             enriched_entry["ip_addresses"] = mapped_ips
         enriched_entries.append(enriched_entry)
+    has_last_good_data = bool(col_data.get("entries") or col_data.get("port_groups"))
     return {
-        "api_version":   result.get("api_version", "2.0"),
-        "ip":            result.get("ip"),
-        "reachable":     result.get("reachable"),
-        "snmp_version":  result.get("snmp_version"),
-        "vendor":        result.get("vendor"),
-        "device_type":   result.get("device_type"),
-        "hostname":      result.get("hostname"),
-        "collection_ms": result.get("collection_ms"),
+        "api_version":   "2.0",
+        "ip":            device.ip_address,
+        "reachable":     None,
+        "snmp_version":  cred.snmp_version if cred else None,
+        "vendor":        device.vendor.vendor_name if device.vendor else None,
+        "device_type":   device.device_type.name if device.device_type else None,
+        "hostname":      device.hostname,
+        "collection_ms": None,
         "device_id":     device_id,
         "collector":     "mac_table",
-        "supported":     col.get("supported", False),
+        # A failed refresh can retain the last good snapshot. Keep that data
+        # renderable and expose the failure through collection_status/data_quality.
+        "supported":     bool(col.get("supported", False) or has_last_good_data),
         "timestamp":     col.get("timestamp"),
+        "collection_status": col.get("collection_status", "NOT_COLLECTED"),
+        "last_good_timestamp": col.get("last_good_timestamp"),
         "missing":       col.get("missing", []),
         "warnings":      col.get("warnings", []),
         "reason":        col.get("reason"),
         "data": {
             "entry_count": col_data.get("entry_count", 0),
             "vlan_aware":  col_data.get("vlan_aware", False),
+            "data_quality": data_quality,
+            "mac_updated_at": mac_updated_at,
+            "arp_updated_at": arp_updated_at,
             "entries":     enriched_entries,
             "port_groups": port_groups,
         },
@@ -2026,6 +2100,23 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
         .filter(DeviceCapabilities.device_id.in_(all_device_ids))
         .all()
     } if all_device_ids else {}
+
+    # A forced refresh is a rebuild, not a merge. Remove only the persisted
+    # topology snapshot so stale MAC/ARP/LLDP nodes cannot survive a fresh
+    # collection. Device identity, credentials, and other SNMP modules remain
+    # untouched.
+    if refresh:
+        for capability in capability_map.values():
+            detail = dict(capability.capability_detail or {})
+            if "topology" in detail:
+                detail.pop("topology", None)
+                capability.capability_detail = detail
+            capability.cap_topology = False
+        db.flush()
+        logger.info(
+            "[TOPOLOGY-BE] cleared persisted topology snapshots before rebuild devices=%s",
+            len(capability_map),
+        )
     credentials_map = _get_credentials_map(all_device_ids, db)
     # Root from the default gateway first when one is known, otherwise fall
     # back to core/network infrastructure devices.
@@ -2313,6 +2404,14 @@ async def start_module_monitoring(
         config = await scheduler.add_job(device_id, module, payload.interval_seconds)
     finally:
         guard.__exit__(None, None, None)
+    from backend.services.alerting import create_operational_alert
+    create_operational_alert(
+        db,
+        title=f"Monitoring Started: {module}",
+        description=f"SNMP {module} monitoring started for device {device_id} at {payload.interval_seconds}s interval.",
+        device_id=device_id,
+    )
+    db.commit()
     return {
         "device_id": config.device_id,
         "module_name": config.module_name,
@@ -2823,11 +2922,10 @@ def list_snmp_devices_optimized(
     if snmp_status:
         query = query.join(DeviceIdentity, DeviceIdentity.device_id == Device.id, isouter=True)
         if snmp_status == "verified":
-            # SNMP and ICMP inventory are separate sources. Only devices
-            # explicitly registered by the dedicated SNMP discovery flow may
-            # appear here; this also excludes legacy unmarked ICMP rows.
+            # Match the status exposed in the response below. A device may
+            # have been created by monitoring/import and verified later, so
+            # discovery_source alone must not hide a valid SNMP identity.
             query = query.filter(
-                Device.topology_metadata["discovery_source"].as_string() == "snmp",
                 (DeviceIdentity.vendor.isnot(None))
                 | (DeviceIdentity.sys_name.isnot(None))
                 | (DeviceIdentity.sys_object_id.isnot(None))

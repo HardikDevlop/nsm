@@ -1,8 +1,9 @@
-"""Bounded flow ingestion for NetFlow/IPFIX exporters."""
+"""Bounded flow ingestion for sFlow and IPFIX exporters."""
 
 from .models import NormalizedFlow
-from .parsers import IPFIXParser, JFlowParser, NetFlowParser, NetStreamParser, SFlowParser
+from .parsers import IPFIXParser, SFlowCounterSample, SFlowParser
 from .service import FlowIngestService
+from .correlation import FlowCorrelationResolver
 from .receiver import FlowReceiver, FlowReceiverStats
 
-__all__ = ["FlowIngestService", "FlowReceiver", "FlowReceiverStats", "IPFIXParser", "JFlowParser", "NetFlowParser", "NetStreamParser", "NormalizedFlow", "SFlowParser"]
+__all__ = ["FlowCorrelationResolver", "FlowIngestService", "FlowReceiver", "FlowReceiverStats", "IPFIXParser", "NormalizedFlow", "SFlowCounterSample", "SFlowParser"]

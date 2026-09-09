@@ -68,11 +68,27 @@ export default function SNMPEnvironmentMonitoring() {
   const id = Number(deviceId)
   const moduleConfig = getModuleConfig('environment')!
 
-  const { data: latestEnv } = useLatestEnvironment(id)
-  const { data: caps } = useDeviceCapabilities(id)
+  const { data: latestEnv, isLoading: environmentLoading, error: environmentError } = useLatestEnvironment(id)
+  const { data: caps, isLoading: capabilitiesLoading, error: capabilitiesError } = useDeviceCapabilities(id)
 
   const sensors = Array.isArray(latestEnv) ? latestEnv : []
   const supported = caps?.environment === true || sensors.length > 0
+
+  if (environmentLoading || capabilitiesLoading) {
+    return (
+      <SNMPModuleShell module="environment" title="Environment Monitoring" showMonitoringControls={false}>
+        <GlassCard className="p-6 text-center font-mono text-xs" style={{ color: '#00d4ff' }}>Loading environment data...</GlassCard>
+      </SNMPModuleShell>
+    )
+  }
+
+  if (environmentError || capabilitiesError) {
+    return (
+      <SNMPModuleShell module="environment" title="Environment Monitoring" showMonitoringControls={false}>
+        <GlassCard className="p-6 text-center font-mono text-xs" style={{ color: '#ff6b8a' }}>Unable to load environment data.</GlassCard>
+      </SNMPModuleShell>
+    )
+  }
 
   if (!supported) {
     return (

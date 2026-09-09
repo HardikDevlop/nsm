@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BaseCollector, CollectorResponse
-from ..normalizer import RawDevice
+from ..normalizer import RawDevice, mac as normalize_mac
 
 _ARP_IF    = "1.3.6.1.2.1.4.22.1.1."
 _ARP_MAC   = "1.3.6.1.2.1.4.22.1.2."
@@ -95,7 +95,7 @@ class ARPCollector(BaseCollector):
                 continue
             seen_ips.add(ip_addr)
 
-            mac_val    = self.mac(v)
+            mac_val    = normalize_mac(v)
             if_index   = self.num(raw_flat.get(_ARP_IF  + suffix))
             type_code  = str(raw_flat.get(_ARP_TYPE + suffix, "3")).strip()
             entry_type = _ARP_TYPE_MAP.get(type_code, "unknown")
@@ -129,7 +129,7 @@ class ARPCollector(BaseCollector):
                 if not all(p.isdigit() and 0 <= int(p) <= 255 for p in octets):
                     continue
                 ip_addr = ".".join(octets)
-                mac_val = self.mac(v)
+                mac_val = normalize_mac(v)
                 if mac_val in (None, "00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF"):
                     continue
                 type_code = str(raw_flat.get(_PHYS_TYPE + suffix, "3")).strip()

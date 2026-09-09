@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts"
 import GlassCard from "../components/GlassCard"
+import { useI18n } from "../i18n/I18nContext"
 import {
   getOverview,
   type NormalizedOverview,
@@ -214,6 +215,8 @@ function Mini({
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { t } = useI18n()
+  const d = t.dashboard
   const [data, setData] = useState<OverviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -228,7 +231,7 @@ export default function Dashboard() {
       setData(await getOverview(hours))
       setUpdated(new Date())
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load dashboard data")
+      setError(e instanceof Error ? e.message : d.noStoredData)
     } finally {
       setLoading(false)
     }
@@ -308,13 +311,12 @@ export default function Dashboard() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="font-display font-bold text-2xl md:text-3xl tracking-widest neon-cyan">
-              NETWORK OPERATIONS
+              {d.title}
             </h1>
-            <Badge label="LIVE" tone="green" />
+            <Badge label={d.live} tone="green" />
           </div>
           <p className="font-mono text-xs mt-1" style={{ color: C.muted }}>
-            Real device, SNMP and database telemetry · Last updated{" "}
-            {updated?.toLocaleTimeString() ?? "N/A"}
+            {d.subtitle}{" "}{updated?.toLocaleTimeString() ?? d.na}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -345,7 +347,7 @@ export default function Dashboard() {
             className="font-mono text-xs px-3 py-2 rounded glass-bright"
             style={{ color: C.cyan, border: `1px solid ${C.cyan}40` }}
           >
-            {loading ? "LOADING…" : "REFRESH"}
+            {loading ? d.loading : d.refresh}
           </button>
         </div>
       </div>
@@ -366,74 +368,74 @@ export default function Dashboard() {
           className="glass rounded-xl p-12 text-center font-mono text-sm"
           style={{ color: C.cyan }}
         >
-          Loading stored monitoring data…
+          {d.loadingStored}
         </div>
       ) : (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
             <Metric
-              label="Total devices"
-              number={summary?.total_devices ?? "N/A"}
-              hint="Inventory"
+              label={d.totalDevices}
+              number={summary?.total_devices ?? d.na}
+              hint={d.inventory}
               onClick={() => navigate("/device-monitoring")}
             />
             <Metric
-              label="Online"
-              number={summary?.online_devices ?? "N/A"}
-              hint="Reachable"
+              label={d.online}
+              number={summary?.online_devices ?? d.na}
+              hint={d.reachable}
               tone="green"
               onClick={() => navigate("/device-monitoring")}
             />
             <Metric
-              label="Offline"
-              number={summary?.offline_devices ?? "N/A"}
-              hint="Unreachable"
+              label={d.offline}
+              number={summary?.offline_devices ?? d.na}
+              hint={d.unreachable}
               tone="red"
               onClick={() => navigate("/device-monitoring")}
             />
             <Metric
-              label="SNMP enabled"
+              label={d.snmpEnabled}
               number={snmpEnabled}
-              hint="Credentials configured"
+              hint={d.credentialsConfigured}
               tone="green"
               onClick={() => navigate("/snmp/devices")}
             />
             <Metric
-              label="SNMP failed"
-              number={n?.polling.failure ?? "N/A"}
-              hint="Last 24 hours"
+              label={d.snmpFailed}
+              number={n?.polling.failure ?? d.na}
+              hint={d.last24Hours}
               tone="red"
               onClick={() => navigate("/monitoring-jobs")}
             />
             <Metric
-              label="Critical alerts"
-              number={summary?.critical_alerts ?? "N/A"}
-              hint="Open / acknowledged"
+              label={d.criticalAlerts}
+              number={summary?.critical_alerts ?? d.na}
+              hint={d.openAcknowledged}
               tone="red"
               onClick={() => navigate("/alerts")}
             />
             <Metric
-              label="Warning alerts"
+              label={d.warningAlerts}
               number={
                 (n?.alerts_by_severity.warning ?? 0) +
                 (n?.alerts_by_severity.medium ?? 0)
               }
-              hint="Open / acknowledged"
+              hint={d.openAcknowledged}
               tone="amber"
               onClick={() => navigate("/alerts")}
             />
             <Metric
-              label="Interfaces down"
-              number={n?.interface_summary.down ?? "N/A"}
-              hint="Latest SNMP state"
+              label={d.interfacesDown}
+              number={n?.interface_summary.down ?? d.na}
+              hint={d.latestSnmpState}
               tone="red"
               onClick={() => navigate("/interfaces")}
             />
           </div>
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <Panel
-              title="DEVICE HEALTH"
-              subtitle="Persisted ICMP status"
+              title={d.deviceHealth}
+              subtitle={d.persistedIcmpStatus}
               onClick={() => navigate("/device-monitoring")}
             >
               <div className="grid grid-cols-2 gap-3 mb-4">
@@ -447,17 +449,17 @@ export default function Dashboard() {
                     className="font-mono text-[10px]"
                     style={{ color: C.muted }}
                   >
-                    AVAILABILITY
+                    {d.availability}
                   </div>
                 </div>
                 <div className="space-y-2">
                   <BarLine
-                    label="Online"
+                    label={d.online}
                     current={health.online}
                     total={summary?.total_devices ?? 0}
                   />
                   <BarLine
-                    label="Offline"
+                    label={d.offline}
                     current={health.offline}
                     total={summary?.total_devices ?? 0}
                     tone={C.red}
@@ -488,7 +490,7 @@ export default function Dashboard() {
                       className="font-mono text-[9px] uppercase"
                       style={{ color: C.muted }}
                     >
-                      {key}
+                      {d.health[key as keyof typeof d.health]}
                     </div>
                   </div>
                 ))}
@@ -497,12 +499,12 @@ export default function Dashboard() {
                 className="font-mono text-[10px] mt-4"
                 style={{ color: C.muted }}
               >
-                Last successful poll: {clock(n?.polling.last_success)}
+                {d.lastSuccessfulPoll} {clock(n?.polling.last_success)}
               </div>
             </Panel>
             <Panel
-              title="PERFORMANCE"
-              subtitle="Latest normalized SNMP readings"
+              title={d.performance}
+              subtitle={d.latestNormalizedReadings}
               onClick={() => navigate("/snmp/dashboard")}
             >
               <div className="grid grid-cols-2 gap-3 mb-4">
@@ -537,7 +539,7 @@ export default function Dashboard() {
                         className="font-mono text-[10px]"
                         style={{ color: C.muted }}
                       >
-                        {label}
+                        {d[label.toLowerCase() as keyof typeof d]}
                       </div>
                       <div className="font-display text-lg mt-1 neon-cyan">
                         {values.length
@@ -545,29 +547,29 @@ export default function Dashboard() {
                               values.reduce((a, b) => a + b, 0) / values.length,
                               "%",
                             )
-                          : "N/A"}
+                          : d.na}
                       </div>
                     </div>
                   )
                 })}
               </div>
               <div className="font-mono text-[10px]" style={{ color: C.muted }}>
-                N/A means the collector has not stored a supported reading.
+                {d.unsupportedReading}
               </div>
             </Panel>
             <Panel
-              title="SNMP MONITORING"
-              subtitle="Poll outcomes and collector coverage"
+              title={d.snmpMonitoring}
+              subtitle={d.pollOutcomes}
               onClick={() => navigate("/monitoring-jobs")}
             >
               <div className="space-y-3">
                 <BarLine
-                  label="Successful polls"
+                  label={d.successfulPolls}
                   current={n?.polling.success ?? 0}
                   total={(n?.polling.success ?? 0) + (n?.polling.failure ?? 0)}
                 />
                 <BarLine
-                  label="Failed polls"
+                  label={d.failedPolls}
                   current={n?.polling.failure ?? 0}
                   total={(n?.polling.success ?? 0) + (n?.polling.failure ?? 0)}
                   tone={C.red}
@@ -578,10 +580,10 @@ export default function Dashboard() {
                       className="font-mono text-[10px]"
                       style={{ color: C.muted }}
                     >
-                      ACTIVE JOBS
+                      {d.activeJobs}
                     </div>
                     <div className="font-display text-xl neon-cyan">
-                      {n?.polling.active_jobs ?? "N/A"}
+                      {n?.polling.active_jobs ?? d.na}
                     </div>
                   </div>
                   <div>
@@ -589,13 +591,13 @@ export default function Dashboard() {
                       className="font-mono text-[10px]"
                       style={{ color: C.muted }}
                     >
-                      UNSUPPORTED OIDS
+                      {d.unsupportedOids}
                     </div>
                     <div
                       className="font-display text-xl"
                       style={{ color: C.amber }}
                     >
-                      {n?.polling.unsupported_oids ?? "N/A"}
+                      {n?.polling.unsupported_oids ?? d.na}
                     </div>
                   </div>
                 </div>
@@ -603,7 +605,7 @@ export default function Dashboard() {
                   className="font-mono text-[10px]"
                   style={{ color: C.muted }}
                 >
-                  Last success {clock(n?.polling.last_success)} · Last failure{" "}
+                  {d.lastSuccess} {clock(n?.polling.last_success)} · {d.lastFailure}{" "}
                   {clock(n?.polling.last_failure)}
                 </div>
               </div>
@@ -611,8 +613,8 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <Panel
-              title="NETWORK TRAFFIC"
-              subtitle={`Stored interface samples · ${range}`}
+              title={d.networkTraffic}
+              subtitle={`${d.storedInterfaceSamples} · ${range}`}
               onClick={() => navigate("/interfaces")}
             >
               <div className="flex gap-6 mb-3">
@@ -621,7 +623,7 @@ export default function Dashboard() {
                     className="font-mono text-[10px]"
                     style={{ color: C.muted }}
                   >
-                    RX Traffic
+                    {d.rxTraffic}
                   </div>
                   <div className="font-display text-2xl neon-green">
                     {formatTraffic(n?.traffic.rx_mbps)}
@@ -632,7 +634,7 @@ export default function Dashboard() {
                     className="font-mono text-[10px]"
                     style={{ color: C.muted }}
                   >
-                    TX Traffic
+                    {d.txTraffic}
                   </div>
                   <div className="font-display text-2xl neon-cyan">
                     {formatTraffic(n?.traffic.tx_mbps)}
@@ -674,12 +676,12 @@ export default function Dashboard() {
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
-                <Empty text="No interface history stored for the selected period" />
+                <Empty text={d.noInterfaceHistory} />
               )}
             </Panel>
             <Panel
-              title="TOP DEVICES BY TRAFFIC"
-              subtitle="Latest normalized interface totals"
+              title={d.topDevicesByTraffic}
+              subtitle={d.latestInterfaceTotals}
             >
               <div className="space-y-3">
                 {n?.traffic.top_devices?.length ? (
@@ -697,30 +699,30 @@ export default function Dashboard() {
                     </div>
                   ))
                 ) : (
-                  <Empty />
+                  <Empty text={d.noStoredData} />
                 )}
               </div>
             </Panel>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <Panel
-              title="INTERFACES"
-              subtitle="Latest SNMP state"
+              title={d.interfaces}
+              subtitle={d.latestSnmpState}
               onClick={() => navigate("/interfaces")}
             >
               <div className="grid grid-cols-3 gap-2 mb-4">
                 <Mini
-                  label="TOTAL"
-                  number={n?.interface_summary.total ?? "N/A"}
+                  label={d.total}
+                  number={n?.interface_summary.total ?? d.na}
                 />
                 <Mini
-                  label="UP"
-                  number={n?.interface_summary.up ?? "N/A"}
+                  label={d.up}
+                  number={n?.interface_summary.up ?? d.na}
                   tone={C.green}
                 />
                 <Mini
-                  label="DOWN"
-                  number={n?.interface_summary.down ?? "N/A"}
+                  label={d.down}
+                  number={n?.interface_summary.down ?? d.na}
                   tone={C.red}
                 />
               </div>
@@ -730,22 +732,22 @@ export default function Dashboard() {
               >
                 {" "}
                 <span>
-                  Errors{" "}
+                  {d.errors}{" "}
                   <b style={{ color: C.red }}>
-                    {n?.interface_summary.errors ?? "N/A"}
+                    {n?.interface_summary.errors ?? d.na}
                   </b>
                 </span>
                 <span>
-                  Drops{" "}
+                  {d.drops}{" "}
                   <b style={{ color: C.amber }}>
-                    {n?.interface_summary.drops ?? "N/A"}
+                    {n?.interface_summary.drops ?? d.na}
                   </b>
                 </span>
               </div>
             </Panel>
             <Panel
-              title="ALERTS"
-              subtitle="Active alert severity"
+              title={d.alerts}
+              subtitle={d.activeAlertSeverity}
               onClick={() => navigate("/alerts")}
             >
               <div className="space-y-2">
@@ -756,7 +758,7 @@ export default function Dashboard() {
                       className="flex justify-between font-mono text-xs"
                     >
                       <span className="capitalize" style={{ color: C.muted }}>
-                        {sev}
+                        {d.severity[sev as keyof typeof d.severity]}
                       </span>
                       <span
                         style={{
@@ -776,18 +778,18 @@ export default function Dashboard() {
               </div>
             </Panel>
             <Panel
-              title="NETWORK INFORMATION"
-              subtitle="Normalized topology inventory"
+              title={d.networkInformation}
+              subtitle={d.normalizedTopologyInventory}
               onClick={() => navigate("/topology")}
             >
               <div className="grid grid-cols-2 gap-3">
                 {Object.entries({
-                  "LLDP/CDP neighbors": n?.network.lldp_neighbors,
-                  VLANs: n?.network.vlan_count,
-                  Routes: n?.network.routing_entries,
-                  ARP: n?.network.arp_entries,
-                  MAC: n?.network.mac_entries,
-                  "Topology nodes": n?.network.topology_nodes,
+                  [d.lldpCdpNeighbors]: n?.network.lldp_neighbors,
+                  [d.vlans]: n?.network.vlan_count,
+                  [d.routes]: n?.network.routing_entries,
+                  [d.arp]: n?.network.arp_entries,
+                  [d.mac]: n?.network.mac_entries,
+                  [d.topologyNodes]: n?.network.topology_nodes,
                 }).map(([label, metric]) => (
                   <div key={label}>
                     <div
@@ -797,7 +799,7 @@ export default function Dashboard() {
                       {label}
                     </div>
                     <div className="font-display text-lg neon-cyan">
-                      {metric == null ? "N/A" : metric}
+                      {metric == null ? d.na : metric}
                     </div>
                   </div>
                 ))}
@@ -805,7 +807,7 @@ export default function Dashboard() {
             </Panel>
           </div>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <Panel title="DEVICE TYPES" subtitle="Inventory classification">
+            <Panel title={d.deviceTypes} subtitle={d.inventoryClassification}>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {Object.entries(n?.device_types ?? {}).length ? (
                   Object.entries(n?.device_types ?? {}).map(
@@ -828,13 +830,13 @@ export default function Dashboard() {
                     ),
                   )
                 ) : (
-                  <Empty text="No device types classified" />
+                  <Empty text={d.noDeviceTypes} />
                 )}
               </div>
             </Panel>
             <Panel
-              title="RECENT DEVICES / ACTIVITY"
-              subtitle="Last persisted device state"
+              title={d.recentDevicesActivity}
+              subtitle={d.lastPersistedState}
               onClick={() => navigate("/device-monitoring")}
             >
               <div className="overflow-x-auto">
@@ -844,7 +846,7 @@ export default function Dashboard() {
                       className="font-mono text-[10px] uppercase"
                       style={{ color: C.muted }}
                     >
-                      {["Device", "IP", "Type", "Status", "Last poll"].map(
+                      {[d.device, d.ip, d.type, d.status, d.lastPoll].map(
                         (h) => (
                           <th key={h} className="pb-2 pr-3">
                             {h}
@@ -867,7 +869,7 @@ export default function Dashboard() {
                           {d.ip_address}
                         </td>
                         <td className="py-2 pr-3" style={{ color: C.muted }}>
-                          {d.device_type || "N/A"}
+                          {d.device_type || d.na}
                         </td>
                         <td className="py-2 pr-3">
                           <Badge
@@ -891,7 +893,7 @@ export default function Dashboard() {
                     ))}
                   </tbody>
                 </table>
-                {!devices.length && <Empty text="No devices in inventory" />}
+                {!devices.length && <Empty text={d.noDevices} />}
               </div>
             </Panel>
           </div>

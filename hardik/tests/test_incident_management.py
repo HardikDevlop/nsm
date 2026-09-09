@@ -6,7 +6,8 @@ from sqlalchemy.orm import sessionmaker
 from backend.api.incident_routes import IncidentCreatePayload, IncidentUpdatePayload, router
 from backend.database.session import Base
 from backend.incidents.service import _category, _priority, process_alert_for_incident, process_alert_recovery
-from backend.models import Alert, Device, Incident, IncidentAlert, IncidentHistory, IncidentSLAConfig, IncidentSLATimer
+from backend.models import Alert, Device, Incident, IncidentAlert, IncidentHistory, IncidentSLAConfig, IncidentSLATimer, Interface
+from backend.services.alerting import create_threshold_alert, resolve_interface_down_alert
 
 
 def test_incident_payloads_validate_workflow_fields():
@@ -95,3 +96,30 @@ def test_sla_timer_starts_only_when_policy_exists():
     alert = _alert(db, 115, "Device Down: Core-switch")
     process_alert_for_incident(db, alert.id)
     assert db.query(IncidentSLATimer).count() == 1
+
+
+def test_snmp_interface_alert_path_creates_and_recovers_incident():
+    db = _db()
+    db.add(Device(id=115, hostname="Core-switch", ip_address="192.0.2.115", created_at=datetime.utcnow()))
+    interface = Interface(id=605, device_id=115, interface_name="TenGigabitEthernet4", status="down")
+    db.add(interface)
+    db.flush()
+
+    alert = create_threshold_alert(
+        db,
+        115,
+        "Interface Down: TenGigabitEthernet4",
+        "SNMP reports interface is down",
+        "critical",
+        interface_id=interface.id,
+    )
+    assert alert is not None
+    assert alert.interface_id == interface.id
+    incident = db.query(Incident).one()
+    assert incident.correlation_key == "device:115:availability:interface_down_id:605"
+    assert db.query(IncidentAlert).filter_by(incident_id=incident.id, alert_id=alert.id).count() == 1
+
+    recovered = resolve_interface_down_alert(db, 115, interface.id, interface.interface_name)
+    assert recovered is alert
+    assert alert.status == "resolved"
+    assert incident.status == "resolved"

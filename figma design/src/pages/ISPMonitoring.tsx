@@ -7,6 +7,7 @@ import SNMPSubnetDiscovery from '../features/snmp/components/SNMPSubnetDiscovery
 import { PermissionGuard } from '../components/PermissionGuard'
 import { addDiscoveredDevices, checkStoredDevices, createDevice, createOrganization, createSite, deleteAllDevices, deleteDevice, detectLocalSubnet, getOverview, listDevices, listOrganizations, listSites, pingIps, startChunkedDiscovery, streamChunkedDiscovery, updateDevice, type ChunkedDiscoveryProgress, type DeviceRecord, type OrganizationRecord, type SiteRecord } from '../lib/api'
 import { confirmDanger, toast } from '../lib/swal'
+import { useI18n } from '../i18n/I18nContext'
 
 const moduleCatalog = [
   { key: 'icmp_discovery', label: 'ICMP', description: 'Ping reachability and host alive checks' },
@@ -46,6 +47,8 @@ function discoveryTargetIsValid(value: string): boolean {
 }
 
 export default function ISPMonitoring() {
+  const { t } = useI18n()
+  const tr = t.workflow
   const queryClient = useQueryClient()
   const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [interfaceCount, setInterfaceCount] = useState(0)
@@ -762,8 +765,8 @@ export default function ISPMonitoring() {
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
       <div>
-        <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">ISP & WAN MONITORING</h1>
-        <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Discovery + stored device monitoring flow for your modules</p>
+        <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">{tr.scanTitle}</h1>
+        <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.scanSubtitle}</p>
       </div>
 
       {error ? <div className="font-mono text-xs" style={{ color: '#ff3366' }}>{error}</div> : null}
@@ -774,7 +777,7 @@ export default function ISPMonitoring() {
       <GlassCard className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="font-display font-bold text-sm tracking-wider neon-cyan">DISCOVER DEVICES</div>
+            <div className="font-display font-bold text-sm tracking-wider neon-cyan">{tr.discover}</div>
             <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>Choose the modules you want, start chunked discovery, then add discovered devices to the database.</div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -797,7 +800,7 @@ export default function ISPMonitoring() {
               className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition disabled:opacity-60"
               style={{ background: isDiscovering ? 'rgba(255,170,0,0.2)' : 'rgba(0,212,255,0.16)', border: '1px solid rgba(0,212,255,0.3)', color: 'var(--t-text, #c8d8ee)' }}
             >
-              {isDiscovering ? 'DISCOVERY RUNNING…' : 'DISCOVER'}
+              {isDiscovering ? 'DISCOVERY RUNNING…' : tr.discover}
             </button>
             </PermissionGuard>
           </div>
@@ -847,7 +850,7 @@ export default function ISPMonitoring() {
           {/* header */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
             <div>
-              <div className="font-display font-bold text-base tracking-wider neon-cyan">DISCOVERED DEVICES</div>
+              <div className="font-display font-bold text-base tracking-wider neon-cyan">{tr.discovered}</div>
               {/* <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>
                 {discoveryResults.length} device{discoveryResults.length !== 1 ? 's' : ''} found via ICMP/TCP scan
                 {storedIps.size > 0 && <span style={{ color: '#00ff88' }}> · {storedIps.size} stored</span>}

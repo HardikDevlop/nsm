@@ -18,17 +18,6 @@ export default function SNMPInterfacesMonitoring() {
   const interfacesModuleData = monitoringData?.modules?.interfaces
   const supported = monitoringData?.capabilities?.interfaces === true || caps?.interfaces === true
 
-  // Debug logging
-  console.log('Interfaces Module Debug:', {
-    id,
-    caps,
-    supported,
-    monitoringData,
-    interfacesModuleData,
-    monitoringLoading,
-    monitoringError
-  })
-
   if (!supported) {
     return (
       <SNMPModuleShell module="interfaces" title="Interface Monitoring" unsupportedMessage="Interface monitoring is not supported by this device.">
@@ -45,46 +34,6 @@ export default function SNMPInterfacesMonitoring() {
   const downCount = interfaceData?.down_count || interfaces.filter(i => i.oper_status !== 'up').length
   
   const health = downCount > upCount ? 'critical' : downCount > 0 ? 'warning' : 'healthy'
-
-  // Sample interface data for demo if no real data
-  const sampleInterfaces = interfaces.length === 0 ? [
-    {
-      ifIndex: 1,
-      name: 'GigabitEthernet1',
-      admin_status: 'up',
-      oper_status: 'up',
-      speed_bps: 1000000000,
-      speed_label: '1 Gbps',
-      mac: '68:ED:A4:7D:3B:FF',
-      in_octets: 178632541889,
-      out_octets: 22528367198,
-      utilization_percent: 15.2
-    },
-    {
-      ifIndex: 2,
-      name: 'GigabitEthernet2',
-      admin_status: 'up',
-      oper_status: 'down',
-      speed_bps: 1000000000,
-      speed_label: '1 Gbps',
-      mac: '68:ED:A4:7D:3C:00',
-      in_octets: 0,
-      out_octets: 0,
-      utilization_percent: 0
-    },
-    {
-      ifIndex: 3,
-      name: 'lan2',
-      admin_status: 'up',
-      oper_status: 'up',
-      speed_bps: 1000000000,
-      speed_label: '1 Gbps', 
-      mac: '68:ED:A4:7D:3C:02',
-      in_octets: 22918497652,
-      out_octets: 176916838392,
-      utilization_percent: 85.3
-    }
-  ] : interfaces
 
   return (
     <SNMPModuleShell module="interfaces" title="Interface Monitoring" showMonitoringControls={true}>
@@ -143,7 +92,11 @@ export default function SNMPInterfacesMonitoring() {
         
         {/* Interface bars */}
         <div className="space-y-2">
-              {interfaces.slice(0, 8).map((iface, idx) => {
+          {interfaces.length === 0 ? (
+            <div className="py-8 text-center font-mono text-xs" style={{ color: '#8899bb' }}>
+              No interface samples are available yet. Start monitoring to collect live SNMP data.
+            </div>
+          ) : interfaces.slice(0, 8).map((iface, idx) => {
             const utilization = iface.utilization_percent || 0
             const statusColor = iface.oper_status === 'up' ? (utilization >= 90 ? '#ff3366' : utilization >= 70 ? '#ffaa00' : '#00ff88') : '#666666'
             

@@ -22,12 +22,12 @@ class _Db:
 
 def test_flow_analytics_uses_one_parameterized_aggregate_query_and_pagination():
     db = _Db()
-    result = _analytics("talkers", 24, 7, 3, 25, 2, db)
+    result = _analytics("talkers", 24, 7, 3, "ipfix", 25, 2, db)
     assert result["items"][0]["bytes"] == 100
     assert len(db.calls) == 1
     sql, params = db.calls[0]
-    assert "GROUP BY" in sql and "SUM(f.bytes)" in sql
-    assert params["device_id"] == 7 and params["site_id"] == 3
+    assert "GROUP BY" in sql and "SUM(s.bytes)" in sql
+    assert params["device_id"] == 7 and params["site_id"] == 3 and params["protocol"] == "ipfix"
     assert (params["limit"], params["offset"]) == (25, 25)
 
 
@@ -37,3 +37,11 @@ def test_flow_filter_window_is_bounded():
     where, params = _where(None, None, start, end)
     assert "f.flow_start >= :start" in where and "f.flow_start < :end" in where
     assert params == {"start": start, "end": end}
+    assert "f.protocol IN ('sflow', 'ipfix')" in where
+
+
+def test_flow_analytics_rejects_netflow_filter():
+    import pytest
+
+    with pytest.raises(ValueError, match="unsupported flow protocol"):
+        _where(None, None, datetime(2026, 1, 1), datetime(2026, 1, 2), "netflow")

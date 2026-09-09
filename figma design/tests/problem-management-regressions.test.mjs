@@ -1,23 +1,23 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
+import { readFileSync } from 'node:fs'
+import test from 'node:test'
 
-const api = fs.readFileSync('src/lib/api.ts', 'utf8')
-const page = fs.readFileSync('src/pages/ProblemManagement.tsx', 'utf8')
-const routes = fs.readFileSync('src/routes.tsx', 'utf8')
+const page = readFileSync(new URL('../src/pages/ProblemManagement.tsx', import.meta.url), 'utf8')
+const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8')
 
-test('problem management uses real problem APIs and exposes lifecycle evidence', () => {
-  assert.match(api, /createProblem/)
-  assert.match(api, /linkProblemIncident/)
-  assert.match(api, /listUsers/)
-  assert.match(api, /listIncidents/)
-  assert.match(api, /priority: string/)
-  assert.match(page, /Root cause/)
-  assert.match(page, /Problem owner/)
-  assert.match(page, /Problem priority/)
-  assert.match(page, /Link incident/)
-  assert.match(page, /incident\.rca/)
-  assert.match(page, /Known error/)
-  assert.match(page, /Audit history/)
-  assert.match(routes, /withPermission\(ProblemManagement, 'problems:read'\)/)
+test('problem management edits persisted fields and loads real owners/incidents', () => {
+  assert.match(page, /description: ''/)
+  assert.match(page, /priority: 'p3'/)
+  assert.match(page, /listUsers/)
+  assert.match(page, /listIncidents/)
+  assert.match(page, /updateProblem\(/)
+  assert.match(page, /linkProblemIncident\(/)
+})
+
+test('problem management exposes lifecycle, known error and RCA details', () => {
+  assert.match(page, /known_error/)
+  assert.match(page, /permanent_fix/)
+  assert.match(page, /RCA/)
+  assert.match(page, /Not analyzed/)
+  assert.match(api, /reference: string; status: string; probable_root_cause/)
 })

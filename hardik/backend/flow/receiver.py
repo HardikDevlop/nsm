@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .parsers import FlowParseError, IPFIXParser, NetFlowParser, SFlowParser
+from .parsers import FlowParseError, IPFIXParser, SFlowParser
 from .service import FlowIngestService
 
 logger = logging.getLogger(__name__)
@@ -39,23 +39,22 @@ class _FlowDatagramProtocol(asyncio.DatagramProtocol):
 
 
 class FlowReceiver:
-    """Application-managed UDP receiver for NetFlow/IPFIX and sFlow."""
+    """Application-managed UDP receiver for IPFIX and sFlow."""
 
     def __init__(
         self,
         ingest: FlowIngestService,
         bind_host: str = "0.0.0.0",
-        netflow_port: int = 2055,
+        ipfix_port: int = 4739,
         sflow_port: int = 6343,
     ):
         self.ingest = ingest
         self.bind_host = bind_host
-        self.netflow_port = netflow_port
+        self.ipfix_port = ipfix_port
         self.sflow_port = sflow_port
         self.stats = FlowReceiverStats()
         self._transports: list[asyncio.BaseTransport] = []
         self._started = False
-        self._netflow_parser = NetFlowParser()
         self._ipfix_parser = IPFIXParser()
         self._sflow_parser = SFlowParser()
 
@@ -65,8 +64,8 @@ class FlowReceiver:
         try:
             loop = asyncio.get_running_loop()
             await loop.create_datagram_endpoint(
-                lambda: _FlowDatagramProtocol(self, "netflow"),
-                local_addr=(self.bind_host, self.netflow_port),
+                lambda: _FlowDatagramProtocol(self, "ipfix"),
+                local_addr=(self.bind_host, self.ipfix_port),
             )
             await loop.create_datagram_endpoint(
                 lambda: _FlowDatagramProtocol(self, "sflow"),
@@ -77,9 +76,9 @@ class FlowReceiver:
             raise
         self._started = True
         logger.info(
-            "flow_receiver_started bind_host=%s netflow_port=%s sflow_port=%s",
+            "flow_receiver_started bind_host=%s ipfix_port=%s sflow_port=%s",
             self.bind_host,
-            self.netflow_port,
+            self.ipfix_port,
             self.sflow_port,
         )
 
@@ -104,7 +103,13 @@ class FlowReceiver:
         try:
             protocol, parser = self._select_parser(listener_protocol, data)
             received_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            records = parser.parse(data, exporter_ip, received_at)
+            if listener_protocol == "sflow":
+                parsed = parser.parse_datagram(data, exporter_ip, received_at)
+                records = parsed.flows
+                counter_samples = parsed.counters
+            else:
+                records = parser.parse(data, exporter_ip, received_at)
+                counter_samples = []
         except FlowParseError as exc:
             self.stats.malformed_datagrams += 1
             logger.warning(
@@ -133,6 +138,12 @@ class FlowReceiver:
             return
 
         self.stats.parsed_records += len(records)
+        if counter_samples:
+            submit_counter = getattr(self.ingest, "submit_counter_nowait", None)
+            if submit_counter is not None:
+                for counter in counter_samples:
+                    if submit_counter(counter) is False:
+                        self.stats.dropped_records += 1
         for record in records:
             accepted = self.ingest.submit_nowait(record)
             if accepted is False:
@@ -161,13 +172,11 @@ class FlowReceiver:
     def _select_parser(self, listener_protocol: str, data: bytes):
         if listener_protocol == "sflow":
             return "sflow", self._sflow_parser
+        if listener_protocol != "ipfix":
+            raise ValueError(f"unsupported flow listener {listener_protocol}")
         if len(data) < 2:
             raise FlowParseError("flow packet is too short")
         version = int.from_bytes(data[:2], "big")
-        if version == 5:
-            return "netflow", self._netflow_parser
-        if version == 9:
-            return "netflow", self._netflow_parser
         if version == 10:
             return "ipfix", self._ipfix_parser
-        raise ValueError(f"unsupported flow version {version}")
+        raise ValueError(f"unsupported IPFIX version {version}")

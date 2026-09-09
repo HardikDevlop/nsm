@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Josefin+Sans:wght@200;300;400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 
 @theme inline {
@@ -176,58 +176,6 @@ a:focus-visible {
   background-size: 32px 32px;
 }
 
-/* The topology editor has its own neutral graphite workspace. */
-.manual-topology-shell {
-  --t-bg: #0e1110;
-  --t-card: #171b1a;
-  --t-card-alpha: rgba(23, 27, 26, .94);
-  --t-text: #e7e1d5;
-  --t-muted: #8e9690;
-  --t-accent: #d8d2c6;
-  --t-accent-alpha: rgba(216, 210, 198, .09);
-  --t-accent-border: rgba(216, 210, 198, .24);
-  --t-border-alpha: rgba(231, 225, 213, .14);
-  --t-border-light: rgba(231, 225, 213, .08);
-  --topology-canvas: #101413;
-  --topology-grid-dot: rgba(116, 128, 120, .42);
-  --topology-node: #171b1a;
-  --topology-node-highlight: rgba(231, 225, 213, .08);
-  --topology-node-shadow: rgba(0, 0, 0, .28);
-}
-
-[data-theme="light"] .manual-topology-shell {
-  --t-bg: #f4f7f5;
-  --t-card: #ffffff;
-  --t-card-alpha: rgba(255, 255, 255, .96);
-  --t-text: #1c2722;
-  --t-muted: #68756e;
-  --t-accent: #087f68;
-  --t-accent-alpha: rgba(8, 127, 104, .09);
-  --t-accent-border: rgba(8, 127, 104, .28);
-  --t-border-alpha: rgba(28, 54, 43, .16);
-  --t-border-light: rgba(28, 54, 43, .09);
-  --topology-canvas: #eef4f1;
-  --topology-grid-dot: rgba(62, 105, 88, .22);
-  --topology-node: #ffffff;
-  --topology-node-highlight: rgba(8, 127, 104, .06);
-  --topology-node-shadow: rgba(27, 61, 47, .16);
-}
-
-.manual-topology-shell .glass {
-  background: var(--t-card);
-  border-color: var(--t-border-alpha);
-  box-shadow: 0 12px 32px var(--topology-node-shadow);
-  backdrop-filter: none;
-}
-
-.manual-topology-shell button {
-  transition: color .18s ease, background-color .18s ease, border-color .18s ease, transform .18s ease;
-}
-
-.manual-topology-shell button:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
 /* ===================== LIGHT THEME OVERRIDES ===================== */
 [data-theme="light"] .neon-green {
   color: #059669;
@@ -268,6 +216,31 @@ a:focus-visible {
 [data-theme="light"] .status-dot.warning {
   background: #d97706;
   box-shadow: 0 0 6px rgba(217, 119, 6, 0.5);
+}
+
+/* Devanagari needs a native script font and a little more breathing room.
+   Keep this locale-only so the established English visual scale is unchanged. */
+html[data-locale="hi"] {
+  --t-text: #ffffff;
+  --t-muted: #f1f5f9;
+}
+
+html[data-locale="hi"] body,
+html[data-locale="hi"] button,
+html[data-locale="hi"] input,
+html[data-locale="hi"] select,
+html[data-locale="hi"] textarea {
+  font-family: 'Noto Sans Devanagari', 'Noto Sans', sans-serif;
+}
+
+html[data-locale="hi"] .font-display,
+html[data-locale="hi"] .font-mono {
+  font-family: 'Noto Sans Devanagari', 'Noto Sans', sans-serif;
+  letter-spacing: 0.01em;
+}
+
+html[data-locale="hi"] .font-mono {
+  font-size: 1.06em;
 }
 
 [data-theme="light"] .status-dot.offline {

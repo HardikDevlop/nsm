@@ -12,9 +12,9 @@ test('cancellable GET requests still use the shared API cache and in-flight dedu
   assert.match(apiSource, /GET deduplication are independent concerns/i)
 })
 
-test('global query defaults avoid mount and focus refetch storms', () => {
+test('global query defaults revalidate stale pages without focus refetch storms', () => {
   assert.match(queryProviderSource, /refetchOnWindowFocus:\s*false/)
-  assert.match(queryProviderSource, /refetchOnMount:\s*false/)
+  assert.match(queryProviderSource, /refetchOnMount:\s*true/)
   assert.match(queryProviderSource, /refetchOnReconnect:\s*false/)
 })
 

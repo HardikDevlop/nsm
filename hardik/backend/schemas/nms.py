@@ -422,6 +422,7 @@ class ThresholdRead(ThresholdBase):
 # ---------------------------------------------------------------- Alerts
 class AlertBase(BaseModel):
     device_id: int | None = None
+    interface_id: int | None = None
     severity: str
     title: str
     description: str | None = None

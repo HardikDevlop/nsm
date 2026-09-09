@@ -33,17 +33,6 @@ export default function SNMPStorageMonitoring() {
     storageModuleData?.supported === true ||
     hasStorageData
 
-  // Debug logging
-  console.log('Storage Module Debug:', {
-    id,
-    caps,
-    supported,
-    monitoringData,
-    storageModuleData,
-    monitoringLoading,
-    monitoringError
-  })
-
   if (!supported) {
     return (
       <SNMPModuleShell module="storage" title="Storage Monitoring" unsupportedMessage="Storage monitoring is not supported by this device.">

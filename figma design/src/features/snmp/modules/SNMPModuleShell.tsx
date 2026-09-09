@@ -6,7 +6,7 @@ import { useSNMPDeviceDetails, useStartModuleMonitoring, useStopModuleMonitoring
 import { SNMPModuleConfig, getModuleConfig, getSupportedModuleConfigs, MODULE_ORDER } from './snmpModuleRegistry';
 import { useModuleMonitoringConfig } from './useSNMPModules';
 
-const INTERVALS = [30, 60, 120, 300, 600];
+const INTERVALS = [15, 30, 60, 120, 300, 600];
 
 function title(text: string) {
   return text.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());

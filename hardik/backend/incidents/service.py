@@ -39,6 +39,8 @@ def _fault_signature(alert: Alert) -> str:
     title = (alert.title or "").strip()
     match = re.match(r"^interface\s+down:\s*(.+)$", title, re.IGNORECASE)
     if match:
+        if alert.interface_id is not None:
+            return f"interface_down_id:{alert.interface_id}"
         return f"interface_down:{match.group(1).strip().lower()}"
     if re.match(r"^device\s+down:", title, re.IGNORECASE):
         return "device_down"

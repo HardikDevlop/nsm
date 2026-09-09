@@ -521,7 +521,7 @@ export default function SNMPDeviceDetails() {
                     const status = m.config.status
                     const statusColor = getModuleStatusColor(status)
                     const isRunning = status === 'running'
-                    const intervalOptions = [30, 60, 120, 300, 600]
+                    const intervalOptions = [15, 30, 60, 120, 300, 600]
 
                     return (
                       <tr key={m.module.id} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>

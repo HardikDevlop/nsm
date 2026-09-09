@@ -164,7 +164,7 @@ class SNMPClient:
 
         async def _run() -> Any:
             target = UdpTransportTarget(
-                (host, 161), timeout=self.timeout, retries=self.retries
+                (host, self.credentials.port or 161), timeout=self.timeout, retries=self.retries
             )
             return await getCmd(
                 SnmpEngine(),
@@ -230,7 +230,7 @@ class SNMPClient:
             engine  = SnmpEngine()
             auth    = self._make_auth()
             target  = UdpTransportTarget(
-                (host, 161), timeout=self.timeout, retries=self.retries
+                (host, self.credentials.port or 161), timeout=self.timeout, retries=self.retries
             )
             ctx = ContextData()
 

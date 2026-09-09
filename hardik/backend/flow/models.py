@@ -10,8 +10,8 @@ from typing import Any
 class NormalizedFlow:
     exporter_ip: str
     protocol: str
-    flow_start: datetime
-    flow_end: datetime
+    flow_start: datetime | None
+    flow_end: datetime | None
     received_at: datetime
     device_id: int | None = None
     src_ip: str | None = None
@@ -32,16 +32,17 @@ class NormalizedFlow:
     def record_hash(self) -> str:
         identity = "|".join(str(value) for value in (
             self.exporter_ip, self.protocol, self.observation_domain,
-            self.flow_start.isoformat(), self.flow_end.isoformat(),
+            self.flow_start.isoformat() if self.flow_start else None,
+            self.flow_end.isoformat() if self.flow_end else None,
             self.src_ip, self.dst_ip, self.src_port, self.dst_port,
             self.ip_protocol, self.bytes, self.packets,
         ))
         return sha256(identity.encode("utf-8")).hexdigest()
 
     def validate(self) -> None:
-        if not self.exporter_ip or self.protocol not in {"netflow", "ipfix", "sflow", "jflow", "netstream"}:
+        if not self.exporter_ip or self.protocol not in {"ipfix", "sflow"}:
             raise ValueError("invalid flow identity")
-        if self.flow_end < self.flow_start:
+        if self.flow_start and self.flow_end and self.flow_end < self.flow_start:
             raise ValueError("flow_end precedes flow_start")
         if self.bytes < 0 or self.packets < 0:
             raise ValueError("flow counters cannot be negative")

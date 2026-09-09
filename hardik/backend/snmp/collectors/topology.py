@@ -255,38 +255,16 @@ class TopologyCollector(BaseCollector):
                 })
 
         # ---------------------------------------------------------------
-        # 5. Routing next-hops
+        # 5. Routing next-hops are Layer-3 reachability, not a physical
+        # connection. Keep them out of the topology graph; only LLDP/CDP and
+        # learned MAC/ARP relationships can create connected-device edges.
         # ---------------------------------------------------------------
         route_gws = []
         for route in self._extract_routes(raw_flat):
             if route.get("next_hop") and (route.get("destination") == "0.0.0.0" or route.get("prefix_length") == 0):
                 route_gws.append(route["next_hop"])
         if route_gws:
-            if "routing" not in sources_used:
-                sources_used.append("routing")
-            for gw_ip in route_gws:
-                if gw_ip not in nodes:
-                    nodes[gw_ip] = {
-                        "id":         gw_ip,
-                        "hostname":   None,
-                        "ip":         gw_ip,
-                        "mac":        None,
-                        "vendor":     None,
-                        "device_type": "router",
-                        "interfaces": [],
-                    }
-                    links.append({
-                        "source_node":   local_id,
-                        "target_node":   gw_ip,
-                        "source_port":   None,
-                        "target_port":   None,
-                        "protocol":      "routing",
-                        "bidirectional": False,
-                        "protocol": "routing",
-                        "confidence": "INFERRED",
-                        "gateway_path": True,
-                        "verified":      True,
-                    })
+            warnings.append("Routing next-hops were collected but not rendered as physical topology links.")
 
         if len(nodes) <= 1 and not links:
             return CollectorResponse.unsupported(
@@ -500,8 +478,10 @@ class TopologyCollector(BaseCollector):
                                 "status": {"3": "learned", "4": "self", "5": "mgmt"}.get(status, "other")})
             except (ValueError, TypeError):
                 continue
-        if entries:
-            return entries
+        # Q-BRIDGE can be partial on real switches. Supplement it with
+        # BRIDGE-MIB rows so locally learned AP/device MACs are not lost just
+        # because another VLAN-aware row was returned first.
+        q_macs = {entry["mac"] for entry in entries}
         for k, v in raw.items():
             sk = str(k)
             if sk.startswith(_FDB_PORT):
@@ -510,6 +490,8 @@ class TopologyCollector(BaseCollector):
                 if len(parts) == 6:
                     try:
                         mac = ":".join(f"{int(p):02X}" for p in parts)
+                        if mac in q_macs:
+                            continue
                         status_code = str(raw.get(_FDB_STATUS + mac_sfx, "3")).strip()
                         if status_code != "2":  # skip invalid
                             entries.append({
@@ -517,6 +499,7 @@ class TopologyCollector(BaseCollector):
                                 "port_name": None, "vlan_id": None,
                                 "status": {"3": "learned", "4": "self", "5": "mgmt"}.get(status_code, "other"),
                             })
+                            q_macs.add(mac)
                     except (ValueError, TypeError):
                         pass
         return entries[:500]    # cap at 500 for large L2 devices

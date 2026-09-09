@@ -19,6 +19,12 @@ import {
 
 const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--t-text, #c8d8ee)' }
 
+function liveStatusLabel(status: string): string {
+  if (status === 'up' || status === 'online') return 'UP'
+  if (status === 'down' || status === 'offline') return 'DN'
+  return 'WAIT'
+}
+
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
@@ -198,6 +204,7 @@ export default function DeviceMonitoring() {
         device_id: device.id,
       })
       setIsMonitoring(true)
+      setDevice(current => current ? { ...current, monitoring_status: true } : current)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to start monitoring')
     } finally {
@@ -210,6 +217,7 @@ export default function DeviceMonitoring() {
     try {
       await stopMonitoringDevice(device.ip_address)
       setIsMonitoring(false)
+      setDevice(current => current ? { ...current, monitoring_status: false } : current)
       setLiveStatus(null)
       setLiveRtt(null)
       setLiveLastCheck(null)
@@ -261,11 +269,16 @@ export default function DeviceMonitoring() {
   // Pagination
   const totalMetricPages = Math.max(1, Math.ceil(metrics.length / metricPageSize))
   const pagedMetrics = useMemo(() => metrics.slice((metricPage - 1) * metricPageSize, metricPage * metricPageSize), [metrics, metricPage])
-  const totalStatusPages = Math.max(1, Math.ceil(statusHistory.length / statusPageSize))
-  const pagedStatusHistory = useMemo(() => statusHistory.slice((statusPage - 1) * statusPageSize, statusPage * statusPageSize), [statusHistory, statusPage])
+  const realStatusHistory = useMemo(() => statusHistory.filter(entry => (
+    entry.new_status === 'online' && (entry.old_status === 'offline' || entry.old_status === 'online')
+  ) || (
+    entry.new_status === 'offline' && (entry.old_status === 'online' || entry.old_status === 'offline')
+  )), [statusHistory])
+  const totalStatusPages = Math.max(1, Math.ceil(realStatusHistory.length / statusPageSize))
+  const pagedStatusHistory = useMemo(() => realStatusHistory.slice((statusPage - 1) * statusPageSize, statusPage * statusPageSize), [realStatusHistory, statusPage])
 
   useEffect(() => { setMetricPage(1) }, [metrics.length])
-  useEffect(() => { setStatusPage(1) }, [statusHistory.length])
+  useEffect(() => { setStatusPage(1) }, [realStatusHistory.length])
 
   const summary = history?.summary
 
@@ -347,14 +360,9 @@ export default function DeviceMonitoring() {
               <div className="space-y-1.5 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                 <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Hostname</span><span>{device.hostname}</span></div>
                 <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>IP Address</span><span>{device.ip_address}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>MAC Address</span><span>{device.mac_address || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Status</span><span style={{ color: isUp ? '#00ff88' : isDown ? '#ff3366' : '#ffaa00' }}>{device.status}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Monitoring</span><span>{device.monitoring_status ? 'Enabled' : 'Disabled'}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Model</span><span>{device.model || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Serial</span><span>{device.serial_number || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Firmware</span><span>{device.firmware_version || '—'}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Last Seen</span><span>{formatTimestamp(device.last_seen)}</span></div>
-                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Created</span><span>{formatTimestamp(device.created_at)}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Status</span><span style={{ color: isUp ? '#00ff88' : isDown ? '#ff3366' : '#ffaa00' }}>{effectiveStatus}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Monitoring</span><span style={{ color: isMonitoring ? '#00ff88' : 'var(--t-muted, #8899bb)' }}>{isMonitoring ? 'Enabled' : 'Disabled'}</span></div>
+                <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Last Check</span><span>{formatTimestamp(liveLastCheck ?? device.last_seen)}</span></div>
               </div>
             </GlassCard>
 
@@ -440,8 +448,8 @@ export default function DeviceMonitoring() {
                   {liveHistory.slice().reverse().map((entry, i) => (
                     <div key={i} className="flex items-center justify-between rounded p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                       <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.status === 'up' ? '#00ff88' : '#ff3366' }} />
-                        <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{entry.status === 'up' ? 'UP' : 'DN'}</span>
+                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.status === 'up' ? '#00ff88' : entry.status === 'down' ? '#ff3366' : '#ffaa00' }} />
+                        <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{liveStatusLabel(entry.status)}</span>
                       </div>
                       <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{entry.rtt_ms !== null ? `${entry.rtt_ms.toFixed(1)}ms` : 'timeout'}</span>
                       <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>{formatTimestamp(entry.time)}</span>
@@ -454,9 +462,9 @@ export default function DeviceMonitoring() {
             {/* Status Change History */}
             <GlassCard className="p-3 md:p-4">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">STATUS CHANGE HISTORY</div>
-              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>Up/down transitions from database</div>
-              {statusHistory.length === 0 ? (
-                <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No status changes recorded yet.</div>
+              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · online/offline transitions from database</div>
+              {realStatusHistory.length === 0 ? (
+                <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No up/down changes recorded yet.</div>
               ) : (
                 <>
                   <div className="space-y-1 max-h-[280px] overflow-y-auto">
@@ -465,7 +473,7 @@ export default function DeviceMonitoring() {
                         <div className="flex items-center gap-2">
                           <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.new_status === 'online' ? '#00ff88' : '#ff3366' }} />
                           <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
-                            {entry.old_status ?? '?'} → {entry.new_status}
+                            {device.ip_address} · {entry.old_status} → {entry.new_status}
                           </span>
                         </div>
                         <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>{formatTimestamp(entry.timestamp)}</span>

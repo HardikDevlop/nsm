@@ -3,6 +3,7 @@ from typing import Any
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -64,6 +65,12 @@ def _validate_owner(db: Session, owner_id: int | None) -> None:
         raise HTTPException(422, "Problem owner does not exist or is inactive")
 
 
+def _change_action(field: str, value: Any) -> str:
+    if field == "status":
+        return str(value) if value in {"known_error", "resolved", "closed"} else "status_changed"
+    return {"priority": "priority_changed", "owner_id": "owner_changed"}.get(field, "edited")
+
+
 def _serialize(db: Session, item: Problem) -> dict[str, Any]:
     links = db.query(ProblemIncident).filter(ProblemIncident.problem_id == item.id).order_by(ProblemIncident.linked_at.asc()).all()
     incident_ids = [link.incident_id for link in links]
@@ -75,7 +82,7 @@ def _serialize(db: Session, item: Problem) -> dict[str, Any]:
         "title": incident.title,
         "status": incident.status,
         "priority": incident.priority,
-        "rca": ({"id": rca.id, "root_kind": rca.root_kind, "root_label": rca.root_label, "confidence": rca.confidence, "impact_summary": rca.impact_summary, "updated_at": rca.updated_at} if (rca := rcas.get(incident.rca_incident_id)) else None),
+        "rca": ({"id": rca.id, "reference": f"RCA-{rca.id}", "status": "available", "probable_root_cause": rca.root_label, "root_kind": rca.root_kind, "root_label": rca.root_label, "confidence": rca.confidence, "impact_summary": rca.impact_summary, "updated_at": rca.updated_at} if (rca := rcas.get(incident.rca_incident_id)) else None),
     } for incident in incidents]
     return {"id": item.id, "number": item.number, "title": item.title, "description": item.description, "category": item.category, "priority": item.priority, "status": item.status, "root_cause": item.root_cause, "workaround": item.workaround, "known_error": item.known_error, "permanent_fix": item.permanent_fix, "owner_id": item.owner_id, "created_by": item.created_by, "created_at": item.created_at, "updated_at": item.updated_at, "closed_at": item.closed_at, "incident_ids": incident_ids, "incidents": incident_summaries, "history": [{"id": row.id, "action": row.action, "field_name": row.field_name, "old_value": row.old_value, "new_value": row.new_value, "created_at": row.created_at} for row in db.query(ProblemHistory).filter(ProblemHistory.problem_id == item.id).order_by(ProblemHistory.created_at.asc(), ProblemHistory.id.asc()).all()]}
 
@@ -93,11 +100,15 @@ def list_problems(status: str | None = None, category: str | None = None, skip: 
 def create_problem(payload: ProblemCreatePayload, db: Session = Depends(get_db), current_user: User = Depends(require_permission("problems:create"))):
     now = _now()
     _validate_owner(db, payload.owner_id)
+    incident_ids = list(dict.fromkeys(payload.incident_ids))
+    missing_incidents = [incident_id for incident_id in incident_ids if db.query(Incident).filter(Incident.id == incident_id).first() is None]
+    if missing_incidents:
+        raise HTTPException(404, f"Incident {missing_incidents[0]} not found")
     item = Problem(number="PENDING", **payload.model_dump(exclude={"incident_ids"}), created_by=current_user.id, created_at=now, updated_at=now)
     db.add(item); db.flush(); item.number = f"PRB-{item.id:06d}"
-    for incident_id in payload.incident_ids:
-        if db.query(Incident).filter(Incident.id == incident_id).first() is None: raise HTTPException(404, f"Incident {incident_id} not found")
+    for incident_id in incident_ids:
         db.add(ProblemIncident(problem_id=item.id, incident_id=incident_id, linked_by=current_user.id, linked_at=now))
+        _history(db, item.id, current_user.id, "incident_linked", new={"incident_id": incident_id})
     _history(db, item.id, current_user.id, "created", new=payload.model_dump()); _audit(db, current_user.id, "CREATE", f"problems:{item.id}"); db.commit(); db.refresh(item)
     return _serialize(db, item)
 
@@ -122,7 +133,8 @@ def update_problem(problem_id: int, payload: ProblemUpdatePayload, db: Session =
     for field, value in values.items():
         old = getattr(item, field)
         setattr(item, field, value)
-        if old != value: _history(db, item.id, current_user.id, "updated", field, old, value)
+        if old != value:
+            _history(db, item.id, current_user.id, _change_action(field, value), field, old, value)
     if item.status in {"resolved", "closed"} and item.closed_at is None: item.closed_at = _now()
     if item.status in {"open", "known_error", "in_progress"}: item.closed_at = None
     item.updated_at = _now(); _audit(db, current_user.id, "UPDATE", f"problems:{item.id}"); db.commit(); db.refresh(item)
@@ -134,7 +146,12 @@ def link_incident(problem_id: int, incident_id: int, db: Session = Depends(get_d
     if db.query(Problem).filter(Problem.id == problem_id).first() is None: raise HTTPException(404, "Problem not found")
     if db.query(Incident).filter(Incident.id == incident_id).first() is None: raise HTTPException(404, "Incident not found")
     if db.query(ProblemIncident).filter_by(problem_id=problem_id, incident_id=incident_id).first(): raise HTTPException(409, "Incident already linked to problem")
-    db.add(ProblemIncident(problem_id=problem_id, incident_id=incident_id, linked_by=current_user.id, linked_at=_now())); _history(db, problem_id, current_user.id, "incident_linked", new={"incident_id": incident_id}); _audit(db, current_user.id, "LINK_INCIDENT", f"problems:{problem_id}"); db.commit()
+    db.add(ProblemIncident(problem_id=problem_id, incident_id=incident_id, linked_by=current_user.id, linked_at=_now())); _history(db, problem_id, current_user.id, "incident_linked", new={"incident_id": incident_id}); _audit(db, current_user.id, "LINK_INCIDENT", f"problems:{problem_id}")
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Incident already linked to problem") from exc
     return {"problem_id": problem_id, "incident_id": incident_id, "linked": True}
 
 

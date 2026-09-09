@@ -1,11 +1,12 @@
 import asyncio
 import struct
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 from backend.flow.models import NormalizedFlow
-from backend.flow.parsers import FlowParseError, IPFIXParser, NetFlowParser
+from backend.flow.parsers import FlowParseError, IPFIXParser, SFlowParser
 from backend.flow.service import FlowIngestService
 
 
@@ -48,32 +49,23 @@ def ipfix_packet() -> bytes:
     return struct.pack("!HHIII", 10, len(body) + 16, 1_700_000_000, 0, 77) + body
 
 
-def test_netflow_v5_normalizes_core_fields():
-    flow = NetFlowParser().parse(v5_packet(), "192.0.2.10")[0]
-    assert (flow.protocol, flow.source_version) == ("netflow", "5")
-    assert (flow.src_ip, flow.dst_ip, flow.src_port, flow.dst_port) == ("10.0.0.1", "10.0.0.2", 1234, 443)
-    assert (flow.bytes, flow.packets, flow.input_interface_id, flow.output_interface_id) == (2000, 20, 3, 4)
-    flow.validate()
-
-
-def test_netflow_v9_template_and_data_are_normalized():
-    flow = NetFlowParser().parse(v9_packet(), "192.0.2.11")[0]
-    assert flow.source_version == "9"
-    assert flow.src_ip == "192.0.2.1" and flow.dst_ip == "198.51.100.2"
-    assert (flow.ip_protocol, flow.bytes, flow.packets) == (17, 900, 9)
-
-
 def test_ipfix_template_and_data_are_normalized():
     flow = IPFIXParser().parse(ipfix_packet(), "192.0.2.12")[0]
     assert (flow.protocol, flow.source_version, flow.observation_domain) == ("ipfix", "10", "77")
     assert (flow.src_ip, flow.dst_ip, flow.bytes, flow.packets) == ("203.0.113.1", "203.0.113.2", 123, 4)
 
 
-def test_parser_rejects_truncated_and_unsupported_packets():
+def test_netflow_versions_are_rejected_by_active_parser():
     with pytest.raises(FlowParseError):
-        NetFlowParser().parse(b"\x00\x05", "192.0.2.1")
-    with pytest.raises(FlowParseError, match="unsupported"):
-        NetFlowParser().parse(struct.pack("!H", 4) + b"\x00\x00", "192.0.2.1")
+        IPFIXParser().parse(v5_packet(), "192.0.2.1")
+    with pytest.raises(FlowParseError):
+        IPFIXParser().parse(v9_packet(), "192.0.2.1")
+
+
+def test_normalized_flow_rejects_netflow_records():
+    flow = NormalizedFlow("192.0.2.1", "netflow", datetime(2026, 1, 1), datetime(2026, 1, 1), datetime(2026, 1, 1))
+    with pytest.raises(ValueError):
+        flow.validate()
 
 
 class _Db:
@@ -89,8 +81,9 @@ class _Db:
 
 def test_ingestion_queue_batches_and_drops_when_full():
     db = _Db()
-    service = FlowIngestService(lambda: db, queue_size=1, batch_size=2, flush_seconds=0.01)
-    flow = NormalizedFlow("192.0.2.1", "netflow", datetime(2026, 1, 1), datetime(2026, 1, 1), datetime(2026, 1, 1))
+    service = FlowIngestService(lambda: db, queue_size=1, batch_size=2, flush_seconds=0.01,
+                                correlation=SimpleNamespace(correlate=lambda *_: None))
+    flow = NormalizedFlow("192.0.2.1", "sflow", datetime(2026, 1, 1), datetime(2026, 1, 1), datetime(2026, 1, 1))
 
     async def scenario():
         await service.start()

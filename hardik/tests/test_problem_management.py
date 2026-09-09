@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.api.problem_routes import ALLOWED_TRANSITIONS, ProblemCreatePayload, ProblemUpdatePayload, _now, _serialize, _validate_owner, router
+from backend.api.problem_routes import ALLOWED_TRANSITIONS, ProblemCreatePayload, ProblemUpdatePayload, _change_action, _now, _serialize, _validate_owner, router
 from backend.database.session import Base
-from backend.models import Incident, Problem, ProblemIncident, RCAIncident, User
+from backend.models import Incident, Problem, ProblemHistory, ProblemIncident, RCAIncident, User
 
 
 def test_problem_payload_covers_root_cause_workaround_known_error_and_fix():
@@ -64,10 +64,42 @@ def test_problem_detail_exposes_linked_incident_rca_summary():
     db.add_all([incident, problem]); db.flush()
     db.add(ProblemIncident(problem_id=problem.id, incident_id=incident.id, linked_at=now)); db.flush()
     result = _serialize(db, problem)
-    assert result["incidents"][0]["rca"] == {"id": rca.id, "root_kind": "device", "root_label": "Core", "confidence": 88.0, "impact_summary": "Downstream service impact", "updated_at": rca.updated_at}
+    assert result["incidents"][0]["rca"] == {"id": rca.id, "reference": f"RCA-{rca.id}", "status": "available", "probable_root_cause": "Core", "root_kind": "device", "root_label": "Core", "confidence": 88.0, "impact_summary": "Downstream service impact", "updated_at": rca.updated_at}
 
 
 def test_problem_timestamps_use_application_timezone_convention():
     now = _now()
     assert now.utcoffset() is None
     assert now.hour == datetime.now().hour
+
+
+def test_problem_history_uses_workflow_action_names():
+    assert _change_action("title", "new") == "edited"
+    assert _change_action("priority", "p1") == "priority_changed"
+    assert _change_action("owner_id", 1) == "owner_changed"
+    assert _change_action("status", "in_progress") == "status_changed"
+    assert _change_action("status", "known_error") == "known_error"
+    assert _change_action("status", "resolved") == "resolved"
+    assert _change_action("status", "closed") == "closed"
+
+
+def test_problem_create_edit_and_incident_link_are_persisted_without_duplicates():
+    from backend.api.problem_routes import create_problem, link_incident, update_problem
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    now = datetime.utcnow()
+    user = User(id=910, name="Operator", email="operator@example.com", password_hash="x", status="active")
+    incident = Incident(id=910, title="Repeated outage", category="availability", priority="p1", status="open", created_at=now, updated_at=now)
+    db.add_all([user, incident]); db.flush()
+
+    created = create_problem(ProblemCreatePayload(title="Recurring outage", description="Initial", priority="p2", owner_id=user.id, incident_ids=[incident.id, incident.id]), db, user)
+    assert created["priority"] == "p2" and created["incident_ids"] == [incident.id]
+    problem = db.query(Problem).filter_by(id=created["id"]).one()
+    edited = update_problem(problem.id, ProblemUpdatePayload(title="Updated outage", description="Details", priority="p1", status="in_progress", root_cause="Bad optic", workaround="Fail over", known_error="Known optic failure", permanent_fix="Replace optic", owner_id=user.id), db, user)
+    assert edited["title"] == "Updated outage" and edited["description"] == "Details" and edited["priority"] == "p1"
+    actions = [row.action for row in db.query(ProblemHistory).filter_by(problem_id=problem.id).all()]
+    assert {"created", "edited", "priority_changed", "status_changed", "incident_linked"}.issubset(actions)
+    with pytest.raises(Exception, match="already linked"):
+        link_incident(problem.id, incident.id, db, user)

@@ -58,10 +58,12 @@ function hexToRgba(hex: string, alpha: number): string {
 function applyCSS(colors: ThemeColors) {
   const s = document.documentElement.style
   s.setProperty('--t-bg', colors.bg)
-  s.setProperty('--t-text', colors.text)
+  // Keep application typography high-contrast across every page. Status and
+  // accent colors remain independently controlled by their own tokens.
+  s.setProperty('--t-text', '#ffffff')
   s.setProperty('--t-accent', colors.accent)
   s.setProperty('--t-card', colors.card)
-  s.setProperty('--t-muted', colors.muted)
+  s.setProperty('--t-muted', '#ffffff')
   s.setProperty('--t-border', colors.border)
   s.setProperty('--t-card-alpha', hexToRgba(colors.card, 0.7))
   s.setProperty('--t-border-alpha', hexToRgba(colors.border, 0.8))

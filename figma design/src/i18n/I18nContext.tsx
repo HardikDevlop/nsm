@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { translations, type Locale } from './translations'
 
 type I18nValue = { locale: Locale; setLocale: (locale: Locale) => void; t: typeof translations.en }
@@ -16,6 +16,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     setLocaleState(value)
     window.localStorage.setItem('nms.locale', value)
   }
+
+  useEffect(() => {
+    document.documentElement.dataset.locale = locale
+    document.documentElement.lang = locale === 'hi' ? 'hi' : 'en'
+  }, [locale])
 
   return <Context.Provider value={{ locale, setLocale, t: translations[locale] }}>{children}</Context.Provider>
 }

@@ -38,6 +38,29 @@ function formatTraffic(iface: any, direction: 'rx' | 'tx'): string {
   return octets !== undefined ? formatBytes(octets) : '—'
 }
 
+function canonicalInterfaceName(value: unknown): string {
+  return String(value || '')
+    .replace(/^[^·]+·\s*/, '')
+    .trim()
+    .toLowerCase()
+}
+
+function isPhysicalInterface(iface: any): boolean {
+  const type = String(iface?.type || iface?.if_type || '').toLowerCase()
+  const name = String(iface?.name || iface?.description || '').toLowerCase()
+  if (/(loopback|vlan|tunnel|virtual|bridge|lag|port-channel|bond|cpu|null)/.test(`${type} ${name}`)) return false
+  return /(ethernet|gigabit|fastethernet|tengig|twentyfive|fortygig|hundredgig|fiber|physical)/.test(`${type} ${name}`)
+}
+
+function preferInterface(current: any, candidate: any): any {
+  const score = (iface: any) =>
+    Number(String(iface?.oper_status || '').toLowerCase() === 'up') * 4 +
+    Number(isPhysicalInterface(iface)) * 3 +
+    Number(Boolean(iface?.mac || iface?.mac_address)) * 2 +
+    Number(Boolean(iface?.rx_mbps || iface?.tx_mbps || iface?.in_octets || iface?.out_octets))
+  return score(candidate) > score(current) ? candidate : current
+}
+
 export default function SNMPInterfaceMonitoring() {
   const { deviceId } = useParams<{ deviceId: string }>()
   const id = Number(deviceId)
@@ -54,7 +77,14 @@ export default function SNMPInterfaceMonitoring() {
       : Array.isArray(livePayload)
         ? livePayload
         : []
-    return rows.length > 0 ? rows : (latestInterfaces || [])
+    const sourceRows = rows.length > 0 ? rows : (latestInterfaces || [])
+    const uniqueRows = new Map<string, any>()
+    sourceRows.forEach((iface: any, index: number) => {
+      const key = canonicalInterfaceName(iface?.name || iface?.description || iface?.ifIndex || index) || `interface-${index}`
+      const current = uniqueRows.get(key)
+      uniqueRows.set(key, current ? preferInterface(current, iface) : iface)
+    })
+    return [...uniqueRows.values()]
   }, [latestInterfaces, liveData?.interfaces, livePayload])
   const supported = caps?.interfaces === true || livePayload?.supported === true || interfaces.length > 0
   const interfaceCollector = {
@@ -77,6 +107,8 @@ export default function SNMPInterfaceMonitoring() {
 
   const upCount = interfaces.filter(i => (i.oper_status ?? '').toUpperCase() === 'UP').length
   const downCount = interfaces.filter(i => (i.oper_status ?? '').toUpperCase() === 'DOWN' || i.oper_status === 'down').length
+  const otherCount = Math.max(interfaces.length - upCount - downCount, 0)
+  const physicalCount = interfaces.filter(isPhysicalInterface).length
   const maxSpeed = interfaces.length > 0 ? Math.max(...interfaces.map(i => asNumber(i.speed_bps) || 0)) : 0
   const updatedAt = livePayload?.timestamp || interfaces.find(i => i.last_poll || i.polled_at || i.last_updated)?.last_poll || interfaces.find(i => i.last_updated)?.last_updated
 
@@ -86,7 +118,7 @@ export default function SNMPInterfaceMonitoring() {
         <GlassCard className="p-3">
           <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
             <span style={{ color: isLoading ? '#ffaa00' : error ? '#ff3366' : '#00ff88' }}>
-              {isLoading ? 'Polling live SNMP...' : error ? 'Live poll failed' : 'Live data active'}
+              {isLoading ? 'Loading latest poll...' : error ? 'Latest poll unavailable' : 'Latest poll snapshot'}
             </span>
             {updatedAt && <span style={{ color: '#8899bb' }}>Updated {new Date(updatedAt).toLocaleString()}</span>}
             {livePayload?.collection_ms != null && <span style={{ color: '#8899bb' }}>{livePayload.collection_ms} ms</span>}
@@ -97,11 +129,13 @@ export default function SNMPInterfaceMonitoring() {
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-4">
         {[
           { label: 'Total', value: interfaces.length, color: '#00d4ff' },
           { label: 'UP', value: upCount, color: '#00ff88' },
           { label: 'DOWN', value: downCount, color: downCount > 0 ? '#ff3366' : '#00ff88' },
+          { label: 'OTHER', value: otherCount, color: otherCount > 0 ? '#ffaa00' : '#8899bb' },
+          { label: 'PHYSICAL', value: physicalCount, color: '#22d3ee' },
           { label: 'Max Speed', value: formatSpeed(maxSpeed), color: '#ffaa00' },
         ].map(tile => (
           <GlassCard key={tile.label} className="p-4 text-center">
@@ -184,7 +218,7 @@ export default function SNMPInterfaceMonitoring() {
                       {formatInterfaceSpeed(iface)}
                     </td>
                     <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      {iface.mac_address ?? iface.mac ?? '—'}
+                      {iface.mac_address ?? iface.mac ?? 'N/A (not advertised)'}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#00ff88' }}>
                       {formatTraffic(iface, 'rx')}

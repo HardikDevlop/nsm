@@ -51,6 +51,7 @@ DEVICE_CREDENTIAL_COLUMNS: dict[str, str] = {
     "privacy_protocol": "VARCHAR(20)",
     "privacy_password": "TEXT",
     "security_level": "VARCHAR(30)",
+    "snmp_port": "INTEGER",
     "ssh_port": "INTEGER",
     "api_token": "TEXT",
 }
@@ -160,6 +161,15 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20260831_0033_incident_automation", description="Add Incident correlation, lifecycle, acknowledgement, recovery, and history"),
     Migration(migration_id="20260901_0034_problem_priority", description="Add Problem priority with a safe default"),
     Migration(migration_id="20260901_0035_problem_timezone", description="Align legacy Problem timestamps with application timezone"),
+    Migration(migration_id="20260902_0036_snmp_port", description="Persist configurable SNMP transport port"),
+    Migration(migration_id="20260902_0037_sflow_counters", description="Persist sFlow generic interface counter samples"),
+    Migration(migration_id="20260902_0038_ipfix_nullable_timestamps", description="Allow IPFIX records to preserve absent flow timestamps"),
+    Migration(migration_id="20260902_0039_alert_interface_identity", description="Persist the SNMP interface identity on interface alerts"),
+    Migration(migration_id="20260902_0040_change_core_workflow", description="Add Change priority, ownership, approval and execution fields"),
+    Migration(migration_id="20260902_0041_change_problem_links", description="Add persisted Change to Problem relationships"),
+    Migration(migration_id="20260902_0042_knowledge_core_workflow", description="Add Knowledge article metadata, lifecycle and audit history"),
+    Migration(migration_id="20260902_0043_knowledge_relationships_usefulness", description="Add Knowledge change, CI, related article and feedback relationships"),
+    Migration(migration_id="20260902_0044_syslog_backend_readiness", description="Complete Syslog receiver, parsing, filtering, rules and retention fields"),
 )
 
 
@@ -379,6 +389,43 @@ def _ensure_flow_records(engine: Engine) -> None:
             'CREATE INDEX IF NOT EXISTS "ix_flow_records_dst_time" '
             'ON flow_records (dst_ip, flow_start DESC)'
         ))
+
+
+def _ensure_sflow_counters(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS sflow_counter_samples (
+                id BIGSERIAL PRIMARY KEY,
+                device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+                exporter_ip VARCHAR(64) NOT NULL,
+                agent_address VARCHAR(64) NOT NULL,
+                sub_agent_id INTEGER NOT NULL,
+                sequence_number BIGINT NOT NULL,
+                if_index INTEGER NOT NULL,
+                interface_name VARCHAR(160),
+                if_type INTEGER NOT NULL,
+                if_speed BIGINT NOT NULL,
+                if_direction INTEGER NOT NULL,
+                if_status INTEGER NOT NULL,
+                if_in_octets BIGINT NOT NULL,
+                if_in_ucast_pkts BIGINT NOT NULL,
+                if_in_multicast_pkts BIGINT NOT NULL,
+                if_in_broadcast_pkts BIGINT NOT NULL,
+                if_in_discards BIGINT NOT NULL,
+                if_in_errors BIGINT NOT NULL,
+                if_out_octets BIGINT NOT NULL,
+                if_out_ucast_pkts BIGINT NOT NULL,
+                if_out_multicast_pkts BIGINT NOT NULL,
+                if_out_broadcast_pkts BIGINT NOT NULL,
+                if_out_discards BIGINT NOT NULL,
+                if_out_errors BIGINT NOT NULL,
+                observed_at TIMESTAMP NOT NULL,
+                raw_fields JSON NOT NULL DEFAULT '{}',
+                record_hash VARCHAR(64) NOT NULL UNIQUE
+            )
+        """))
+        connection.execute(text('CREATE INDEX IF NOT EXISTS "ix_sflow_counter_device_time" ON sflow_counter_samples (device_id, observed_at DESC)'))
+        connection.execute(text('CREATE INDEX IF NOT EXISTS "ix_sflow_counter_exporter_time" ON sflow_counter_samples (exporter_ip, observed_at DESC)'))
 
 
 def _ensure_apm_metrics(engine: Engine) -> None:
@@ -703,14 +750,25 @@ def _ensure_change_tables(engine: Engine) -> None:
                 category VARCHAR(50) NOT NULL,
                 risk VARCHAR(30) NOT NULL,
                 impact VARCHAR(30) NOT NULL,
+                priority VARCHAR(2) NOT NULL DEFAULT 'p3',
                 status VARCHAR(30) NOT NULL DEFAULT 'draft',
                 requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                approved_at TIMESTAMP,
                 approval_comment TEXT,
+                approval_required BOOLEAN NOT NULL DEFAULT FALSE,
+                rejected_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                rejected_at TIMESTAMP,
+                rejection_comment TEXT,
                 maintenance_start TIMESTAMP,
                 maintenance_end TIMESTAMP,
                 implementation_plan TEXT,
                 rollback_plan TEXT,
+                implementation_result TEXT,
+                implementation_failure_reason TEXT,
+                rollback_result TEXT,
+                rollback_status VARCHAR(30),
                 closure_note TEXT,
                 created_at TIMESTAMP NOT NULL,
                 updated_at TIMESTAMP NOT NULL,
@@ -731,6 +789,14 @@ def _ensure_change_tables(engine: Engine) -> None:
                 linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 linked_at TIMESTAMP NOT NULL,
                 CONSTRAINT uq_change_incident UNIQUE (change_id, incident_id)
+            );
+            CREATE TABLE IF NOT EXISTS change_problems (
+                id SERIAL PRIMARY KEY,
+                change_id INTEGER NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+                linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                linked_at TIMESTAMP NOT NULL,
+                CONSTRAINT uq_change_problem UNIQUE (change_id, problem_id)
             );
             CREATE TABLE IF NOT EXISTS change_history (
                 id SERIAL PRIMARY KEY,
@@ -753,8 +819,11 @@ def _ensure_knowledge_tables(engine: Engine) -> None:
         connection.execute(text("""
             CREATE TABLE IF NOT EXISTS knowledge_articles (
                 id SERIAL PRIMARY KEY, number VARCHAR(40) NOT NULL UNIQUE, title VARCHAR(220) NOT NULL,
-                article_type VARCHAR(30) NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'draft', current_version INTEGER NOT NULL DEFAULT 1,
+                summary TEXT, article_type VARCHAR(30) NOT NULL, category VARCHAR(80), tags JSON NOT NULL DEFAULT '[]',
+                status VARCHAR(30) NOT NULL DEFAULT 'draft', current_version INTEGER NOT NULL DEFAULT 1,
                 created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, published_at TIMESTAMP,
+                view_count INTEGER NOT NULL DEFAULT 0, helpful_count INTEGER NOT NULL DEFAULT 0, not_helpful_count INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
             );
             CREATE TABLE IF NOT EXISTS knowledge_article_versions (
@@ -781,6 +850,32 @@ def _ensure_knowledge_tables(engine: Engine) -> None:
                 id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
                 service_id INTEGER NOT NULL REFERENCES apm_services(id) ON DELETE CASCADE, linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 linked_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_service UNIQUE(article_id, service_id)
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_article_history (
+                id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                action VARCHAR(60) NOT NULL, actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                metadata_json JSON, created_at TIMESTAMP NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_change_links (
+                id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                change_id INTEGER NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE, linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                linked_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_change UNIQUE(article_id, change_id)
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_ci_links (
+                id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                ci_id INTEGER NOT NULL REFERENCES cmdb_configuration_items(id) ON DELETE CASCADE, linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                linked_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_ci UNIQUE(article_id, ci_id)
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_related_links (
+                id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                related_article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE, linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                linked_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_related UNIQUE(article_id, related_article_id),
+                CONSTRAINT chk_knowledge_related_not_self CHECK(article_id <> related_article_id)
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_feedback (
+                id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, helpful BOOLEAN NOT NULL,
+                created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_feedback_user UNIQUE(article_id, user_id)
             );
         """))
         connection.execute(text('CREATE INDEX IF NOT EXISTS "ix_knowledge_search" ON knowledge_articles (status, article_type, title)'))
@@ -886,6 +981,89 @@ def run_migrations(engine: Engine) -> list[str]:
                 connection.execute(text("UPDATE problems SET created_at = created_at + INTERVAL '5 hours 30 minutes', updated_at = updated_at + INTERVAL '5 hours 30 minutes', closed_at = closed_at + INTERVAL '5 hours 30 minutes' WHERE created_at IS NOT NULL"))
                 connection.execute(text("UPDATE problem_incidents SET linked_at = linked_at + INTERVAL '5 hours 30 minutes' WHERE linked_at IS NOT NULL"))
                 connection.execute(text("UPDATE problem_history SET created_at = created_at + INTERVAL '5 hours 30 minutes' WHERE created_at IS NOT NULL"))
+        elif migration.migration_id == "20260902_0036_snmp_port":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE device_credentials ADD COLUMN IF NOT EXISTS snmp_port INTEGER"))
+        elif migration.migration_id == "20260902_0037_sflow_counters":
+            _ensure_sflow_counters(engine)
+        elif migration.migration_id == "20260902_0038_ipfix_nullable_timestamps":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE flow_records ALTER COLUMN flow_start DROP NOT NULL"))
+                connection.execute(text("ALTER TABLE flow_records ALTER COLUMN flow_end DROP NOT NULL"))
+        elif migration.migration_id == "20260902_0039_alert_interface_identity":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE alerts ADD COLUMN IF NOT EXISTS interface_id INTEGER REFERENCES interfaces(id) ON DELETE SET NULL"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_interface_status ON alerts (interface_id, status)"))
+        elif migration.migration_id == "20260902_0040_change_core_workflow":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS priority VARCHAR(2) NOT NULL DEFAULT 'p3'"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS approval_required BOOLEAN NOT NULL DEFAULT FALSE"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS rejected_by INTEGER REFERENCES users(id) ON DELETE SET NULL"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS rejection_comment TEXT"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS implementation_result TEXT"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS implementation_failure_reason TEXT"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS rollback_result TEXT"))
+                connection.execute(text("ALTER TABLE change_requests ADD COLUMN IF NOT EXISTS rollback_status VARCHAR(30)"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_change_owner_status ON change_requests (owner_id, status)"))
+        elif migration.migration_id == "20260902_0041_change_problem_links":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS change_problems (
+                    id SERIAL PRIMARY KEY,
+                    change_id INTEGER NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                    problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+                    linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    linked_at TIMESTAMP NOT NULL,
+                    CONSTRAINT uq_change_problem UNIQUE (change_id, problem_id)
+                )"""))
+                connection.execute(text('CREATE INDEX IF NOT EXISTS ix_change_problem_change ON change_problems (change_id)'))
+                connection.execute(text('CREATE INDEX IF NOT EXISTS ix_change_problem_problem ON change_problems (problem_id)'))
+        elif migration.migration_id == "20260902_0042_knowledge_core_workflow":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE knowledge_articles ADD COLUMN IF NOT EXISTS summary TEXT"))
+                connection.execute(text("ALTER TABLE knowledge_articles ADD COLUMN IF NOT EXISTS category VARCHAR(80)"))
+                connection.execute(text("ALTER TABLE knowledge_articles ADD COLUMN IF NOT EXISTS tags JSON NOT NULL DEFAULT '[]'"))
+                connection.execute(text("ALTER TABLE knowledge_articles ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL"))
+                connection.execute(text("ALTER TABLE knowledge_articles ADD COLUMN IF NOT EXISTS published_at TIMESTAMP"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_owner_status ON knowledge_articles (owner_id, status)"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_category ON knowledge_articles (category)"))
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS knowledge_article_history (
+                    id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                    action VARCHAR(60) NOT NULL, actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    metadata_json JSON, created_at TIMESTAMP NOT NULL
+                )"""))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_history_article_time ON knowledge_article_history (article_id, created_at)"))
+        elif migration.migration_id == "20260902_0043_knowledge_relationships_usefulness":
+            with engine.begin() as connection:
+                for column in (
+                    "view_count INTEGER NOT NULL DEFAULT 0",
+                    "helpful_count INTEGER NOT NULL DEFAULT 0",
+                    "not_helpful_count INTEGER NOT NULL DEFAULT 0",
+                ):
+                    connection.execute(text(f"ALTER TABLE knowledge_articles ADD COLUMN IF NOT EXISTS {column}"))
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS knowledge_change_links (
+                    id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                    change_id INTEGER NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE, linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    linked_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_change UNIQUE(article_id, change_id)
+                )"""))
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS knowledge_ci_links (
+                    id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                    ci_id INTEGER NOT NULL REFERENCES cmdb_configuration_items(id) ON DELETE CASCADE, linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    linked_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_ci UNIQUE(article_id, ci_id)
+                )"""))
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS knowledge_related_links (
+                    id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                    related_article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE, linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    linked_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_related UNIQUE(article_id, related_article_id),
+                    CONSTRAINT chk_knowledge_related_not_self CHECK(article_id <> related_article_id)
+                )"""))
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS knowledge_feedback (
+                    id SERIAL PRIMARY KEY, article_id INTEGER NOT NULL REFERENCES knowledge_articles(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, helpful BOOLEAN NOT NULL,
+                    created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, CONSTRAINT uq_knowledge_feedback_user UNIQUE(article_id, user_id)
+                )"""))
         elif migration.migration_id == "20260829_0019_change_management":
             _ensure_change_tables(engine)
         elif migration.migration_id == "20260829_0020_knowledge_base":
@@ -963,10 +1141,22 @@ def run_migrations(engine: Engine) -> list[str]:
                 connection.execute(text("""CREATE TABLE IF NOT EXISTS bgp_observations (id SERIAL PRIMARY KEY, device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE, neighbor VARCHAR(64) NOT NULL, state VARCHAR(40) NOT NULL, remote_as INTEGER, next_hop VARCHAR(64), prefixes INTEGER NOT NULL DEFAULT 0, as_path VARCHAR(1000), observed_at TIMESTAMP NOT NULL, raw_fields JSON NOT NULL DEFAULT '{}')"""))
         elif migration.migration_id == "20260829_0028_syslog_records":
             with engine.begin() as connection:
-                connection.execute(text("""CREATE TABLE IF NOT EXISTS syslog_records (id SERIAL PRIMARY KEY, device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL, source_ip VARCHAR(64), facility INTEGER, severity INTEGER, hostname VARCHAR(255), event_timestamp TIMESTAMP NOT NULL, message TEXT NOT NULL, raw_message TEXT NOT NULL, received_at TIMESTAMP NOT NULL)"""))
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS syslog_records (id SERIAL PRIMARY KEY, device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL, source_ip VARCHAR(64), facility INTEGER, severity INTEGER, hostname VARCHAR(255), application VARCHAR(48), process_id VARCHAR(128), message_id VARCHAR(32), structured_data TEXT, event_timestamp TIMESTAMP, message TEXT NOT NULL, raw_message TEXT NOT NULL, received_at TIMESTAMP NOT NULL, fingerprint VARCHAR(64))"""))
         elif migration.migration_id == "20260829_0029_syslog_correlation":
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE syslog_records ADD COLUMN IF NOT EXISTS interface_id INTEGER REFERENCES interfaces(id) ON DELETE SET NULL; ALTER TABLE syslog_records ADD COLUMN IF NOT EXISTS alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL; ALTER TABLE syslog_records ADD COLUMN IF NOT EXISTS incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL; CREATE TABLE IF NOT EXISTS syslog_correlation_rules (id SERIAL PRIMARY KEY, name VARCHAR(160) UNIQUE NOT NULL, pattern VARCHAR(500) NOT NULL, min_severity INTEGER, alert_severity VARCHAR(30) NOT NULL DEFAULT 'warning', cooldown_seconds INTEGER NOT NULL DEFAULT 300, enabled BOOLEAN NOT NULL DEFAULT TRUE, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMP NOT NULL)"))
+        elif migration.migration_id == "20260902_0044_syslog_backend_readiness":
+            with engine.begin() as connection:
+                for column in (
+                    "application VARCHAR(48)", "process_id VARCHAR(128)", "message_id VARCHAR(32)",
+                    "structured_data TEXT", "fingerprint VARCHAR(64)",
+                ):
+                    connection.execute(text(f"ALTER TABLE syslog_records ADD COLUMN IF NOT EXISTS {column}"))
+                connection.execute(text("ALTER TABLE syslog_records ALTER COLUMN event_timestamp DROP NOT NULL"))
+                for column in ("device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL", "source_ip VARCHAR(64)", "hostname VARCHAR(255)", "facility INTEGER", "application VARCHAR(48)"):
+                    connection.execute(text(f"ALTER TABLE syslog_correlation_rules ADD COLUMN IF NOT EXISTS {column}"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_syslog_fingerprint_received ON syslog_records (fingerprint, received_at)"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_syslog_hostname ON syslog_records (hostname)"))
         elif migration.migration_id == "20260831_0030_cmdb_reconciliation":
             _ensure_cmdb_reconciliation(engine)
         else:

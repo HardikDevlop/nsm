@@ -1,10 +1,12 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import GlassCard from '../components/GlassCard'
-import { listDevices, persistSNMPTopologySnapshot, pingIps, requestJson, updateDevice, type DeviceRecord } from '../lib/api'
+import { persistSNMPTopologySnapshot, requestJson, updateDevice, type DeviceRecord } from '../lib/api'
+import { agnigateLabel, isAgnigateMac } from '../lib/deviceIdentity'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '../lib/queryProvider'
+import { useI18n } from '../i18n/I18nContext'
 
-type DeviceType = 'gateway' | 'router' | 'firewall' | 'switch' | 'access-point' | 'server' | 'endpoint' | 'unknown'
+type DeviceType = 'gateway' | 'router' | 'firewall' | 'switch' | 'access-point' | 'server' | 'endpoint' | 'cpu' | 'port-summary' | 'unknown'
 type DeviceStatus = 'online' | 'warning' | 'offline' | 'unknown'
 
 type GraphNode = {
@@ -97,6 +99,9 @@ type TopologyNodeDetails = {
 type HoverPreview = {
   title: string
   lines: string[]
+  x: number
+  y: number
+  above: boolean
 }
 
 type PanState = {
@@ -112,7 +117,8 @@ type PanState = {
 }
 
 const MIN_ZOOM = 0.55
-const MAX_ZOOM = 2.5
+const DEFAULT_FIT_MAX_ZOOM = 2.5
+const MAX_ZOOM = 4
 const VIEW_STATE_KEY = 'topology-view-state-v1'
 
 type SavedViewState = {
@@ -141,6 +147,10 @@ const str = (...values: any[]) => {
 }
 
 const lower = (...values: any[]) => str(...values).toLowerCase()
+const destinationPortLabel = (value: any) => {
+  const port = str(value)
+  return !port || lower(port).includes('unknown') ? '1' : port
+}
 const cleanMac = (...values: any[]) => lower(values.find(value => value !== undefined && value !== null)).replace(/[^a-f0-9]/g, '')
 const isMac = (value: any) => cleanMac(value).length === 12
 const displayMac = (value: any) => {
@@ -149,6 +159,14 @@ const displayMac = (value: any) => {
 }
 const unique = <T,>(values: T[]) => [...new Set(values)]
 const portKey = (value: any) => lower(value).replace(/^(gigabitethernet|fastethernet|tengigabitethernet|ethernet|gi|ge|fa|te)/, '')
+function ipSortKey(value: unknown): [number, ...Array<number | string>] {
+  const text = String(value)
+  const parts = text.split('.')
+  if (parts.length === 4 && parts.every(part => /^\d+$/.test(part))) {
+    return [0, ...parts.map(Number)]
+  }
+  return [1, text]
+}
 const isDefaultRoute = (value: any) => ['0.0.0.0/0', '0/0', '::/0', 'default', '0.0.0.0'].includes(lower(value))
 const CLOSED_PORT_STATES = ['down', 'closed', 'disabled', 'inactive', 'err-disabled', 'failed', 'offline']
 
@@ -166,6 +184,26 @@ const isOpenPortLink = (link: GraphLink) => {
   return !status || !CLOSED_PORT_STATES.some(state => status === state || status.includes(state))
 }
 
+// A learned MAC on a port is a connected-port signal even when the separate
+// interface snapshot is stale or reports that port down. PORT SUMMARY follows
+// the learned MAC table, so topology must use the same rule for MAC/ARP links.
+const isRenderableConnectedLink = (link: GraphLink) =>
+  link.source === 'MAC/ARP' ? !link.gatewayPath : isOpenPortLink(link)
+
+function findCoreNode(nodes: GraphNode[], links: GraphLink[]): GraphNode | undefined {
+  const candidates = nodes.filter(node => node.type === 'switch' && lower(node.hostname).includes('core'))
+  const switches = candidates.length ? candidates : nodes.filter(node => node.type === 'switch')
+  if (!switches.length) return undefined
+  const degree = (node: GraphNode) => links.reduce((count, link) =>
+    count + (String(link.from) === String(node.id) || String(link.to) === String(node.id) ? 1 : 0), 0)
+  // Prefer the canonical managed/inventory node over an IP-less persisted
+  // alias. If the persisted node type is misleading, the highest-degree
+  // switch is the actual core/root rather than an endpoint MAC node.
+  return [...switches].sort((left, right) =>
+    degree(right) - degree(left) || Number(Boolean(right.ip)) - Number(Boolean(left.ip))
+  )[0]
+}
+
 function classifyDevice(raw: any, fallback: DeviceType = 'unknown'): DeviceType {
   const explicit = lower(raw?.device_type || raw?.type || raw?.category)
   const value = `${explicit} ${lower(raw?.vendor || raw?.manufacturer)} ${lower(raw?.hostname || raw?.name)}`
@@ -174,6 +212,7 @@ function classifyDevice(raw: any, fallback: DeviceType = 'unknown'): DeviceType 
   if (explicit.includes('router') || value.includes('router')) return 'router'
   if (explicit.includes('access') || explicit.includes('wireless') || value.includes('access point') || value.includes('wireless')) return 'access-point'
   if (explicit.includes('switch') || value.includes('switch') || value.includes('cisco catalyst')) return 'switch'
+  if (value.includes('nvr') || value.includes('camera') || value.includes('cctv')) return 'endpoint'
   if (explicit.includes('server') || value.includes('server') || value.includes('linux')) return 'server'
   if (explicit.includes('endpoint') || explicit.includes('host')) return 'endpoint'
   return fallback
@@ -191,7 +230,9 @@ function makeNode(raw: any, fallbackId: string, forcedType?: DeviceType): GraphN
   const metadata = raw?.topology_metadata || {}
   const ip = str(raw?.ip_address, raw?.ip, raw?.management_ip, raw?.managementIp)
   const mac = displayMac(str(raw?.mac_address, raw?.mac, raw?.chassis_mac, raw?.chassisMac))
-  const hostname = str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, raw?.display_name, ip, mac, 'UNKNOWN')
+  const hostname = isAgnigateMac(mac)
+    ? agnigateLabel(str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, raw?.display_name, ip, mac, 'UNKNOWN'))
+    : str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, raw?.display_name, ip, mac, 'UNKNOWN')
   return {
     id: str(raw?.id, raw?.device_id, raw?.node_id, fallbackId),
     hostname,
@@ -225,6 +266,29 @@ function normalizeGraphNode(raw: any, fallbackId: string): GraphNode {
   }
 }
 
+function normalizePersistedLink(raw: any, index: number): GraphLink | null {
+  const from = str(raw?.from, raw?.source_node, raw?.source, raw?.source_id)
+  const to = str(raw?.to, raw?.target_node, raw?.target, raw?.target_id)
+  if (!from || !to) return null
+  const sourceValue = lower(raw?.source, raw?.protocol)
+  const source: GraphLink['source'] = sourceValue.includes('arp') || sourceValue.includes('mac')
+    ? 'MAC/ARP'
+    : sourceValue.includes('routing') || sourceValue.includes('route')
+      ? 'ROUTING'
+      : 'LLDP/CDP'
+  return {
+    ...raw,
+    id: str(raw?.id, `persisted-link-${index}`),
+    from,
+    to,
+    localPort: str(raw?.localPort, raw?.local_port, raw?.source_port),
+    remotePort: str(raw?.remotePort, raw?.remote_port, raw?.target_port),
+    status: raw?.status,
+    source,
+    confidence: raw?.confidence === 'INFERRED' || raw?.verified === false ? 'INFERRED' : 'CONFIRMED',
+  }
+}
+
 function unwrapRows(payload: any, keys: string[]): any[] {
   if (Array.isArray(payload)) return payload
   for (const key of keys) {
@@ -247,19 +311,19 @@ function inventoryMatch(raw: any, inventory: DeviceRecord[]): DeviceRecord | und
   )
 }
 
-async function collectModule(deviceId: number, module: string): Promise<any> {
+async function collectModule(deviceId: number, module: string, fresh = false): Promise<any> {
   const endpoint = module === 'mac' ? 'mac-table' : module
-  return requestJson<any>(`/snmp/devices/${deviceId}/${endpoint}`)
+  return requestJson<any>(`/snmp/devices/${deviceId}/${endpoint}`, fresh ? { cache: 'no-store' } : undefined)
 }
 
-async function collectDevice(device: GraphNode): Promise<DeviceCollection> {
+async function collectDevice(device: GraphNode, fresh = false): Promise<DeviceCollection> {
   const deviceId = Number(device.id)
   const results = await Promise.allSettled([
-    collectModule(deviceId, 'mac'),
-    collectModule(deviceId, 'arp'),
-    collectModule(deviceId, 'lldp'),
-    collectModule(deviceId, 'routing'),
-    collectModule(deviceId, 'interfaces'),
+    collectModule(deviceId, 'mac', fresh),
+    collectModule(deviceId, 'arp', fresh),
+    collectModule(deviceId, 'lldp', fresh),
+    collectModule(deviceId, 'routing', fresh),
+    collectModule(deviceId, 'interfaces', fresh),
   ])
   const value = (index: number) => results[index].status === 'fulfilled' ? results[index].value : null
   const mac = value(0)
@@ -327,12 +391,43 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
   const addNode = (node: GraphNode) => {
     const existing = byIdentity(node)
     if (existing) {
+      // Persisted snapshots can contain the same port aggregate with an old
+      // first-MAC label. The current MAC/ARP collection is authoritative for
+      // aggregate identity and must refresh its label and member lists.
+      if (String(node.id).startsWith('port-') && existing.id === node.id) {
+        existing.hostname = node.hostname
+        existing.ip = node.ip
+        existing.mac = node.mac
+        existing.port = node.port
+        existing.macCount = node.macCount
+        existing.macs = node.macs
+        existing.ips = node.ips
+        existing.vlans = node.vlans
+      }
       existing.ip ||= node.ip
       existing.mac ||= node.mac
       existing.vendor ||= node.vendor
       existing.model ||= node.model
       if (existing.type === 'unknown' && node.type !== 'unknown') existing.type = node.type
       byId.set(existing.id, existing)
+      return existing
+    }
+    nodes.push(node)
+    byId.set(node.id, node)
+    return node
+  }
+  const addSyntheticNode = (node: GraphNode) => {
+    const existing = nodes.find(candidate =>
+      candidate.id === node.id ||
+      (node.type === 'cpu' && candidate.type === 'cpu' && cleanMac(candidate.mac) === cleanMac(node.mac))
+    )
+    if (existing) {
+      existing.ip ||= node.ip
+      existing.mac ||= node.mac
+      existing.macCount = Math.max(existing.macCount || 0, node.macCount || 0)
+      existing.macs = unique([...(existing.macs || []), ...(node.macs || [])])
+      existing.ips = unique([...(existing.ips || []), ...(node.ips || [])])
+      existing.vlans = unique([...(existing.vlans || []), ...(node.vlans || [])])
       return existing
     }
     nodes.push(node)
@@ -349,22 +444,52 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
     .map((device, index) => makeNode(device, `inventory-${index}`))
     .forEach(addNode)
   topologyNodes
+    // Port aggregates are rebuilt from the current MAC/ARP collections below.
+    // Never seed them from an older persisted snapshot, otherwise the first
+    // MAC label can survive even after the primary managed device changes.
+    .filter((raw: any) => !String(raw?.id || '').startsWith('port-'))
     .map((raw: any, index: number) => {
       const inventoryDevice = inventoryMatch(raw, inventory)
       return inventoryDevice
-        ? makeNode({ ...inventoryDevice, ...raw, id: inventoryDevice.id }, `managed-${index}`)
+        // The DB inventory is authoritative for a managed device identity.
+        // A persisted topology node may carry a learned port MAC instead of
+        // the device chassis MAC and must not overwrite the DB MAC by IP.
+        ? makeNode(inventoryDevice, `managed-${index}`)
         : makeNode(raw, `topology-${index}`)
     })
     .forEach(addNode)
 
   const links: GraphLink[] = []
-  const linkKeys = new Set<string>()
+  const linkPairs = new Map<string, number>()
   const addLink = (link: GraphLink) => {
     if (!link.from || !link.to || link.from === link.to) return
-    const key = [link.from, link.to, link.localPort || '', link.remotePort || '', link.source].join('|')
-    const reverse = [link.to, link.from, link.remotePort || '', link.localPort || '', link.source].join('|')
-    if (linkKeys.has(key) || linkKeys.has(reverse)) return
-    linkKeys.add(key)
+    // LLDP/CDP and MAC/ARP can describe the same device pair. They must not
+    // become two visual lines just because their source/port metadata differs.
+    const key = [String(link.from), String(link.to)].sort().join('|')
+    const existingIndex = linkPairs.get(key)
+    if (existingIndex !== undefined) {
+      const existing = links[existingIndex]
+      if (link.source === 'MAC/ARP' && link.localPort) {
+        // Port Summary is authoritative for the monitored switch-side port.
+        // Keep that port even when LLDP supplied a neighbor-side eth0 link
+        // for the same device pair.
+        links[existingIndex] = {
+          ...existing,
+          localPort: link.localPort,
+          macCount: link.macCount || existing.macCount,
+        }
+        return
+      }
+      if (existing.confidence !== 'CONFIRMED' && link.confidence === 'CONFIRMED') {
+        links[existingIndex] = {
+          ...link,
+          localPort: existing.localPort || link.localPort,
+          macCount: existing.macCount || link.macCount,
+        }
+      }
+      return
+    }
+    linkPairs.set(key, links.length)
     links.push(link)
   }
 
@@ -381,14 +506,16 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
       (lldp.remoteMac && cleanMac(raw.mac, raw.mac_address) === cleanMac(lldp.remoteMac)) ||
       (lldp.remoteHostname && lower(str(raw.hostname, raw.sys_name)) === lower(lldp.remoteHostname))
     )
-    if (topologyRaw) return addNode(makeNode(topologyRaw, `neighbor-${fallbackIndex}`, 'switch'))
+    if (topologyRaw) return addNode(makeNode(topologyRaw, `neighbor-${fallbackIndex}`, classifyDevice(topologyRaw, 'unknown')))
     if (!lldp.remoteHostname && !lldp.remoteIp && !lldp.remoteMac) return undefined
     return addNode(makeNode({
       id: `neighbor-${cleanMac(lldp.remoteMac) || lldp.remoteIp || lower(lldp.remoteHostname)}`,
-      hostname: lldp.remoteHostname || lldp.remoteIp || displayMac(lldp.remoteMac),
+      hostname: isAgnigateMac(lldp.remoteMac)
+        ? agnigateLabel(lldp.remoteHostname || lldp.remoteIp || displayMac(lldp.remoteMac))
+        : lldp.remoteHostname || lldp.remoteIp || displayMac(lldp.remoteMac),
       ip: lldp.remoteIp,
       mac: lldp.remoteMac,
-      device_type: 'switch',
+      device_type: classifyDevice({ hostname: lldp.remoteHostname }, 'unknown'),
     }, `neighbor-${fallbackIndex}`, 'switch'))
   }
 
@@ -396,6 +523,12 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
   collections.forEach((item, itemIndex) => {
     const local = managedFor(item)
     item.lldpNeighbors.map(normalizeLldp).forEach((lldp, index) => {
+      const sameIp = Boolean(lldp.remoteIp && local.ip && lldp.remoteIp === local.ip)
+      const sameMac = Boolean(lldp.remoteMac && local.mac && cleanMac(lldp.remoteMac) === cleanMac(local.mac))
+      const sameHostname = Boolean(lldp.remoteHostname && local.hostname && lower(lldp.remoteHostname) === lower(local.hostname))
+      // Some NVR/endpoint LLDP agents report their own eth0 as the remote
+      // neighbor. Never turn that self-advertisement into a switch link.
+      if (sameIp || sameMac || sameHostname) return
       const remote = remoteFor(lldp, itemIndex * 100 + index)
       if (!remote) return
       const iface = item.interfaces.find((row: any) => {
@@ -419,7 +552,7 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
 
   // Use verified links returned by the topology endpoint only as a fallback
   // when the direct LLDP response did not expose the same row.
-  topologyLinks.filter((link: any) => link?.verified === true).forEach((link: any, index: number) => {
+  topologyLinks.filter((link: any) => link?.verified === true && !lower(link?.protocol, link?.source).includes('routing')).forEach((link: any, index: number) => {
     const source = byIdentity({ id: str(link.source_node, link.source) })
     const target = byIdentity({ id: str(link.target_node, link.target), ip: link.target_ip })
     if (!source || !target) return
@@ -443,25 +576,50 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
     if (mac) arpByMac.set(mac, entry)
   }))
 
-  const lldpPortByDevice = new Map<string, Set<string>>()
-  links.filter(link => link.source === 'LLDP/CDP').forEach(link => {
-    const values = lldpPortByDevice.get(link.from) || new Set<string>()
-    if (link.localPort) values.add(portKey(link.localPort))
-    lldpPortByDevice.set(link.from, values)
-  })
-
   // One node per physical port. A port with many MACs remains expandable via
   // the details panel instead of creating dozens of fake physical links.
   collections.forEach(item => {
     const parent = managedFor(item)
-    const groups = item.portGroups.length ? item.portGroups : groupMacEntries(item.macEntries)
+    // Some persisted collectors update entries and port_groups separately.
+    // Merge both DB-backed shapes so a newly learned port cannot disappear
+    // just because the grouped projection is one poll behind.
+    const groupsByPort = new Map<string, any>()
+    const selfMacs = new Set(
+      item.macEntries
+        .filter((entry: any) => lower(entry?.status) === 'self')
+        .map((entry: any) => cleanMac(entry?.mac, entry?.mac_address))
+        .filter(Boolean),
+    )
+    ;[
+      ...item.portGroups,
+      ...groupMacEntries(item.macEntries.filter((entry: any) => lower(entry?.status) !== 'self')),
+    ].forEach((candidate: any) => {
+      const learnedMacs = (candidate.macs || []).filter((mac: any) => !selfMacs.has(cleanMac(mac)))
+      if (!learnedMacs.length) return
+      const candidatePort = str(candidate.port, candidate.if_index, candidate.ifIndex, candidate.interface)
+      const key = portKey(candidatePort)
+      if (!key) return
+      const existing = groupsByPort.get(key)
+      if (!existing) {
+        groupsByPort.set(key, { ...candidate, macs: [...learnedMacs], ip_addresses: [...(candidate.ip_addresses || candidate.ips || [])], vlans: [...(candidate.vlans || [])] })
+        return
+      }
+      existing.macs = unique([...(existing.macs || []), ...learnedMacs])
+      existing.ip_addresses = unique([...(existing.ip_addresses || []), ...(candidate.ip_addresses || candidate.ips || [])])
+      existing.vlans = unique([...(existing.vlans || []), ...(candidate.vlans || [])])
+      existing.classification ||= candidate.classification
+    })
+    const groups = [...groupsByPort.values()]
     groups.forEach((group: any) => {
       const port = str(group.port, group.if_index, group.ifIndex, group.interface)
-      if (!port || lldpPortByDevice.get(parent.id)?.has(portKey(port))) return
+      const classification = lower(group.classification, group.class, group.port_type)
+      // Use the collector's PORT SUMMARY classification. LLDP alone is not
+      // enough to hide a port because an endpoint may also advertise LLDP.
+      if (!port || classification.includes('uplink') || classification.includes('trunk')) return
       const groupMacs = unique([
         ...(Array.isArray(group.macs) ? group.macs : []),
         ...item.macEntries.filter(entry => portKey(str(entry.port, entry.if_index)) === portKey(port)).map(entry => str(entry.mac, entry.mac_address)),
-      ].filter(isMac).map(displayMac))
+      ].filter(isMac).map(displayMac).sort())
       if (!groupMacs.length) return
       const entries = item.macEntries.filter(entry => groupMacs.some(mac => cleanMac(mac) === cleanMac(entry.mac)))
       const ips = unique([
@@ -471,45 +629,69 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
           const arp = arpByMac.get(cleanMac(mac))
           return arp ? [str(arp.ip_address, arp.ip)] : []
         }),
-      ].flat().filter(Boolean).map(String))
+      ].flat().filter(Boolean).map(String)).sort((left, right) =>
+        JSON.stringify(ipSortKey(left)).localeCompare(JSON.stringify(ipSortKey(right)), undefined, { numeric: true }),
+      )
       const vlans = unique([
         ...(Array.isArray(group.vlans) ? group.vlans : []),
         ...entries.map(entry => entry.vlan_id ?? entry.vlan).filter((value: any) => value !== undefined && value !== null),
       ])
-      const firstArp = arpByMac.get(cleanMac(groupMacs[0]))
-      const single = groupMacs.length === 1
-      const endpointId = `port-${parent.id}-${portKey(port)}`
-      const endpointCandidate: GraphNode = {
-        id: endpointId,
-        hostname: single ? str(firstArp?.hostname, firstArp?.host_name, ips[0], groupMacs[0]) : `Port ${port} · ${groupMacs.length} MACs`,
-        ip: single ? str(ips[0]) : '',
-        mac: single ? groupMacs[0] : '',
-        type: 'endpoint',
-        status: statusOf(group),
-        port,
-        macCount: groupMacs.length,
-        macs: groupMacs,
-        ips,
-        vlans,
-      }
+      // Use a stable machine identity for aggregate groups. ARP hostnames and
+      // raw walk order can change between polls, while sorted IP/MAC values do
+      // not cause the same topology card to rename itself.
+      const resolvedIp = ips[0] || ''
       // A managed row can describe the same host without a MAC address. In
       // that case identity matching cannot join it to the port group, so
       // correlate the endpoint using the IPs learned from ARP as well.
-      const correlatedEndpoint = nodes.find(node =>
-        node.id !== parent.id &&
-        ['unknown', 'endpoint', 'server'].includes(node.type) &&
-        (ips.some(ip => ip === node.ip || (node.ips || []).includes(ip)) ||
-          groupMacs.some(mac => cleanMac(mac) === cleanMac(node.mac) || (node.macs || []).some(value => cleanMac(value) === cleanMac(mac))))
-      )
-      const endpoint = correlatedEndpoint || addNode(endpointCandidate)
+      // Prefer an exact learned MAC/IP from the managed inventory as the
+      // primary endpoint for a multi-MAC port. MAC/IP evidence is stronger
+      // than the inventory type because APs are often stored as unknown or
+      // generic network devices. The remaining learned hosts stay in the
+      // port details.
+      const correlatedEndpoint = nodes
+        .filter(node => node.id !== parent.id)
+        .map(node => {
+          const exactMac = groupMacs.some(mac => cleanMac(mac) === cleanMac(node.mac))
+          const exactIp = ips.some(ip => ip === node.ip || (node.ips || []).includes(ip))
+          return { node, score: exactMac ? 100 : exactIp ? 80 : 0, exactMac, exactIp }
+        })
+        .filter(candidate => candidate.score > 0)
+        .sort((left, right) => right.score - left.score || Number(left.node.id) - Number(right.node.id))[0]
+      const parentMac = cleanMac(parent.mac)
+      const isSelfMac = Boolean(parentMac) && groupMacs.some(mac => cleanMac(mac) === parentMac)
+      // The switch's own FDB entry is not a connected endpoint. Do not render
+      // it as a fake CPU/device node or create a self-link.
+      if (isSelfMac) return
+      const endpointCandidate: GraphNode = {
+              id: `port-${parent.id}-${portKey(port)}`,
+        hostname: groupMacs.length > 1 ? `Port ${port} (${groupMacs.length} MACs)` : (groupMacs[0] || resolvedIp || 'MAC UNKNOWN'),
+        ip: groupMacs.length === 1 ? resolvedIp : '',
+        mac: groupMacs.length === 1 ? groupMacs[0] : '',
+              type: 'endpoint',
+              status: statusOf(group),
+              port,
+              macCount: groupMacs.length,
+              macs: groupMacs,
+              ips,
+              vlans,
+            }
+      const endpoint = correlatedEndpoint ? correlatedEndpoint.node : addNode(endpointCandidate)
       if (correlatedEndpoint) {
-        correlatedEndpoint.type = correlatedEndpoint.type === 'unknown' ? 'endpoint' : correlatedEndpoint.type
-        correlatedEndpoint.port ||= port
-        correlatedEndpoint.mac ||= endpointCandidate.mac
-        correlatedEndpoint.macCount ||= endpointCandidate.macCount
-        correlatedEndpoint.macs ||= endpointCandidate.macs
-        correlatedEndpoint.ips ||= endpointCandidate.ips
-        correlatedEndpoint.vlans ||= endpointCandidate.vlans
+        const primaryMac = correlatedEndpoint.exactMac
+          ? groupMacs.find(mac => cleanMac(mac) === cleanMac(correlatedEndpoint.node.mac))
+          : correlatedEndpoint.node.mac || groupMacs[0]
+        const primaryIp = correlatedEndpoint.exactIp
+          ? ips.find(ip => ip === correlatedEndpoint.node.ip || (correlatedEndpoint.node.ips || []).includes(ip))
+          : correlatedEndpoint.node.ip || resolvedIp
+        correlatedEndpoint.node.type = correlatedEndpoint.node.type === 'unknown' ? 'endpoint' : correlatedEndpoint.node.type
+        correlatedEndpoint.node.hostname = primaryMac || primaryIp || correlatedEndpoint.node.hostname
+        correlatedEndpoint.node.ip = primaryIp || ''
+        correlatedEndpoint.node.mac = primaryMac || ''
+        correlatedEndpoint.node.port = port
+        correlatedEndpoint.node.macCount = groupMacs.length
+        correlatedEndpoint.node.macs = groupMacs
+        correlatedEndpoint.node.ips = ips
+        correlatedEndpoint.node.vlans = vlans
       }
       const iface = item.interfaces.find((row: any) => portKey(str(row.ifIndex, row.if_index, row.name, row.if_name, row.interface_name)) === portKey(port)) || {}
       addLink({
@@ -526,73 +708,6 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
       })
     })
   })
-
-  // Older stored snapshots may contain the host IP but omit the ARP/MAC
-  // correlation for its port group. Preserve the known Core-switch Port 1
-  // relationship for this managed host instead of leaving it floating.
-  const device192 = nodes.find(node => node.ip === '192.168.100.10')
-  const coreForDevice192 = nodes.find(node => node.type === 'switch' && lower(node.hostname).includes('core'))
-    || nodes.find(node => node.type === 'switch')
-  if (device192 && coreForDevice192 && !links.some(link =>
-    link.from === device192.id || link.to === device192.id
-  )) {
-    addLink({
-      id: `port-${coreForDevice192.id}-1-device-192-168-100-10`,
-      from: coreForDevice192.id,
-      to: device192.id,
-      localPort: '1',
-      status: 'up',
-      source: 'MAC/ARP',
-      confidence: 'INFERRED',
-      macCount: device192.macCount,
-    })
-  }
-
-  // A default route is a real upstream relationship; it is not an invented
-  // device-to-device link. Use the next-hop IP and mark the path explicitly.
-  collections.forEach(item => {
-    const local = managedFor(item)
-    item.routes.filter(route => isDefaultRoute(str(route.destination, route.prefix, route.network, route.route)) && str(route.next_hop, route.nextHop, route.gateway, route.gateway_ip)).forEach((route, index) => {
-      const nextHop = str(route.next_hop, route.nextHop, route.gateway, route.gateway_ip)
-      const existing = inventory.find(device => device.ip_address === nextHop)
-      const gateway = existing
-        ? addNode(makeNode(existing, `managed-${existing.id}`, 'gateway'))
-        : addNode(makeNode({ id: `gateway-${nextHop}`, hostname: `Gateway ${nextHop}`, ip: nextHop, device_type: 'gateway' }, `gateway-${nextHop}`, 'gateway'))
-      addLink({
-        id: `route-${local.id}-${gateway.id}-${index}`,
-        from: local.id,
-        to: gateway.id,
-        localPort: str(route.interface, route.interface_name),
-        status: 'up',
-        source: 'ROUTING',
-        confidence: 'CONFIRMED',
-        gatewayPath: true,
-      })
-    })
-  })
-
-  // Some gateways do not advertise LLDP/CDP, but the inventory still knows
-  // both devices. Keep the physical flow readable without presenting this
-  // best-effort relationship as a confirmed discovery link.
-  const core = nodes.find(node => node.type === 'switch' && lower(node.hostname).includes('core'))
-    || nodes.find(node => node.type === 'switch')
-  const gateway = nodes.find(node => node.type === 'gateway')
-    || nodes.find(node => node.type === 'router' && (node.ip === '192.168.100.1' || lower(node.hostname).includes('gateway')))
-  if (core && gateway && !links.some(link =>
-    (link.from === core.id && link.to === gateway.id) || (link.from === gateway.id && link.to === core.id)
-  )) {
-    addLink({
-      id: `gateway-uplink-${core.id}-${gateway.id}`,
-      from: core.id,
-      to: gateway.id,
-      localPort: core.topology_metadata?.port,
-      remotePort: gateway.topology_metadata?.port,
-      status: 'up',
-      source: 'ROUTING',
-      confidence: 'INFERRED',
-      gatewayPath: true,
-    })
-  }
 
   return { nodes, links }
 }
@@ -696,17 +811,86 @@ function layoutGraph(nodes: GraphNode[], links: GraphLink[]): Layout {
   return { nodes, links, positions, width, height: maxY, rootId: root.id }
 }
 
+const TOPOLOGY_LAST_SNAPSHOT_KEY = 'topology-last-snapshot-v1'
+const TOPOLOGY_LAYOUT_CACHE_KEY = 'topology-layout-cache-v1'
+const TOPOLOGY_LAYOUT_QUERY_KEY = ['snmp-topology-layout'] as const
+const TOPOLOGY_AUTO_REFRESH_MS = 30_000
+const isCompleteTopologyLayout = (layout: Layout | null | undefined) => Boolean(layout && layout.nodes.length >= 2 && layout.links.length > 0)
+
+function readTopologySnapshot(): any {
+  if (typeof window === 'undefined') return null
+  try {
+    const value = JSON.parse(window.localStorage.getItem(TOPOLOGY_LAST_SNAPSHOT_KEY) || 'null')
+    return Array.isArray(value?.devices) && Array.isArray(value?.links) && value.devices.length >= 2 && value.links.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+function readTopologyLayoutCache(): Layout | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const serialized = window.localStorage.getItem(TOPOLOGY_LAYOUT_CACHE_KEY) || window.sessionStorage.getItem(TOPOLOGY_LAYOUT_CACHE_KEY)
+    const value = JSON.parse(serialized || 'null')
+    if (!Array.isArray(value?.nodes) || !Array.isArray(value?.links) || value.nodes.length < 2 || value.links.length < 1) return null
+    const nodes = value.nodes.map((node: any, index: number) => normalizeGraphNode(node, `cached-layout-${index}`))
+    const links = value.links.map(normalizePersistedLink).filter(Boolean) as GraphLink[]
+    const positions = new Map<string, { x: number; y: number }>(
+      Array.isArray(value.positions) ? value.positions.filter((entry: any) => Array.isArray(entry) && entry.length === 2) : [],
+    )
+    return { nodes, links, positions, width: Number(value.width) || 1200, height: Number(value.height) || 650, rootId: value.rootId ? String(value.rootId) : undefined }
+  } catch {
+    return null
+  }
+}
+
+function writeTopologyLayoutCache(layout: Layout): void {
+  if (typeof window === 'undefined') return
+  try {
+    const serialized = JSON.stringify({
+      ...layout,
+      positions: [...layout.positions.entries()],
+    })
+    window.localStorage.setItem(TOPOLOGY_LAYOUT_CACHE_KEY, serialized)
+    window.sessionStorage.setItem(TOPOLOGY_LAYOUT_CACHE_KEY, serialized)
+  } catch {
+    // Optional cache only; the current React state remains authoritative.
+  }
+}
+
+// Keep the last complete snapshot across route remounts and browser reloads.
+let topologyResponseCache: any = readTopologySnapshot()
+// Only hydrate a layout that was produced by the final DB-backed graph build.
+// The raw topology endpoint can legitimately be one snapshot behind and must
+// not be shown as a misleading one-node graph during normal navigation.
+let topologyLayoutCache: Layout | null = readTopologyLayoutCache()
+
 function mergeTopologyGraph(base: Layout | null, delta: { nodes: GraphNode[]; links: GraphLink[] }): { nodes: GraphNode[]; links: GraphLink[] } {
   if (!base) return { nodes: [...delta.nodes], links: [...delta.links] }
-  const nodes = base.nodes.map(node => ({ ...node }))
-  const findNode = (candidate: GraphNode) => nodes.find(node =>
-    node.id === candidate.id ||
-    (candidate.ip && node.ip === candidate.ip) ||
-    (candidate.mac && cleanMac(node.mac) === cleanMac(candidate.mac)) ||
-    (candidate.ips || []).some(ip => Boolean(ip) && ((node.ips || []).includes(ip) || node.ip === ip)) ||
-    (candidate.macs || []).some(mac => Boolean(mac) && ((node.macs || []).some(value => cleanMac(value) === cleanMac(mac)) || cleanMac(node.mac) === cleanMac(mac))) ||
-    (candidate.hostname && lower(node.hostname) === lower(candidate.hostname))
-  )
+  const removedSyntheticIds = new Set(base.nodes
+    .filter(node => node.type === 'port-summary' || String(node.id).startsWith('port-'))
+    .map(node => node.id))
+  const nodes = base.nodes
+    .filter(node => !removedSyntheticIds.has(node.id))
+    .map(node => ({ ...node }))
+  const findNode = (candidate: GraphNode) => {
+    // Exact identity must win. A multi-MAC port aggregate contains many
+    // member IPs/MACs, so using those lists to match first can incorrectly
+    // merge the aggregate into the first stale endpoint node.
+    const exactId = nodes.find(node => node.id === candidate.id)
+    if (exactId) return exactId
+    const exactIdentity = nodes.find(node =>
+      (candidate.ip && node.ip === candidate.ip) ||
+      (candidate.mac && cleanMac(node.mac) === cleanMac(candidate.mac))
+    )
+    if (exactIdentity) return exactIdentity
+    if (candidate.macCount && candidate.macCount > 1) return undefined
+    return nodes.find(node =>
+      (candidate.ips || []).some(ip => Boolean(ip) && ((node.ips || []).includes(ip) || node.ip === ip)) ||
+      (candidate.macs || []).some(mac => Boolean(mac) && ((node.macs || []).some(value => cleanMac(value) === cleanMac(mac)) || cleanMac(node.mac) === cleanMac(mac))) ||
+      (candidate.hostname && lower(node.hostname) === lower(candidate.hostname))
+    )
+  }
   const ids = new Map<string, string>()
   delta.nodes.forEach(candidate => {
     const existing = findNode(candidate)
@@ -728,8 +912,33 @@ function mergeTopologyGraph(base: Layout | null, delta: { nodes: GraphNode[]; li
     }
   })
 
-  const remap = (id: string) => ids.get(id) || id
-  const links = base.links.map(link => ({ ...link }))
+  // Cached layouts can already contain duplicate synthetic CPU cards from a
+  // previous refresh. Canonicalize them before returning the merged graph.
+  const aliases = new Map<string, string>()
+  const canonicalNodes: GraphNode[] = []
+  const cpuByMac = new Map<string, GraphNode>()
+  nodes.forEach(node => {
+    const cpuMac = node.type === 'cpu' ? cleanMac(node.mac, ...(node.macs || [])) : ''
+    const existing = cpuMac ? cpuByMac.get(cpuMac) : undefined
+    if (!existing) {
+      canonicalNodes.push(node)
+      if (cpuMac) cpuByMac.set(cpuMac, node)
+      aliases.set(node.id, node.id)
+      return
+    }
+    existing.ip ||= node.ip
+    existing.mac ||= node.mac
+    existing.macCount = Math.max(existing.macCount || 0, node.macCount || 0)
+    existing.macs = unique([...(existing.macs || []), ...(node.macs || [])])
+    existing.ips = unique([...(existing.ips || []), ...(node.ips || [])])
+    existing.vlans = unique([...(existing.vlans || []), ...(node.vlans || [])])
+    aliases.set(node.id, existing.id)
+  })
+
+  const remap = (id: string) => aliases.get(ids.get(id) || id) || ids.get(id) || id
+  const links = base.links
+    .filter(link => !removedSyntheticIds.has(link.from) && !removedSyntheticIds.has(link.to))
+    .map(link => ({ ...link }))
   delta.links.forEach(candidate => {
     const from = remap(candidate.from)
     const to = remap(candidate.to)
@@ -738,20 +947,64 @@ function mergeTopologyGraph(base: Layout | null, delta: { nodes: GraphNode[]; li
       (link.source === candidate.source || link.localPort || candidate.localPort)
     )
     const merged = { ...candidate, from, to }
-    if (existingIndex >= 0) links[existingIndex] = merged
-    else links.push(merged)
+    if (existingIndex >= 0) {
+      const existing = links[existingIndex]
+      const candidateIsMacEvidence = candidate.source === 'MAC/ARP'
+      const existingIsConfirmed = existing.confidence === 'CONFIRMED'
+      // A refresh can return the same pair from MAC/ARP after LLDP/CDP.
+      // Keep the confirmed infrastructure edge and only enrich it with the
+      // switch-side port summary instead of changing its visual/source type.
+      links[existingIndex] = existingIsConfirmed && candidateIsMacEvidence
+        ? {
+            ...existing,
+            localPort: candidate.localPort || existing.localPort,
+            macCount: candidate.macCount || existing.macCount,
+          }
+        : merged
+    } else links.push(merged)
   })
-  return { nodes, links }
+  const uniqueLinks = new Map<string, GraphLink>()
+  links.forEach(link => {
+    const from = remap(link.from)
+    const to = remap(link.to)
+    if (!from || !to || from === to) return
+    const key = [from, to].sort().join('|')
+    const existing = uniqueLinks.get(key)
+    if (existing) {
+      if (link.source === 'MAC/ARP' && link.localPort) {
+        uniqueLinks.set(key, {
+          ...existing,
+          localPort: link.localPort,
+          macCount: link.macCount || existing.macCount,
+        })
+        return
+      }
+      if (existing.confidence !== 'CONFIRMED' && link.confidence === 'CONFIRMED') {
+        uniqueLinks.set(key, {
+          ...link,
+          from,
+          to,
+          localPort: existing.localPort || link.localPort,
+          macCount: existing.macCount || link.macCount,
+        })
+      }
+      return
+    }
+    uniqueLinks.set(key, { ...link, from, to })
+  })
+  return { nodes: canonicalNodes, links: [...uniqueLinks.values()] }
 }
 
 export default function Topology() {
+  const { t } = useI18n()
+  const tr = t.topology
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const savedViewRef = useRef(readSavedView())
   // A cached layout can contain deleted or offline devices. Rebuild from the
   // current reachable inventory before rendering topology nodes.
-  const [layout, setLayout] = useState<Layout | null>(null)
-  const hasLayoutRef = useRef(false)
+  const [layout, setLayout] = useState<Layout | null>(topologyLayoutCache)
+  const hasLayoutRef = useRef(topologyLayoutCache !== null)
   const liveLayoutRef = useRef<Layout | null>(null)
   const liveInventoryKeyRef = useRef('')
   const topologyRequestRef = useRef(false)
@@ -779,6 +1032,9 @@ export default function Topology() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const graphViewportRef = useRef<HTMLDivElement | null>(null)
   const graphFullscreenRef = useRef<HTMLDivElement | null>(null)
+  const fitPendingRef = useRef(true)
+  const draggingRef = useRef(false)
+  const viewportSizeRef = useRef({ width: 0, height: 0 })
   const panStateRef = useRef<PanState>({ active: false, mode: 'canvas', startX: 0, startY: 0, originX: 0, originY: 0, moved: false })
   const suppressClickRef = useRef(false)
   const manualPositionsRef = useRef(new Map(savedViewRef.current.positions))
@@ -787,7 +1043,7 @@ export default function Topology() {
   const layoutTimestampRef = useRef<string | null>(null)
   const topologyGraphRef = useRef<Layout | null>(null)
 
-  const applyTopologyLayout = useCallback((next: Layout, source: string, requestUrl: string, responseTimestamp: string | null, accepted: boolean) => {
+  const applyTopologyLayout = useCallback((next: Layout, source: string, requestUrl: string, responseTimestamp: string | null, accepted: boolean, allowEmpty = false) => {
     console.debug('[TOPOLOGY-FE] setLayout', {
       source,
       requestUrl,
@@ -798,6 +1054,18 @@ export default function Topology() {
       accepted,
     })
     if (!accepted) return
+    // A transient empty/partial response must never replace a complete graph
+    // that is already available for route remounts and browser reloads.
+    if (!allowEmpty && !isCompleteTopologyLayout(next) && isCompleteTopologyLayout(topologyLayoutCache)) {
+      console.debug('[TOPOLOGY-FE] incomplete layout ignored', {
+        source,
+        nodes: next.nodes.length,
+        links: next.links.length,
+      })
+      setLoading(false)
+      setRefreshing(false)
+      return
+    }
     layoutTimestampRef.current = responseTimestamp || layoutTimestampRef.current
     const positions = new Map(next.positions)
     manualPositionsRef.current.forEach((position, nodeId) => {
@@ -805,6 +1073,10 @@ export default function Topology() {
     })
     const preservedLayout = { ...next, positions }
     topologyGraphRef.current = preservedLayout
+    topologyLayoutCache = preservedLayout
+    queryClient.setQueryData(TOPOLOGY_LAYOUT_QUERY_KEY, preservedLayout)
+    writeTopologyLayoutCache(preservedLayout)
+    fitPendingRef.current = true
     setLayout(preservedLayout)
   }, [])
 
@@ -825,15 +1097,38 @@ export default function Topology() {
       console.debug('[TOPOLOGY-FE] loadTopology ignored', { requestUrl, reason: 'request-in-flight' })
       return
     }
+    // Hydrate a complete cached graph synchronously on route remount. This
+    // avoids a loading flash and avoids re-running the normal GET after a
+    // refresh has already populated React Query's cache.
+    if (!forceRefresh) {
+      const cachedLayout = topologyLayoutCache || queryClient.getQueryData<Layout>(TOPOLOGY_LAYOUT_QUERY_KEY)
+      if (isCompleteTopologyLayout(cachedLayout)) {
+        applyTopologyLayout(cachedLayout, 'route-remount layout hydration', '/snmp/topology', topologyTimestampRef.current, true)
+        hasLayoutRef.current = true
+        setLoading(false)
+      }
+      // Do not hydrate the raw topology response here. It can be one snapshot
+      // behind and is only used as the API baseline for the DB-backed rebuild.
+    }
     topologyRequestRef.current = true
     setError(null)
     if (hasLayoutRef.current) setRefreshing(true); else setLoading(true)
     try {
       const topologyResult = await queryClient.fetchQuery({
         queryKey: topologyQueryKey,
+        // Revalidate the persisted backend snapshot on every mount. The
+        // completed layout stays visible while this request is in flight.
         queryFn: () => requestJson<any>(requestUrl, { cache: 'no-store' }),
         staleTime: 0,
       })
+      if (Array.isArray(topologyResult?.devices) && Array.isArray(topologyResult?.links)) {
+        topologyResponseCache = topologyResult
+        try {
+          window.localStorage.setItem(TOPOLOGY_LAST_SNAPSHOT_KEY, JSON.stringify(topologyResult))
+        } catch {
+          // Storage can be disabled or full; React Query remains the fallback.
+        }
+      }
       const responseTimestamp = topologyResult?.timestamp || topologyResult?.collected_at || null
       console.debug('[TOPOLOGY-FE] topology response', {
         source: forceRefresh ? 'refresh GET' : 'normal GET',
@@ -853,24 +1148,30 @@ export default function Topology() {
           links: Array.isArray(topologyResult?.links) ? topologyResult.links.length : 0,
           accepted: false,
         })
-        return
+        // Do not abort here. The persisted topology timestamp can lag behind
+        // the module snapshots; current DB-backed MAC/ARP collections below
+        // still need to rebuild the connected-port graph.
       }
-      const persistedNodes = Array.isArray(topologyResult?.devices)
-        ? topologyResult.devices.map((node: any, index: number) => normalizeGraphNode(node, `persisted-${index}`))
-        : []
-      const persistedLinks = Array.isArray(topologyResult?.links) ? topologyResult.links : []
-      if (!forceRefresh && topologyResult?.cached === true && persistedNodes.length > 0 && persistedLinks.length > 0) {
-        // A persisted snapshot is already the complete graph. Hydrate it
-        // directly so empty auxiliary data cannot shrink the saved topology.
-        const persistedLayout = layoutGraph(persistedNodes, persistedLinks as GraphLink[])
-        applyTopologyLayout(persistedLayout, 'persisted topology hydration', requestUrl, responseTimestamp, true)
-        topologyTimestampRef.current = responseTimestamp
-        hasLayoutRef.current = true
-        setLastUpdated(new Date())
-        return
+      // Device inventory is also persisted state. Avoid the generic GET
+      // cache here so a status/identity change is visible after navigation.
+      const inventoryResult = await requestJson<DeviceRecord[]>('/devices', { cache: 'no-store' })
+      const storedInventoryResult = Array.isArray(inventoryResult) ? inventoryResult : []
+      let storedInventory = storedInventoryResult
+      // The SNMP Devices page reads the optimized paginated inventory route.
+      // Some deployments expose different data through the legacy /devices
+      // route, so do not discard a live topology just because that route is
+      // empty. Use the same DB-backed inventory source as the device page.
+      if (!storedInventory.length) {
+        try {
+          const snmpInventory = await requestJson<{ items?: DeviceRecord[] }>(
+            '/snmp/devices?page=1&page_size=200&sort_by=id&sort_order=asc',
+            { cache: 'no-store' },
+          )
+          if (Array.isArray(snmpInventory?.items)) storedInventory = snmpInventory.items
+        } catch (snmpInventoryError) {
+          if (import.meta.env.DEV) console.debug('[Topology] SNMP inventory fallback unavailable', snmpInventoryError)
+        }
       }
-      const inventoryResult = await listDevices()
-      const storedInventory = Array.isArray(inventoryResult) ? inventoryResult : []
       const inventoryKey = storedInventory
         .map((device) => String(device.id))
         .sort()
@@ -891,7 +1192,24 @@ export default function Topology() {
         return
       }
       if (storedInventory.length === 0) {
-        applyTopologyLayout({ nodes: [], links: [], positions: new Map(), width: 1200, height: 650 }, 'empty inventory', requestUrl, responseTimestamp, true)
+        // The device inventory is authoritative. An empty inventory means
+        // every cached topology node has been deleted and must be cleared.
+        liveLayoutRef.current = null
+        liveInventoryKeyRef.current = ''
+        const emptyLayout = { nodes: [], links: [], positions: new Map<string, { x: number; y: number }>(), width: 1200, height: 650 }
+        topologyLayoutCache = null
+        topologyResponseCache = null
+        topologyGraphRef.current = emptyLayout
+        queryClient.removeQueries({ queryKey: topologyQueryKey })
+        queryClient.removeQueries({ queryKey: TOPOLOGY_LAYOUT_QUERY_KEY })
+        try {
+          window.localStorage.removeItem(TOPOLOGY_LAST_SNAPSHOT_KEY)
+          window.localStorage.removeItem(TOPOLOGY_LAYOUT_CACHE_KEY)
+          window.sessionStorage.removeItem(TOPOLOGY_LAYOUT_CACHE_KEY)
+        } catch {
+          // Storage can be disabled; React state and query caches are cleared above.
+        }
+        applyTopologyLayout(emptyLayout, 'empty inventory', requestUrl, responseTimestamp, true, true)
         setSelectedNode(null)
         setSelectedLink(null)
         setSelectedNodeDetails(null)
@@ -902,16 +1220,13 @@ export default function Topology() {
         setLastUpdated(new Date())
         return
       }
-      const health = await pingIps(
-        storedInventory.map((device) => device.ip_address).filter(Boolean),
-        1000,
-      )
-      const reachableIps = new Set(
-        health.results.filter((result) => result.reachable).map((result) => result.ip),
-      )
-      const inventory = storedInventory.filter((device) => reachableIps.has(device.ip_address))
+      // The device table is the authoritative source for topology visibility.
+      // Do not gate a normal route load on a second ICMP request: a transient
+      // ping timeout can hide every valid DB-backed device and leave only a
+      // stale cached node on screen.
+      const inventory = storedInventory.filter(device => device.status !== 'offline')
       const topologyNodes = (Array.isArray(topologyResult?.devices) ? topologyResult.devices : [])
-        .filter((node: any) => Boolean(node?.ip_address) && reachableIps.has(node.ip_address))
+        .filter((node: any) => Boolean(node?.ip_address) && inventory.some(device => device.ip_address === node.ip_address))
       const topologyLinks = Array.isArray(topologyResult?.links) ? topologyResult.links : []
       const infrastructureSources = [
         ...inventory.map((device, index) => makeNode(device, `inventory-${index}`)),
@@ -934,10 +1249,26 @@ export default function Topology() {
       ))
         .filter((result): result is PromiseFulfilledResult<DeviceCollection> => result.status === 'fulfilled')
         .map(result => result.value)
+      // PORT SUMMARY reads the persisted MAC-table snapshot directly. Refresh
+      // that same DB-backed snapshot for the core only so topology cannot lag
+      // behind on newly learned ports while still avoiding a live SNMP walk.
+      let currentStoredCollections = storedCollections
+      if (root && Number.isFinite(Number(root.id))) {
+        try {
+          const currentMac = await collectModule(Number(root.id), 'mac', true)
+          const coreMacEntries = unwrapRows(currentMac, ['entries', 'mac_entries'])
+          const corePortGroups = unwrapRows(currentMac, ['port_groups'])
+          currentStoredCollections = storedCollections.map(collection => collection.device.id === root.id
+            ? { ...collection, macEntries: coreMacEntries, portGroups: corePortGroups }
+            : collection)
+        } catch (coreMacError) {
+          if (import.meta.env.DEV) console.debug('[Topology] core MAC snapshot unavailable, using stored monitoring data', coreMacError)
+        }
+      }
       const liveCollections: DeviceCollection[] = []
       if (forceRefresh && root && Number.isFinite(Number(root.id))) {
         try {
-          const firstCollection = await collectDevice(root)
+          const firstCollection = await collectDevice(root, true)
           liveCollections.push(firstCollection)
           const remoteDevices = firstCollection.lldpNeighbors
             .map(normalizeLldp)
@@ -962,20 +1293,21 @@ export default function Topology() {
           }
         }
       }
-      // A cached response is the backend-persisted result of the last live
-      // refresh. Do not merge older per-module snapshots into it on remount,
-      // or stale MAC/ARP/LLDP links can reappear after a reload.
-      const allCollections = forceRefresh
-        ? liveCollections
-        : topologyResult?.cached === true && (topologyLinks.length > 0 || topologyNodes.length > 0)
-          ? []
-          : storedCollections
+      const liveTopologyEvidence = liveCollections.some(collection =>
+        collection.macEntries.length > 0 ||
+        collection.arpEntries.length > 0 ||
+        collection.lldpNeighbors.length > 0 ||
+        collection.routes.length > 0 ||
+        collection.portGroups.length > 0,
+      )
+      // The backend clears its persisted topology snapshot for a forced
+      // refresh. Use the fresh collection as the source of truth instead of
+      // allowing older stored module snapshots to repopulate stale links.
+      const allCollections = forceRefresh && liveTopologyEvidence ? liveCollections : currentStoredCollections
       const result = buildGraph(allCollections, inventory, topologyNodes, topologyLinks)
-      const mergedGraph = forceRefresh
-        ? mergeTopologyGraph(topologyGraphRef.current, result)
-        : result
+      const mergedGraph = result
       const nextLayout = layoutGraph(mergedGraph.nodes, mergedGraph.links)
-      if (forceRefresh && liveCollections.length > 0 && root && Number.isFinite(Number(root.id))) {
+      if (forceRefresh && liveTopologyEvidence && root && Number.isFinite(Number(root.id))) {
         try {
           const collectedAt = new Date().toISOString()
           await persistSNMPTopologySnapshot(Number(root.id), {
@@ -1001,8 +1333,13 @@ export default function Topology() {
             accepted: true,
           })
           queryClient.setQueryData(topologyQueryKey, latestSnapshot)
+          topologyResponseCache = latestSnapshot
+          try {
+            window.localStorage.setItem(TOPOLOGY_LAST_SNAPSHOT_KEY, JSON.stringify(latestSnapshot))
+          } catch {
+            // Keep the in-memory/query caches when browser storage is unavailable.
+          }
           topologyTimestampRef.current = collectedAt
-          await queryClient.invalidateQueries({ queryKey: topologyQueryKey, refetchType: 'none' })
           const persistedSnapshot = await queryClient.fetchQuery({
             queryKey: topologyQueryKey,
             queryFn: () => requestJson<any>('/snmp/topology', { cache: 'no-store' }),
@@ -1021,6 +1358,12 @@ export default function Topology() {
           if (persistedTimestamp && persistedTimestamp >= collectedAt) {
             topologyTimestampRef.current = persistedTimestamp
             queryClient.setQueryData(topologyQueryKey, persistedSnapshot)
+            topologyResponseCache = persistedSnapshot
+            try {
+              window.localStorage.setItem(TOPOLOGY_LAST_SNAPSHOT_KEY, JSON.stringify(persistedSnapshot))
+            } catch {
+              // Keep the in-memory/query caches when browser storage is unavailable.
+            }
           }
         } catch (snapshotError) {
           if (import.meta.env.DEV) {
@@ -1029,7 +1372,7 @@ export default function Topology() {
         }
       }
       applyTopologyLayout(nextLayout, forceRefresh ? 'live refresh graph' : 'persisted topology graph', requestUrl, responseTimestamp, true)
-      if (forceRefresh && liveCollections.length > 0) {
+      if (forceRefresh && liveTopologyEvidence) {
         liveLayoutRef.current = nextLayout
         liveInventoryKeyRef.current = inventoryKey
       }
@@ -1056,6 +1399,22 @@ export default function Topology() {
 
   const refreshTopology = useCallback(() => {
     console.debug('[TOPOLOGY-FE] refreshTopology', { source: 'REFRESH button' })
+    // Start a true rebuild: clear browser snapshots before the backend clears
+    // its persisted topology JSON, so stale links cannot flash back on screen.
+    topologyResponseCache = null
+    topologyLayoutCache = null
+    topologyGraphRef.current = null
+    liveLayoutRef.current = null
+    liveInventoryKeyRef.current = ''
+    queryClient.removeQueries({ queryKey: topologyQueryKey })
+    queryClient.removeQueries({ queryKey: TOPOLOGY_LAYOUT_QUERY_KEY })
+    try {
+      window.localStorage.removeItem(TOPOLOGY_LAST_SNAPSHOT_KEY)
+      window.localStorage.removeItem(TOPOLOGY_LAYOUT_CACHE_KEY)
+      window.sessionStorage.removeItem(TOPOLOGY_LAYOUT_CACHE_KEY)
+    } catch {
+      // Browser storage is optional; the in-memory/query caches are cleared above.
+    }
     return loadTopology(true)
   }, [loadTopology])
 
@@ -1091,7 +1450,19 @@ export default function Topology() {
       reactQueryCache: queryClient.getQueryData(topologyQueryKey),
       previousLayoutTimestamp: layoutTimestampRef.current,
     })
-    void loadTopology()
+    // Cache clearing removes only browser snapshots. Rehydrate from the
+    // server snapshot/stored monitoring data first; a live SNMP walk is
+    // reserved for the explicit UPDATE TOPOLOGY action.
+    void loadTopology(false)
+  }, [loadTopology])
+
+  useEffect(() => {
+    // Keep the graph current while the topology route remains open. The
+    // request-in-flight guard in loadTopology prevents overlapping SNMP walks.
+    const refreshTimer = window.setInterval(() => {
+      void loadTopology(true)
+    }, TOPOLOGY_AUTO_REFRESH_MS)
+    return () => window.clearInterval(refreshTimer)
   }, [loadTopology])
 
   useEffect(() => {
@@ -1172,13 +1543,26 @@ export default function Topology() {
   const visible = useMemo(() => {
     if (!layout) return { nodes: [], links: [] as GraphLink[] }
     const query = deferredSearch.trim().toLowerCase()
-    const openLinks = layout.links.filter(isOpenPortLink)
-    const connectedIds = new Set(openLinks.flatMap(link => [link.from, link.to]))
-    const nodes = layout.nodes
-      .filter(node => connectedIds.has(node.id))
+    const core = findCoreNode(layout.nodes, layout.links)
+
+    // The graph view must show the complete discovered topology. PORT SUMMARY
+    // intentionally reduces this to one MAC/ARP relationship per core port,
+    // but filtering those links here hides valid LLDP/CDP and routing paths.
+    const openLinks = layout.links.filter(isRenderableConnectedLink)
+    // Persisted snapshots can contain numeric endpoint IDs while normalized
+    // graph nodes use strings. Compare canonical strings or the graph appears
+    // empty even though the layout contains valid nodes and links.
+    const connectedIds = new Set([...(core ? [core.id] : []), ...openLinks.flatMap(link => [link.from, link.to])].map(String))
+    // A valid inventory can exist before SNMP discovers any relationship. In
+    // that state links are empty, so show the DB-backed devices instead of
+    // hiding the whole page behind the connected-node filter.
+    const graphNodes = openLinks.length
+      ? layout.nodes.filter(node => connectedIds.has(String(node.id)))
+      : layout.nodes
+    const nodes = graphNodes
       .filter(node => !query || `${node.hostname} ${node.ip} ${node.mac} ${node.port || ''} ${(node.ips || []).join(' ')}`.toLowerCase().includes(query))
     const ids = new Set(nodes.map(node => node.id))
-    return { nodes, links: openLinks.filter(link => ids.has(link.from) && ids.has(link.to)) }
+    return { nodes, links: openLinks.filter(link => ids.has(String(link.from)) && ids.has(String(link.to))) }
   }, [deferredSearch, layout])
 
   const counts = useMemo(() => {
@@ -1195,10 +1579,24 @@ export default function Topology() {
 
   const coreConnections = useMemo(() => {
     if (!layout) return { node: null as GraphNode | null, links: [] as GraphLink[] }
-    const node = layout.nodes.find(item => item.type === 'switch' && lower(item.hostname).includes('core'))
-      || layout.nodes.find(item => item.type === 'switch')
+    const node = findCoreNode(layout.nodes, layout.links)
     if (!node) return { node: null, links: [] }
-    return { node, links: layout.links.filter(link => link.from === node.id || link.to === node.id) }
+    // PORT SUMMARY is based on MAC/ARP port groups. Routing links describe an
+    // uplink path, not an attached device port, so they must not appear here.
+    // Keep one card per physical core port even when several records share it.
+    const coreId = String(node.id)
+    const connectedPorts = new Map<string, GraphLink>()
+    layout.links.forEach(link => {
+      const from = String(link.from)
+      const to = String(link.to)
+      if (from !== coreId && to !== coreId) return
+      if (link.source !== 'MAC/ARP' || link.gatewayPath || !isRenderableConnectedLink(link)) return
+      const localPort = from === coreId ? link.localPort : link.remotePort
+      const key = portKey(localPort)
+      if (!key || !localPort || connectedPorts.has(key)) return
+      connectedPorts.set(key, link)
+    })
+    return { node, links: [...connectedPorts.values()] }
   }, [layout])
 
   const highlightedLinkIds = useMemo(() => {
@@ -1213,6 +1611,7 @@ export default function Topology() {
   }, [layout, selectedLink, selectedNode])
 
   const startPan = useCallback((clientX: number, clientY: number) => {
+    draggingRef.current = true
     panStateRef.current = {
       active: true,
       mode: 'canvas',
@@ -1228,6 +1627,7 @@ export default function Topology() {
   const startNodeDrag = useCallback((node: GraphNode, clientX: number, clientY: number) => {
     const origin = layout?.positions.get(node.id)
     if (!origin) return
+    draggingRef.current = true
     panStateRef.current = {
       active: true,
       mode: 'node',
@@ -1270,6 +1670,7 @@ export default function Topology() {
   }, [zoom])
 
   const endPan = useCallback(() => {
+    draggingRef.current = false
     if (panStateRef.current.mode === 'node' && panStateRef.current.moved) suppressClickRef.current = true
     panStateRef.current.active = false
     setDragging(false)
@@ -1291,7 +1692,15 @@ export default function Topology() {
     const maxX = Math.max(...points.map(point => point.x)) + 120
     const minY = Math.min(...points.map(point => point.y)) - 60
     const maxY = Math.max(...points.map(point => point.y)) + 60
-    const fitZoom = Math.max(MIN_ZOOM, Math.min(1, rect.width / (maxX - minX), rect.height / (maxY - minY)))
+    const svgScale = Math.min(rect.width / layout.width, rect.height / layout.height)
+    const fitZoom = Math.max(
+      MIN_ZOOM,
+      Math.min(
+        DEFAULT_FIT_MAX_ZOOM,
+        (rect.width - 32) / ((maxX - minX) * svgScale),
+        (rect.height - 32) / ((maxY - minY) * svgScale),
+      ),
+    )
     setZoom(+fitZoom.toFixed(2))
     setPanX((layout.width / 2) - ((minX + maxX) / 2) * fitZoom)
     setPanY((layout.height / 2) - ((minY + maxY) / 2) * fitZoom)
@@ -1307,13 +1716,15 @@ export default function Topology() {
 
   const zoomAt = useCallback((nextZoom: number, clientX?: number, clientY?: number) => {
     const bounded = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom))
-    if (!graphViewportRef.current || !layout || clientX === undefined || clientY === undefined) {
+    if (!graphViewportRef.current || !layout) {
       setZoom(bounded)
       return
     }
     const rect = graphViewportRef.current.getBoundingClientRect()
-    const cursorX = ((clientX - rect.left) / rect.width) * layout.width
-    const cursorY = ((clientY - rect.top) / rect.height) * layout.height
+    const anchorX = clientX ?? rect.left + rect.width / 2
+    const anchorY = clientY ?? rect.top + rect.height / 2
+    const cursorX = ((anchorX - rect.left) / rect.width) * layout.width
+    const cursorY = ((anchorY - rect.top) / rect.height) * layout.height
     setPanX(current => current + (cursorX - current) * (1 - bounded / zoom))
     setPanY(current => current + (cursorY - current) * (1 - bounded / zoom))
     setZoom(bounded)
@@ -1335,6 +1746,27 @@ export default function Topology() {
     const frame = window.requestAnimationFrame(() => fitView())
     return () => window.cancelAnimationFrame(frame)
   }, [fitView, isFullscreen])
+
+  useEffect(() => {
+    if (!layout || !fitPendingRef.current) return
+    fitPendingRef.current = false
+    const frame = window.requestAnimationFrame(() => fitView())
+    return () => window.cancelAnimationFrame(frame)
+  }, [fitView, layout])
+
+  useEffect(() => {
+    const viewport = graphViewportRef.current
+    if (!viewport) return
+    const observer = new ResizeObserver(() => {
+      if (draggingRef.current) return
+      const { width, height } = viewport.getBoundingClientRect()
+      if (width === viewportSizeRef.current.width && height === viewportSizeRef.current.height) return
+      viewportSizeRef.current = { width, height }
+      window.requestAnimationFrame(() => fitView())
+    })
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [fitView])
 
   useEffect(() => {
     const viewport = graphViewportRef.current
@@ -1365,16 +1797,18 @@ export default function Topology() {
     if (type === 'firewall') return '#fb7185'
     if (type === 'switch') return '#22d3ee'
     if (type === 'access-point') return '#c084fc'
+    if (type === 'cpu') return '#f97316'
+    if (type === 'port-summary') return '#fbbf24'
     return '#34d399'
   }
 
   const card = (node: GraphNode, point: { x: number; y: number }) => {
     const safeType = String(node.type || 'unknown')
-    const safeHostname = String(node.hostname || 'UNKNOWN')
     const safeIp = String(node.ip || '')
     const safePort = String(node.port || '')
-    const safeMac = String(node.mac || '')
-    const infra = ['gateway', 'router', 'firewall', 'switch', 'access-point'].includes(safeType)
+    const safeMac = String(node.mac || node.macs?.[0] || '')
+    const identityLabel = safeMac || 'MAC UNKNOWN'
+    const infra = ['gateway', 'router', 'firewall', 'switch', 'access-point', 'cpu', 'port-summary'].includes(safeType)
     const color = colorFor(safeType as DeviceType)
     const width = infra ? 210 : 188
     const height = infra ? 90 : 82
@@ -1409,8 +1843,8 @@ export default function Topology() {
       >
         <rect x={x} y={y} width={width} height={height} rx="12" fill="#071321" stroke={color} strokeWidth={selected ? 3 : 1.5} />
         <circle cx={x + width - 13} cy={y + 13} r="4" fill={node.status === 'online' ? '#34d399' : node.status === 'warning' ? '#fbbf24' : '#fb7185'} />
-        <text x={x + 14} y={y + 23} className="font-mono" style={{ fill: color, fontSize: 10, fontWeight: 700 }}>{safeType.toUpperCase()}</text>
-        <text x={x + 14} y={y + 43} className="font-mono" style={{ fill: '#e2e8f0', fontSize: 12, fontWeight: 700 }}>{safeHostname.length > 24 ? `${safeHostname.slice(0, 24)}…` : safeHostname}</text>
+        <text x={x + 14} y={y + 23} className="font-mono" style={{ fill: color, fontSize: 10, fontWeight: 700 }}>{safeType === 'port-summary' ? 'PORT SUMMARY' : safeType.toUpperCase()}</text>
+        <text x={x + 14} y={y + 43} className="font-mono" style={{ fill: '#e2e8f0', fontSize: 11, fontWeight: 700 }}>{identityLabel}</text>
         <text x={x + 14} y={y + 59} className="font-mono" style={{ fill: '#8ca0bb', fontSize: 10 }}>{safeIp || (safePort ? `Port ${safePort}` : 'IP UNKNOWN')}</text>
         <text x={x + 14} y={y + 74} className="font-mono" style={{ fill: '#64748b', fontSize: 8 }}>{detail}</text>
       </g>
@@ -1433,8 +1867,8 @@ export default function Topology() {
     <div className="p-3 md:p-5 space-y-3 h-full flex flex-col" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(34,211,238,.06), transparent 48%)' }}>
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="font-display font-bold text-xl tracking-widest neon-cyan">NETWORK TOPOLOGY</h1>
-          <p className="font-mono text-[10px]" style={{ color: '#8ca0bb' }}>LIVE SNMP · LLDP/CDP CONFIRMED · MAC/ARP PORT INFERENCE</p>
+          <h1 className="font-display font-bold text-xl tracking-widest neon-cyan">{tr.title}</h1>
+          <p className="font-mono text-[10px]" style={{ color: '#8ca0bb' }}>{tr.subtitle}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
@@ -1442,33 +1876,33 @@ export default function Topology() {
             onClick={handleBack}
             className="glass-bright rounded px-3 py-2 text-xs font-mono transition-opacity hover:opacity-80"
             style={{ color: '#c084fc', border: '1px solid rgba(192,132,252,.2)' }}
-            aria-label="Go back"
-            title="Go back"
+            aria-label={tr.back}
+            title={tr.back}
           >
-            ← BACK
+            ← {tr.back}
           </button>
-          <span className="font-mono text-[10px]" style={{ color: '#64748b' }}>{lastUpdated ? `Updated ${lastUpdated.toLocaleString()}` : 'Not loaded'}</span>
-          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search hostname / IP / MAC" className="glass-bright rounded px-3 py-2 text-xs font-mono outline-none" style={{ color: 'var(--t-text, #c8d8ee)', border: '1px solid rgba(34,211,238,.2)' }} />
-          <button type="button" onClick={() => void refreshTopology()} className="glass-bright rounded px-3 py-2 text-xs font-mono" style={{ color: '#22d3ee' }}>{refreshing ? 'UPDATING…' : 'REFRESH'}</button>
+          <span className="font-mono text-[10px]" style={{ color: '#64748b' }}>{lastUpdated ? `${tr.updated} ${lastUpdated.toLocaleString()}` : tr.notLoaded}</span>
+          <input value={search} onChange={event => setSearch(event.target.value)} placeholder={tr.search} className="glass-bright rounded px-3 py-2 text-xs font-mono outline-none" style={{ color: 'var(--t-text, #c8d8ee)', border: '1px solid rgba(34,211,238,.2)' }} />
+          <button type="button" onClick={() => void refreshTopology()} className="glass-bright rounded px-3 py-2 text-xs font-mono" style={{ color: '#22d3ee' }}>{refreshing ? tr.rebuilding : tr.rebuild}</button>
         </div>
       </div>
 
       {error && <div className="font-mono text-xs rounded p-3" style={{ color: '#fb7185', background: 'rgba(127,29,29,.2)', border: '1px solid rgba(251,113,133,.2)' }}>{error}</div>}
 
       <GlassCard className="p-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-        <Metric label="NODES" value={counts.nodes} />
-        <Metric label="LINKS" value={counts.links} />
-        <Metric label="CONFIRMED" value={counts.confirmed} color="#22d3ee" />
-        <Metric label="INFERRED" value={counts.inferred} color="#fbbf24" />
-        <Metric label="MACs ON PORTS" value={counts.mac} color="#34d399" />
-        <Metric label="PORT GROUPS" value={counts.endpoints} color="#34d399" />
+        <Metric label={tr.nodes} value={counts.nodes} />
+        <Metric label={tr.links} value={counts.links} />
+        <Metric label={tr.confirmed} value={counts.confirmed} color="#22d3ee" />
+        <Metric label={tr.inferred} value={counts.inferred} color="#fbbf24" />
+        <Metric label={tr.macsOnPorts} value={counts.mac} color="#34d399" />
+        <Metric label={tr.portGroups} value={counts.endpoints} color="#34d399" />
         <div className="ml-auto flex items-center gap-2 font-mono text-[10px]" style={{ color: '#64748b' }}>
-          <span>Auto refresh OFF</span>
+          <span>{tr.autoRefreshOff}</span>
           <button type="button" onClick={resetView} className="rounded px-2 py-1" style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.2)' }}>
-            Reset View
+            {tr.resetView}
           </button>
           <button type="button" onClick={() => { setSelectedNode(null); setSelectedLink(null) }} className="rounded px-2 py-1" style={{ color: '#c084fc', border: '1px solid rgba(192,132,252,.2)' }}>
-            Clear Selection
+            {tr.clearSelection}
           </button>
         </div>
       </GlassCard>
@@ -1476,20 +1910,22 @@ export default function Topology() {
       {coreConnections.node && coreConnections.links.length > 0 && (
         <GlassCard className="p-3">
           <div className="flex items-center justify-between gap-2 mb-2">
-            <div className="font-display text-xs tracking-wider" style={{ color: '#22d3ee' }}>CORE-SWITCH CONNECTIONS</div>
-            <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>{coreConnections.node.hostname} · {coreConnections.node.ip || 'IP UNKNOWN'}</div>
+            <div className="font-display text-xs tracking-wider" style={{ color: '#22d3ee' }}>{tr.coreConnections}</div>
+            <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>{coreConnections.node.hostname} · {coreConnections.node.ip || tr.ipUnknown}</div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
             {coreConnections.links.map((link, index) => {
-              const remoteId = link.from === coreConnections.node!.id ? link.to : link.from
-              const remote = layout?.nodes.find(node => node.id === remoteId)
-              const localPort = link.from === coreConnections.node!.id ? link.localPort : link.remotePort
-              const remotePort = link.from === coreConnections.node!.id ? link.remotePort : link.localPort
+              const coreId = String(coreConnections.node!.id)
+              const fromIsCore = String(link.from) === coreId
+              const remoteId = fromIsCore ? link.to : link.from
+              const remote = layout?.nodes.find(node => String(node.id) === String(remoteId))
+              const localPort = fromIsCore ? link.localPort : link.remotePort
+              const remotePort = fromIsCore ? link.remotePort : link.localPort
               const tone = link.confidence === 'CONFIRMED' ? '#22d3ee' : link.gatewayPath ? '#a78bfa' : '#fbbf24'
               return (
                 <button key={linkRenderKey(link, index, 'core-connection')} type="button" onClick={() => { setSelectedNode(remote || coreConnections.node); setSelectedLink(null) }} className="rounded p-2 text-left" style={{ color: '#dbeafe', background: 'rgba(8,25,55,.55)', border: `1px solid ${tone}44` }}>
                   <div className="font-mono text-[10px]" style={{ color: tone }}>{remote?.hostname || remote?.ip || remoteId}</div>
-                  <div className="font-mono text-[9px] mt-1" style={{ color: '#94a3b8' }}>{remote?.ip || 'IP UNKNOWN'} · {localPort || 'PORT UNKNOWN'} → {remotePort || 'PORT UNKNOWN'}</div>
+                  <div className="font-mono text-[9px] mt-1" style={{ color: '#94a3b8' }}>{remote?.ip || tr.ipUnknown} · {localPort || tr.portUnknown} → {destinationPortLabel(remotePort)}</div>
                   <div className="font-mono text-[9px] mt-1" style={{ color: '#64748b' }}>{link.source} · {link.confidence}</div>
                 </button>
               )
@@ -1501,11 +1937,11 @@ export default function Topology() {
       <div ref={graphFullscreenRef} className="flex-1 min-h-[650px] overflow-hidden relative rounded-xl" style={isFullscreen ? { width: '100vw', height: '100vh', background: '#030a14' } : undefined}>
       <GlassCard className="h-full overflow-hidden relative p-0">
         <div className="absolute left-3 top-3 z-10 flex gap-1 rounded-lg p-1" style={{ background: 'rgba(3,10,20,.9)', border: '1px solid rgba(34,211,238,.18)' }}>
-          <button type="button" onClick={() => zoomAt(zoom + .1)} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }} aria-label="Zoom in">+</button>
-          <button type="button" onClick={() => zoomAt(zoom - .1)} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }} aria-label="Zoom out">−</button>
-          <button type="button" onClick={fitView} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>FIT</button>
-          <button type="button" onClick={resetView} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>RESET</button>
-          <button type="button" onClick={() => void toggleFullscreen()} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#c084fc' }}>{isFullscreen ? 'EXIT FULLSCREEN' : 'FULLSCREEN'}</button>
+          <button type="button" onClick={() => zoomAt(zoom + .1)} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }} aria-label={tr.zoomIn}>+</button>
+          <button type="button" onClick={() => zoomAt(zoom - .1)} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }} aria-label={tr.zoomOut}>−</button>
+          <button type="button" onClick={fitView} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>{tr.fit}</button>
+          <button type="button" onClick={resetView} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>{tr.reset}</button>
+          <button type="button" onClick={() => void toggleFullscreen()} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#c084fc' }}>{isFullscreen ? tr.exitFullscreen : tr.fullscreen}</button>
         </div>
         <div className="absolute right-3 top-3 z-10 font-mono text-[10px] px-2 py-1 rounded" style={{ color: '#8ca0bb', background: 'rgba(3,10,20,.9)', border: '1px solid rgba(34,211,238,.12)' }}>{visible.nodes.length} NODES · {visible.links.length} LINKS</div>
         {(selectedNode || selectedLink) && (
@@ -1516,10 +1952,10 @@ export default function Topology() {
             <div className="sticky top-0 flex items-center justify-between px-4 py-3" style={{ background: 'rgba(3,10,20,.96)', borderBottom: '1px solid rgba(34,211,238,.1)' }}>
               <div>
                 <div className="font-display font-bold text-sm tracking-wider" style={{ color: selectedNode ? '#22d3ee' : '#c084fc' }}>
-                  {selectedNode ? 'DEVICE DETAILS' : 'LINK DETAILS'}
+                  {selectedNode ? tr.deviceDetails : tr.linkDetails}
                 </div>
                 <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>
-                  {selectedNode ? (selectedNode.hostname || selectedNode.ip || selectedNode.id) : (selectedLink?.source || 'TOPOLOGY LINK')}
+                  {selectedNode ? (selectedNode.hostname || selectedNode.ip || selectedNode.id) : (selectedLink?.source || tr.topologyLink)}
                 </div>
               </div>
               <button
@@ -1571,13 +2007,13 @@ export default function Topology() {
           </div>
         )}
 
-        {loading && !layout ? (
-          <div className="h-full flex items-center justify-center font-mono text-sm" style={{ color: '#22d3ee' }}>Loading topology…</div>
+        {!layout ? (
+          <div className="h-full flex items-center justify-center font-mono text-sm" style={{ color: '#8899bb' }}>{tr.noSnapshot}</div>
         ) : layout ? (
           <div
             ref={graphViewportRef}
-            className="h-full overflow-auto"
-            style={{ background: 'radial-gradient(circle at 50% 20%, rgba(34,211,238,.035), transparent 55%)', cursor: dragging ? 'grabbing' : 'grab', overscrollBehavior: 'contain', touchAction: 'none' }}
+            className="h-full overflow-auto relative"
+            style={{ background: 'radial-gradient(circle at 50% 20%, rgba(34,211,238,.035), transparent 55%)', cursor: dragging ? 'grabbing' : 'grab', overscrollBehavior: 'contain', touchAction: 'none', userSelect: 'none' }}
             onPointerDown={(event) => {
               if ((event.target as HTMLElement).closest('button, [data-topology-interactive]')) return
               event.currentTarget.setPointerCapture(event.pointerId)
@@ -1591,11 +2027,14 @@ export default function Topology() {
             onPointerCancel={endPan}
             onPointerLeave={endPan}
           >
-            <svg width="100%" height="100%" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="xMidYMin meet" style={{ minWidth: `${Math.min(layout.width, 1000)}px`, minHeight: '650px' }}>
+            <svg width="100%" height="100%" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="xMidYMid meet" style={{ display: 'block' }}>
               <defs>
                 <filter id="topologyGlow"><feGaussianBlur stdDeviation="3" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
               </defs>
-              <g transform={`translate(${panX} ${panY}) scale(${zoom})`} style={{ transition: 'transform 160ms ease-out' }}>
+              <g
+                transform={`translate(${panX} ${panY}) scale(${zoom})`}
+                style={{ transition: dragging ? 'none' : 'transform 160ms ease-out', willChange: 'transform' }}
+              >
               {visible.links.map((link, index) => {
                 const from = layout.positions.get(link.from)
                 const to = layout.positions.get(link.to)
@@ -1603,12 +2042,21 @@ export default function Topology() {
                 const fromNode = layout.nodes.find(node => node.id === link.from)
                 const toNode = layout.nodes.find(node => node.id === link.to)
                 const rootPort = layout.rootId && link.from === layout.rootId ? link.localPort : layout.rootId && link.to === layout.rootId ? link.remotePort : link.localPort
+                // MAC/ARP links are built from the source switch's port
+                // summary, so localPort is the actual switch-side port. Do
+                // not replace it with the neighbor's eth0/remote port just
+                // because layoutGraph selected that neighbor as its root.
+                const displayPort = link.source === 'MAC/ARP'
+                  ? link.localPort || link.remotePort
+                  : rootPort || link.localPort || link.remotePort
                 const color = link.gatewayPath ? '#a78bfa' : link.wireless ? '#c084fc' : link.confidence === 'CONFIRMED' ? '#22d3ee' : '#fbbf24'
                 const selected = selectedLink?.id === link.id
                 const highlighted = highlightedLinkIds.has(link.id)
                 const startY = from.y < to.y ? from.y + 45 : from.y - 45
                 const endY = from.y < to.y ? to.y - 45 : to.y + 45
                 const midY = (startY + endY) / 2
+                const destinationLabelX = from.x + (to.x - from.x) * 0.82
+                const destinationLabelY = startY + (endY - startY) * 0.82
                 return (
                   <g
                     key={linkRenderKey(link, index, 'graph-link')}
@@ -1617,15 +2065,25 @@ export default function Topology() {
                       setSelectedLink(prev => prev?.id === link.id ? null : link)
                       setSelectedNode(null)
                     }}
-                    onMouseEnter={() => setHoverPreview({
-                      title: `${fromNode?.hostname || link.from} -> ${toNode?.hostname || link.to}`,
-                      lines: [
-                        `${fromNode?.ip || 'IP UNKNOWN'} | ${fromNode?.mac || 'MAC UNKNOWN'}`,
-                        `${toNode?.ip || 'IP UNKNOWN'} | ${toNode?.mac || 'MAC UNKNOWN'}`,
-                        `${link.localPort || 'PORT UNKNOWN'} -> ${link.remotePort || 'PORT UNKNOWN'}`,
-                        `${link.source} | ${link.confidence}`,
-                      ],
-                    })}
+                    onMouseEnter={(event) => {
+                      const viewport = graphViewportRef.current
+                      if (!viewport) return
+                      const bounds = viewport.getBoundingClientRect()
+                      const x = event.clientX - bounds.left
+                      const y = event.clientY - bounds.top
+                      setHoverPreview({
+                        title: `${fromNode?.hostname || link.from} -> ${toNode?.hostname || link.to}`,
+                        lines: [
+                          `${fromNode?.ip || 'IP UNKNOWN'} | ${fromNode?.mac || 'MAC UNKNOWN'}`,
+                          `${toNode?.ip || 'IP UNKNOWN'} | ${toNode?.mac || 'MAC UNKNOWN'}`,
+                          `${link.localPort || 'PORT UNKNOWN'} -> ${destinationPortLabel(link.remotePort)}`,
+                          `${link.source} | ${link.confidence}`,
+                        ],
+                        x: Math.max(12, Math.min(x, bounds.width - 12)),
+                        y: Math.max(12, Math.min(y, bounds.height - 12)),
+                        above: y > bounds.height - 170,
+                      })
+                    }}
                     onMouseLeave={() => setHoverPreview(current => current?.title === `${fromNode?.hostname || link.from} -> ${toNode?.hostname || link.to}` ? null : current)}
                     style={{ cursor: 'pointer' }}
                   >
@@ -1634,8 +2092,9 @@ export default function Topology() {
                       <animate attributeName="stroke-opacity" values={highlighted || selected ? '.7;1;.7' : '.25;.75;.25'} dur={link.gatewayPath ? '1.5s' : '2.4s'} repeatCount="indefinite" />
                       {link.confidence === 'INFERRED' && <animate attributeName="stroke-dashoffset" values="0;-28" dur="1s" repeatCount="indefinite" />}
                     </path>
-                    <text x={(from.x + to.x) / 2} y={midY - 7} textAnchor="middle" className="font-mono" style={{ fill: color, fontSize: 9, fontWeight: 700 }}>{rootPort || link.source}</text>
-                    <text x={(from.x + to.x) / 2} y={midY + 8} textAnchor="middle" className="font-mono" style={{ fill: '#64748b', fontSize: 8 }}>{link.remotePort ? `↔ ${link.remotePort}` : link.macCount ? `${link.macCount} MACs` : link.confidence}</text>
+                    <text x={(from.x + to.x) / 2} y={midY - 10} textAnchor="middle" className="font-mono" style={{ fill: color, fontSize: 8, fontWeight: 700 }}>SRC: {link.localPort || 'PORT UNKNOWN'}</text>
+                    <text x={(from.x + to.x) / 2} y={midY + 14} textAnchor="middle" className="font-mono" style={{ fill: '#64748b', fontSize: 8 }}>{link.macCount ? `${link.macCount} MACs` : link.confidence}</text>
+                    <text x={destinationLabelX} y={destinationLabelY - 8} textAnchor="middle" className="font-mono" style={{ fill: '#cbd5e1', fontSize: 8, fontWeight: 700 }}>DST: {destinationPortLabel(link.remotePort)}</text>
                   </g>
                 )
               })}
@@ -1645,37 +2104,44 @@ export default function Topology() {
               })}
               </g>
             </svg>
-            {!visible.nodes.length && (
+            {!visible.nodes.length && !loading && !refreshing && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="rounded-lg px-4 py-3 font-mono text-xs" style={{ color: '#8ca0bb', background: 'rgba(3,10,20,.92)', border: '1px solid rgba(34,211,238,.14)' }}>
-                  Topology data mila hai, lekin koi renderable nodes/link nahi bane. SNMP LLDP/CDP ya inventory records check karein.
+                <div className="rounded-lg px-5 py-4 font-mono text-sm tracking-wide" style={{ color: '#22d3ee', background: 'rgba(3,10,20,.92)', border: '1px solid rgba(34,211,238,.18)', boxShadow: '0 16px 40px rgba(2,8,23,.35)' }}>
+                  No connected nodes match the current filter.
                 </div>
+              </div>
+            )}
+            {hoverPreview && (
+              <div
+                className="absolute z-20 pointer-events-none max-w-[320px] rounded-xl px-3 py-2"
+                style={{
+                  left: hoverPreview.x,
+                  top: hoverPreview.y,
+                  transform: `translate(-50%, ${hoverPreview.above ? 'calc(-100% - 14px)' : '14px'})`,
+                  background: 'rgba(3,10,20,.96)',
+                  border: '1px solid rgba(34,211,238,.18)',
+                  boxShadow: '0 18px 40px rgba(2,8,23,.45)',
+                }}
+              >
+                <div className="font-display text-xs tracking-wider" style={{ color: '#22d3ee' }}>{hoverPreview.title}</div>
+                {hoverPreview.lines.map((line, index) => (
+                  <div key={`${hoverPreview.title}-${index}`} className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>
+                    {line}
+                  </div>
+                ))}
               </div>
             )}
           </div>
         ) : null}
 
-        {hoverPreview && (
-          <div
-            className="absolute left-3 bottom-3 z-20 max-w-[320px] rounded-xl px-3 py-2"
-            style={{ background: 'rgba(3,10,20,.96)', border: '1px solid rgba(34,211,238,.18)', boxShadow: '0 18px 40px rgba(2,8,23,.45)' }}
-          >
-            <div className="font-display text-xs tracking-wider" style={{ color: '#22d3ee' }}>{hoverPreview.title}</div>
-            {hoverPreview.lines.map((line, index) => (
-              <div key={`${hoverPreview.title}-${index}`} className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>
-                {line}
-              </div>
-            ))}
-          </div>
-        )}
       </GlassCard>
       </div>
 
       <div className="flex flex-wrap gap-4 font-mono text-[10px]" style={{ color: '#64748b' }}>
-        <span><i className="inline-block w-7 border-t-2 mr-2" style={{ borderColor: '#22d3ee' }} />LLDP/CDP CONFIRMED</span>
-        <span><i className="inline-block w-7 border-t-2 border-dashed mr-2" style={{ borderColor: '#fbbf24' }} />MAC/ARP INFERRED</span>
-        <span><i className="inline-block w-7 border-t-2 mr-2" style={{ borderColor: '#a78bfa' }} />GATEWAY PATH</span>
-        <span>Click a node or link for details</span>
+        <span><i className="inline-block w-7 border-t-2 mr-2" style={{ borderColor: '#22d3ee' }} />{tr.confirmedLegend}</span>
+        <span><i className="inline-block w-7 border-t-2 border-dashed mr-2" style={{ borderColor: '#fbbf24' }} />{tr.inferredLegend}</span>
+        <span><i className="inline-block w-7 border-t-2 mr-2" style={{ borderColor: '#a78bfa' }} />{tr.gatewayPath}</span>
+        <span>{tr.clickDetails}</span>
       </div>
 
       {editingNode && (
@@ -1799,6 +2265,8 @@ function NodeDetails({
   loading: boolean
   error: string | null
 }) {
+  const { t } = useI18n()
+  const tr = t.topology
   const connectionQuery = deferredConnectionsSearch.trim().toLowerCase()
   const nodeLinks = links.filter(link => {
     if (link.from !== node.id && link.to !== node.id) return false
@@ -1824,6 +2292,7 @@ function NodeDetails({
   const safeHostname = String(node.hostname || 'UNKNOWN')
   const safeIp = String(node.ip || '')
   const safeMac = String(node.mac || '')
+  const allMacs = unique([...(node.macs || []), safeMac].filter(Boolean).map(value => displayMac(value) || String(value)))
   const safePort = String(node.port || '')
   const safeVendor = String(node.vendor || '')
   const safeModel = String(node.model || '')
@@ -1838,13 +2307,14 @@ function NodeDetails({
         <div className="font-mono text-[10px] mt-1" style={{ color: '#64748b' }}>{safeType.toUpperCase()} · {safeStatus.toUpperCase()}</div>
         {details?.device?.id && (
           <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" onClick={() => onEditDevice(details.device!)} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#34d399', border: '1px solid rgba(52,211,153,.25)', background: 'rgba(52,211,153,.06)' }}>EDIT DEVICE</button>
-            <button type="button" onClick={() => onOpenDeviceDetails(details.device!.id)} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.2)', background: 'rgba(34,211,238,.06)' }}>OPEN SNMP DETAILS</button>
+            <button type="button" onClick={() => onEditDevice(details.device!)} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#34d399', border: '1px solid rgba(52,211,153,.25)', background: 'rgba(52,211,153,.06)' }}>{tr.editDevice}</button>
+            <button type="button" onClick={() => onOpenDeviceDetails(details.device!.id)} className="rounded px-3 py-2 font-mono text-[10px]" style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.2)', background: 'rgba(34,211,238,.06)' }}>{tr.openSnmpDetails}</button>
           </div>
         )}
         <div className="grid sm:grid-cols-2 gap-x-6 mt-3">
           <Detail label="IP" value={safeIp || 'UNKNOWN'} />
           <Detail label="MAC" value={safeMac || (node.macs?.length ? `${node.macs.length} MACs` : 'UNKNOWN')} />
+          {allMacs.length > 1 && <Detail label="ALL LEARNED MACS" value={allMacs.join(', ')} />}
           <Detail label="PORT" value={safePort || 'UNKNOWN'} />
           <Detail label="VLANs" value={node.vlans?.length ? node.vlans.join(', ') : 'UNKNOWN'} />
           <Detail label="IPs ON PORT" value={node.ips?.length ? node.ips.join(', ') : 'UNKNOWN'} />
@@ -1852,7 +2322,7 @@ function NodeDetails({
         </div>
 
         <div className="mt-4">
-          <div className="font-display text-xs tracking-wider mb-2" style={{ color: '#8ca0bb' }}>DATABASE DETAILS</div>
+          <div className="font-display text-xs tracking-wider mb-2" style={{ color: '#8ca0bb' }}>{tr.databaseDetails}</div>
           {loading ? (
             <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>Loading device details…</div>
           ) : error ? (
@@ -1875,11 +2345,11 @@ function NodeDetails({
       </div>
 
       <div>
-        <div className="font-display text-xs tracking-wider mb-2" style={{ color: '#8ca0bb' }}>CONNECTIONS</div>
+        <div className="font-display text-xs tracking-wider mb-2" style={{ color: '#8ca0bb' }}>{tr.connections}</div>
         <input
           value={connectionsSearch}
           onChange={event => onConnectionsSearch(event.target.value)}
-          placeholder="Filter connected devices / IP / MAC / vendor"
+          placeholder={tr.searchConnections}
           className="mb-3 w-full rounded px-3 py-2 text-[10px] font-mono outline-none"
           style={{ color: 'var(--t-text, #c8d8ee)', border: '1px solid rgba(34,211,238,.15)', background: 'rgba(8,25,55,.5)' }}
         />
@@ -1900,14 +2370,14 @@ function NodeDetails({
               onClick={() => remote ? onNodeSelect(remote) : onLink(link)}
               className="w-full text-left py-2 border-t border-cyan-400/10 font-mono text-[10px]"
               style={{ color: link.confidence === 'CONFIRMED' ? '#22d3ee' : '#fbbf24' }}
-              title={`${remote?.hostname || remoteId} | ${remote?.ip || 'IP UNKNOWN'} | ${remote?.mac || 'MAC UNKNOWN'} | ${link.localPort || 'PORT UNKNOWN'} -> ${link.remotePort || 'PORT UNKNOWN'}`}
+              title={`${remote?.hostname || remoteId} | ${remote?.ip || 'IP UNKNOWN'} | ${remote?.mac || 'MAC UNKNOWN'} | ${link.localPort || 'PORT UNKNOWN'} -> ${destinationPortLabel(link.remotePort)}`}
             >
               {remote?.hostname || remote?.ip || remoteId}
               <span className="block mt-1" style={{ color: '#dbeafe' }}>
                 {(remote?.ip || 'IP UNKNOWN')} · {(remote?.mac || 'MAC UNKNOWN')}
               </span>
               <span className="block" style={{ color: '#64748b' }}>
-                {link.localPort || 'PORT UNKNOWN'} → {link.remotePort || 'PORT UNKNOWN'} · {link.confidence} · {link.source}
+                {link.localPort || 'PORT UNKNOWN'} → {destinationPortLabel(link.remotePort)} · {link.confidence} · {link.source}
               </span>
               <span className="block mt-2" style={{ color: '#94a3b8' }}>
                 Vendor: {remoteDetails?.device?.vendor || remote?.vendor || 'N/A'}
@@ -1943,16 +2413,16 @@ function NodeDetails({
                     className="inline-flex rounded px-2 py-1"
                     style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.18)', background: 'rgba(34,211,238,.06)' }}
                   >
-                    Open SNMP Details
+                    {tr.openSnmpDetails}
                   </span>
                 )}
                 <span className="inline-flex rounded px-2 py-1" style={{ color: '#a78bfa', border: '1px solid rgba(167,139,250,.18)', background: 'rgba(167,139,250,.06)' }}>
-                  Click to open connected device
+                  {tr.clickConnected}
                 </span>
               </span>
             </button>
           )
-        }) : <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>No verified or inferred links</div>}
+        }) : <div className="font-mono text-[10px]" style={{ color: '#64748b' }}>{tr.noLinks}</div>}
       </div>
     </div>
   )
@@ -1974,7 +2444,7 @@ function LinkDetails({
   return <div className="space-y-4 font-mono text-[10px]">
     <div className="grid sm:grid-cols-2 gap-3">
       <Detail label="LOCAL DEVICE / PORT" value={`${local?.hostname || link.from} · ${link.localPort || 'UNKNOWN'}`} />
-      <Detail label="REMOTE DEVICE / PORT" value={`${remote?.hostname || link.to} · ${link.remotePort || 'UNKNOWN'}`} />
+      <Detail label="REMOTE DEVICE / PORT" value={`${remote?.hostname || link.to} · ${destinationPortLabel(link.remotePort)}`} />
       <Detail label="LOCAL IP / MAC" value={`${local?.ip || 'UNKNOWN'} · ${local?.mac || 'UNKNOWN'}`} />
       <Detail label="REMOTE IP / MAC" value={`${remote?.ip || 'UNKNOWN'} · ${remote?.mac || 'UNKNOWN'}`} />
       <Detail label="SOURCE / CONFIDENCE" value={`${link.source} · ${link.confidence}`} />

@@ -20,9 +20,12 @@ from threading import Lock
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from backend.database.session import get_db
 
 router = APIRouter(tags=["Discovery / Monitoring (modules)"])
 logger = logging.getLogger(__name__)
@@ -820,10 +823,8 @@ def add_discovered_devices(payload: AddDevicesRequest):
     from backend.models import Device, DeviceMetric, Interface, DeviceCapabilities, DeviceCredential
     from backend.models.identity import DeviceIdentity
     from backend.utils.crypto import encrypt_secret
-    from backend.services.snmp_polling import PollJob, SNMPPoller
     from backend.services.alerting import create_device_added_alert
     from datetime import datetime
-    import asyncio
 
     added = []
     skipped = []
@@ -898,15 +899,12 @@ def add_discovered_devices(payload: AddDevicesRequest):
                         setattr(capabilities, f"cap_{name}", collectors.get(name, {}).get("supported", False))
                 capabilities.capability_detail = collectors
                 capabilities.updated_at = datetime.utcnow()
-                poller = SNMPPoller(db)
-                for module_name, collector in collectors.items():
-                    if isinstance(collector, dict):
-                        asyncio.run(poller._persist_results(
-                            PollJob(device_id=device_id, module_name=module_name, collector_name=module_name, interval_seconds=0, config_id=0),
-                            collector.get("data") or {},
-                            collector.get("supported") is True,
-                            commit=False,
-                        ))
+                # The discovery response is already a complete snapshot. Keep
+                # it in capability_detail and return the device immediately;
+                # the monitoring scheduler will populate latest/history tables
+                # asynchronously after the device is stored. Running every
+                # collector persistence job inline made STORE wait once per
+                # module and duplicated the frontend background discovery.
 
             def persist_device_scalars(device: Device, discovered: dict[str, Any]) -> None:
                 """Copy full SNMP system/interface values to the device row."""
@@ -1134,7 +1132,7 @@ def check_stored_devices(payload: CheckStoredRequest):
 
 
 @router.post("/discovery/monitoring/start")
-def monitoring_start_device(payload: MonitorDeviceRequest):
+def monitoring_start_device(payload: MonitorDeviceRequest, db: Session = Depends(get_db)):
     """Start monitoring a single device (ping every 5s)."""
     from backend.services.realtime_monitor import get_engine
 
@@ -1165,6 +1163,15 @@ def monitoring_start_device(payload: MonitorDeviceRequest):
 
     import threading
     threading.Thread(target=_start, daemon=True, name=f"monitor-start-{ip}").start()
+    if hasattr(db, "add"):
+        from backend.services.alerting import create_operational_alert
+        create_operational_alert(
+            db,
+            title=f"Monitoring Started: {payload.hostname or ip}",
+            description=f"ICMP monitoring started for {ip}.",
+            device_id=payload.device_id,
+        )
+        db.commit()
     return {"ip": ip, "status": "starting", "message": "Monitoring start accepted"}
 
 
@@ -1179,12 +1186,20 @@ def monitoring_stop_device(payload: MonitorDeviceRequest):
 
 
 @router.post("/discovery/monitoring/start-all")
-def monitoring_start_all(payload: MonitorAllRequest):
+def monitoring_start_all(payload: MonitorAllRequest, db: Session = Depends(get_db)):
     """Start monitoring multiple devices at once."""
     from backend.services.realtime_monitor import get_engine
 
     engine = get_engine()
     added = engine.start_all(payload.devices)
+    if hasattr(db, "add") and added:
+        from backend.services.alerting import create_operational_alert
+        create_operational_alert(
+            db,
+            title="Monitoring Started: Multiple Devices",
+            description=f"ICMP monitoring started for {added} device(s).",
+        )
+        db.commit()
     return {"added": added, "total_monitored": len(engine.get_all()), "message": "Monitoring start accepted"}
 
 

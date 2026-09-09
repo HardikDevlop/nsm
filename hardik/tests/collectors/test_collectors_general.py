@@ -288,6 +288,44 @@ class TestARPCollector:
 
 
 # ---------------------------------------------------------------------------
+# MACTableCollector
+# ---------------------------------------------------------------------------
+
+class TestMACTableCollector:
+
+    def test_q_bridge_macs_are_canonical_and_deduplicated(self):
+        raw = {
+            # dot1qTpFdbPort: VLAN 10, MAC aabbccddeeff -> port 7
+            "1.3.6.1.2.1.17.7.1.2.2.1.2.10.0.170.187.204.221.238.255": "7",
+            # dot1qTpFdbStatus: same row is learned
+            "1.3.6.1.2.1.17.7.1.2.2.1.3.10.0.170.187.204.221.238.255": "3",
+        }
+        reg, vp = _no_vendor()
+        resp = MACTableCollector().collect(raw, reg, vp)
+        assert resp.supported is True
+        group = resp.data["port_groups"][0]
+        assert group["macs"] == ["AA:BB:CC:DD:EE:FF"]
+        assert group["mac_count"] == 1
+
+    def test_legacy_bridge_rows_supplement_partial_q_bridge(self):
+        ap_mac = "98:A8:78:00:06:FE"
+        raw = {
+            # One unrelated VLAN-aware row makes Q-BRIDGE non-empty.
+            "1.3.6.1.2.1.17.7.1.2.2.1.2.10.0.170.187.204.221.238.255": "7",
+            "1.3.6.1.2.1.17.7.1.2.2.1.3.10.0.170.187.204.221.238.255": "3",
+            # The AP is exposed only by the legacy table on port 16.
+            "1.3.6.1.2.1.17.4.3.1.2.152.168.120.0.6.254": "16",
+            "1.3.6.1.2.1.17.4.3.1.3.152.168.120.0.6.254": "3",
+        }
+        reg, vp = _no_vendor()
+        resp = MACTableCollector().collect(raw, reg, vp)
+        assert resp.supported is True
+        assert any(entry["mac"] == ap_mac and entry["port"] == 16 for entry in resp.data["entries"])
+        port_16 = next(group for group in resp.data["port_groups"] if group["port"] == 16)
+        assert ap_mac in port_16["macs"]
+
+
+# ---------------------------------------------------------------------------
 # LLDPCollector
 # ---------------------------------------------------------------------------
 

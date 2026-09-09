@@ -40,7 +40,7 @@ export default function AddSNMPDevicePage() {
     vendor_override: '',
     model_override: '',
     device_type_override: '',
-    auto_discover: true,
+    auto_discover: false,
   })
 
   const [showV3Fields, setShowV3Fields] = useState(true)
@@ -108,7 +108,7 @@ export default function AddSNMPDevicePage() {
         site_id: formData.site_id || undefined,
         mac_address: formData.mac_address || undefined,
       })
-      setSuccess(`Device added successfully! ${result.discovery?.reachable ? 'SNMP discovery completed.' : 'Run discovery to detect device capabilities.'}`)
+      setSuccess(`Device added successfully! ${result.discovery?.reachable ? 'SNMP discovery completed.' : 'Discovery was skipped so the device could be added quickly.'}`)
       setTimeout(() => {
         if (result.device?.id) {
           navigate(`/snmp/devices/${result.device.id}`)
@@ -416,7 +416,7 @@ export default function AddSNMPDevicePage() {
               onChange={(e) => handleChange('auto_discover', e.target.checked)}
               className="w-4 h-4 accent-cyan-400"
             />
-            <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>Auto-discover device capabilities after adding</span>
+            <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>Run full SNMP discovery after adding the device</span>
           </label>
         </div>
       </GlassCard>

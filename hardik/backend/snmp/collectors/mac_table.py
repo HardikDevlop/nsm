@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BaseCollector, CollectorResponse
-from ..normalizer import RawDevice
+from ..normalizer import RawDevice, mac as normalize_mac
 
 # BRIDGE-MIB
 _FDB_PORT   = "1.3.6.1.2.1.17.4.3.1.2."   # dot1dTpFdbPort
@@ -124,7 +124,7 @@ class MACTableCollector(BaseCollector):
             try:
                 vlan_id  = int(parts[0])
                 mac_sfx  = parts[1]
-                mac_str  = _mac_from_oid_suffix(mac_sfx)
+                mac_str  = normalize_mac(_mac_from_oid_suffix(mac_sfx))
                 if not mac_str:
                     continue
                 port_num = self.num(v)
@@ -152,35 +152,42 @@ class MACTableCollector(BaseCollector):
                 continue
 
         # ---------------------------------------------------------------
-        # 2. BRIDGE-MIB dot1dTpFdbTable (fallback, no VLAN info)
+        # 2. BRIDGE-MIB dot1dTpFdbTable (supplement, no VLAN info)
         # Row index: <mac_6_octets>
+        #
+        # Some switches expose only part of the FDB through Q-BRIDGE-MIB
+        # while keeping locally learned devices in the legacy table. This
+        # must be merged, rather than treated as an all-or-nothing fallback.
         # ---------------------------------------------------------------
-        if not entries:
-            for k, v in raw_flat.items():
-                sk = str(k)
-                if not sk.startswith(_FDB_PORT):
-                    continue
-                mac_sfx = sk[len(_FDB_PORT):]
-                mac_str = _mac_from_oid_suffix(mac_sfx)
-                if not mac_str:
-                    continue
-                port_num    = self.num(v)
-                status_code = str(raw_flat.get(_FDB_STATUS + mac_sfx, "3")).strip()
-                status = _FDB_STATUS_MAP.get(status_code, "learned")
-                if status == "invalid":
-                    continue
-                if mac_str in seen_macs:
-                    continue
-                seen_macs.add(mac_str)
+        q_macs = {entry["mac"] for entry in entries}
+        for k, v in raw_flat.items():
+            sk = str(k)
+            if not sk.startswith(_FDB_PORT):
+                continue
+            mac_sfx = sk[len(_FDB_PORT):]
+            mac_str = normalize_mac(_mac_from_oid_suffix(mac_sfx))
+            if not mac_str or mac_str in q_macs:
+                continue
+            port_num    = self.num(v)
+            status_code = str(raw_flat.get(_FDB_STATUS + mac_sfx, "3")).strip()
+            status = _FDB_STATUS_MAP.get(status_code, "learned")
+            if status == "invalid":
+                continue
+            q_macs.add(mac_str)
 
-                port_int = int(port_num) if port_num is not None else None
-                entries.append({
-                    "mac":      mac_str,
-                    "port":     port_int,
-                    "if_index": port_to_ifindex.get(port_int) if port_int else None,
-                    "vlan_id":  None,
-                    "status":   status,
-                })
+            port_int = int(port_num) if port_num is not None else None
+            entries.append({
+                "mac":      mac_str,
+                "port":     port_int,
+                "if_index": port_to_ifindex.get(port_int) if port_int else None,
+                "vlan_id":  None,
+                "status":   status,
+            })
+
+        # The bridge agent reports its own forwarding address with status
+        # ``self``. It is not a connected host and must never appear in the
+        # MAC table, port summary, or inferred topology.
+        entries = [entry for entry in entries if entry.get("status") != "self"]
 
         if not entries:
             return CollectorResponse.unsupported(
@@ -215,8 +222,10 @@ class MACTableCollector(BaseCollector):
                 "port": entry.get("port"), "if_index": entry.get("if_index"),
                 "mac_count": 0, "macs": [], "ip_addresses": [], "vlans": [],
             })
-            group["mac_count"] += 1
-            group["macs"].append(entry["mac"])
+            canonical_mac = normalize_mac(entry.get("mac"))
+            if canonical_mac and canonical_mac not in group["macs"]:
+                group["macs"].append(canonical_mac)
+            group["mac_count"] = len(group["macs"])
             # Some devices expose an IP alongside the forwarding entry.
             # Keep it available for the UI; the API can also enrich this
             # from the ARP collector when the switch does not.
@@ -226,6 +235,8 @@ class MACTableCollector(BaseCollector):
             if entry.get("vlan_id") is not None and entry["vlan_id"] not in group["vlans"]:
                 group["vlans"].append(entry["vlan_id"])
         for key, group in groups.items():
+            group["macs"].sort()
+            group["vlans"].sort(key=lambda value: int(value))
             if key in lldp_ports or str(group.get("port")) in lldp_ports:
                 group["classification"] = "UPLINK/TRUNK"
             elif group["mac_count"] == 1:

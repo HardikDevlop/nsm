@@ -37,11 +37,11 @@ export async function fetchMonitoringData(deviceId: number): Promise<any> {
 }
 
 // NEW: Hook to use monitoring data API
-export function useMonitoringData(deviceId: number | null) {
+export function useMonitoringData(deviceId: number | null, enabled = true) {
   return useQuery<any>({
     queryKey: ['monitoring', 'data', deviceId],
     queryFn: () => fetchMonitoringData(deviceId!),
-    enabled: !!deviceId,
+    enabled: !!deviceId && enabled,
     staleTime: 5000,
     retry: 1,
   });
@@ -85,7 +85,9 @@ export async function fetchModuleData(deviceId: number, moduleId: string): Promi
     throw new Error(`Unknown module: ${moduleId}`);
   }
   const endpoint = moduleConfig.apiEndpoint.replace('{deviceId}', String(deviceId));
-  return requestJson<SNMPModuleData>(endpoint);
+  // Module pages must read the latest successful scheduler snapshot. Do not
+  // reuse the generic 30-second browser/API GET cache here.
+  return requestJson<SNMPModuleData>(endpoint, { cache: 'no-store' });
 }
 
 // Fetch all module data for a device (overview)
@@ -152,11 +154,19 @@ export function useDeviceCapabilities(deviceId: number | null) {
 }
 
 export function useModuleData(deviceId: number | null, moduleId: string | null) {
+  const monitoringStatus = useModuleMonitoringStatus(deviceId, moduleId)
+  const refetchIntervalSeconds = monitoringStatus?.enabled && monitoringStatus?.status === 'running'
+    ? monitoringStatus.interval_seconds
+    : undefined
   return useQuery<SNMPModuleData>({
     queryKey: moduleKeys.moduleData(deviceId!, moduleId!),
     queryFn: () => fetchModuleData(deviceId!, moduleId!),
     enabled: !!deviceId && !!moduleId,
-    staleTime: 5000,
+    staleTime: moduleId === 'interfaces' || moduleId === 'mac_table' ? 0 : 5000,
+    refetchInterval: refetchIntervalSeconds ? refetchIntervalSeconds * 1000 : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 }
 

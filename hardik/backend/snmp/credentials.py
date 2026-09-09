@@ -15,6 +15,7 @@ class SNMPCredentials:
     privacy_protocol: str | None = None
     privacy_password: str | None = None
     security_level: str | None = None
+    port: int = 161
 
     def __post_init__(self) -> None:
         version = self.version.lower().replace("snmp", "")
@@ -22,6 +23,8 @@ class SNMPCredentials:
             raise ValueError("SNMP version must be v2c or v3")
         if version in {"3", "v3"} and not self.username:
             raise ValueError("SNMPv3 requires a username")
+        if not 1 <= self.port <= 65535:
+            raise ValueError("SNMP port must be between 1 and 65535")
 
     @property
     def is_v3(self) -> bool:

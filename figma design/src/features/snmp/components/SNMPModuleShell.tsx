@@ -4,7 +4,7 @@ import GlassCard from '../../../components/GlassCard'
 import SNMPStatusBadge from './SNMPStatusBadge'
 import { useSNMPDeviceDetails, useStartModuleMonitoring, useStopModuleMonitoring, useUpdateModuleMonitoring } from '../hooks/useSnmpQueries'
 
-const INTERVALS = [30, 60, 120, 300, 600]
+const INTERVALS = [15, 30, 60, 120, 300, 600]
 
 const MODULE_ROUTES: Record<string, string> = {
   overview: '',

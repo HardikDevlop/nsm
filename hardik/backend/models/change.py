@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database.session import Base
@@ -16,14 +16,25 @@ class ChangeRequest(Base):
     category: Mapped[str] = mapped_column(String(50), index=True)
     risk: Mapped[str] = mapped_column(String(30), index=True)
     impact: Mapped[str] = mapped_column(String(30), index=True)
+    priority: Mapped[str] = mapped_column(String(2), default="p3", index=True)
     status: Mapped[str] = mapped_column(String(30), default="draft", index=True)
     requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     approval_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approval_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    rejected_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rejection_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     maintenance_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     maintenance_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     implementation_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
     rollback_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
+    implementation_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    implementation_failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rollback_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rollback_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     closure_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
@@ -52,6 +63,17 @@ class ChangeIncident(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     change_id: Mapped[int] = mapped_column(ForeignKey("change_requests.id", ondelete="CASCADE"), index=True)
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), index=True)
+    linked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    linked_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class ChangeProblem(Base):
+    __tablename__ = "change_problems"
+    __table_args__ = (UniqueConstraint("change_id", "problem_id", name="uq_change_problem"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    change_id: Mapped[int] = mapped_column(ForeignKey("change_requests.id", ondelete="CASCADE"), index=True)
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"), index=True)
     linked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     linked_at: Mapped[datetime] = mapped_column(DateTime)
 

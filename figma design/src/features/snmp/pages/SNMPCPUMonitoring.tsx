@@ -47,18 +47,6 @@ export default function SNMPCPUMonitoring() {
     cpuModuleData?.supported === true ||
     hasCpuData
 
-  // Debug logging
-  console.log('CPU Module Debug:', {
-    id,
-    caps,
-    supported,
-    latestCPU,
-    monitoringData,
-    cpuModuleData,
-    monitoringLoading,
-    monitoringError
-  })
-
   if (!supported) {
     return (
       <SNMPModuleShell module="cpu" title="CPU Monitoring" unsupportedMessage="CPU monitoring is not supported by this device.">
@@ -76,15 +64,6 @@ export default function SNMPCPUMonitoring() {
     missing: cpuModuleData?.missing || [],
     warnings: cpuModuleData?.warnings || [],
   }
-
-  // Debug logging
-  console.log('CPU Stats Data:', { 
-    stats, 
-    currentUsage, 
-    latestCPU, 
-    cpuData,
-    monitoringData 
-  })
 
   return (
     <SNMPModuleShell module="cpu" title="CPU Monitoring" showMonitoringControls={true}>

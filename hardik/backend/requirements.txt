@@ -14,7 +14,23 @@ APScheduler>=3.10,<4.0
 paramiko>=3.4,<4.0
 redis>=5.0,<6.0
 
+# Test-only property-based checks
+hypothesis>=6.100
+
 
 # cd /home/agnigate/Desktop/NMS/hardik
 # source .venv/bin/activate
 # python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+# lsof -ti:8000 | xargs -r kill -9
+
+
+
+
+
+
+
+
+
+
+
+

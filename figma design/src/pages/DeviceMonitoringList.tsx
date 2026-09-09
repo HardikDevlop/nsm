@@ -13,10 +13,13 @@ import {
   type DeviceRecord,
   type MonitoringStatusResponse,
 } from '../lib/api'
+import { useI18n } from '../i18n/I18nContext'
 
 type LiveDevice = Record<string, unknown>
 
 export default function DeviceMonitoringList() {
+  const { t } = useI18n()
+  const tr = t.workflow
   const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [monitoringData, setMonitoringData] = useState<MonitoringStatusResponse | null>(null)
   const [liveDevices, setLiveDevices] = useState<LiveDevice[]>([])
@@ -193,7 +196,7 @@ export default function DeviceMonitoringList() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">DEVICE MONITORING</h1>
+          <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">{tr.deviceMonitoring}</h1>
           <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {devices.length} device{devices.length !== 1 ? 's' : ''} in database · {totalMonitored} under monitoring
           </p>
@@ -207,7 +210,7 @@ export default function DeviceMonitoringList() {
               className="rounded-lg px-4 py-2 font-display text-xs tracking-wider uppercase transition disabled:opacity-60 min-h-[44px]"
               style={{ background: 'rgba(255,51,102,0.12)', border: '1px solid rgba(255,51,102,0.3)', color: '#ff3366' }}
             >
-              {stoppingAll ? 'STOPPING…' : '■ STOP ALL'}
+              {stoppingAll ? 'STOPPING…' : tr.stopAll}
             </button>
             </PermissionGuard>
           )}
@@ -218,7 +221,7 @@ export default function DeviceMonitoringList() {
             className="rounded-lg px-4 py-2 font-display text-xs tracking-wider uppercase transition disabled:opacity-60 min-h-[44px]"
             style={{ background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.3)', color: '#00ff88' }}
           >
-            {startingAll ? 'STARTING…' : '▶ START ALL'}
+            {startingAll ? 'STARTING…' : tr.startAll}
           </button>
           </PermissionGuard>
         </div>
@@ -229,31 +232,31 @@ export default function DeviceMonitoringList() {
       {/* Summary cards */}
       <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>TOTAL DEVICES</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.totalDevices}</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00d4ff' }}>{devices.length}</div>
         </GlassCard>
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>MONITORED</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.monitored}</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00d4ff' }}>{totalMonitored}</div>
         </GlassCard>
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>ONLINE</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.online}</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00ff88' }}>{totalUp}</div>
         </GlassCard>
         <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>OFFLINE</div>
+          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.offline}</div>
           <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#ff3366' }}>{totalDown}</div>
         </GlassCard>
       </div>
 
       {/* Device list */}
       <GlassCard className="p-4 md:p-5">
-        <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-4">ALL DEVICES</div>
+        <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-4">{tr.allDevices}</div>
         {loading ? (
-          <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Loading devices…</div>
+          <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.loadingDevices}</div>
         ) : devices.length === 0 ? (
           <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
-            No devices in database. Run a discovery and add devices first.
+            {tr.noDevices}
           </div>
         ) : (
           <div className="space-y-2">

@@ -17,26 +17,26 @@ const nav = [
   { to: '/topology', label: 'Network Topology', icon: 'M13 10V3L4 14h7v7l9-11h-7z', permission: 'topology:read' },
   { to: '/manual-topology', label: 'Manual Topology', icon: 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h5', permission: 'topology:read' },
   { to: '/isp', label: 'IP Scan', icon: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0', permission: 'isp:read' },
+  { to: '/snmp/devices', label: 'SNMP Devices', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z', permission: 'devices:read' },
   { to: '/device-monitoring', label: 'Device Monitoring', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', permission: 'device_monitoring:read' },
   // { to: '/incidents', label: 'Incidents', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', permission: 'incidents:read' },
   // { to: '/attack-path', label: 'Attack Path', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7', permission: 'attack_path:read' },
   { to: '/packet-analysis', label: 'Packet Analysis', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', permission: 'packet_analysis:read' },
-  { to: '/flow-analytics', label: 'Flow Analytics', icon: 'M4 19V5m0 14h16M8 16v-5m4 5V7m4 9v-8', permission: 'flows:read' },
-  { to: '/apm', label: 'APM Service Health', icon: 'M4 19h16M6 16v-5m4 5V7m4 9v-3m4 3V4', permission: 'apm:read' },
-  { to: '/cmdb', label: 'CMDB', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'cmdb:read' },
-  { to: '/rca', label: 'Root Cause Analysis', icon: 'M12 3v18M3 12h18M5 5l14 14M19 5L5 19', permission: 'rca:read' },
-  { to: '/incident-management', label: 'Incident Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'incidents:read' },
-  { to: '/problem-management', label: 'Problem Management', icon: 'M12 3a9 9 0 100 18 9 9 0 000-18zm0 5v5m0 3h.01', permission: 'problems:read' },
-  { to: '/change-management', label: 'Change Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'changes:read' },
-  { to: '/knowledge-base', label: 'Knowledge Base', icon: 'M4 5h16v14H4zM8 9h8M8 13h6M8 17h4', permission: 'knowledge:read' },
-  { to: '/configuration-backups', label: 'Configuration Backups', icon: 'M5 4h14v16H5zM8 8h8M8 12h8M8 16h5', permission: 'config_backups:read' },
-  { to: '/configuration-compliance', label: 'Configuration Compliance', icon: 'M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7zM9 12l2 2 4-4', permission: 'config_compliance:read' },
-  { to: '/availability', label: 'Availability Reports', icon: 'M4 19h16M6 16v-5M10 16V7M14 16v-3M18 16V4', permission: 'availability:read' },
-  { to: '/qos', label: 'QoS Monitoring', icon: 'M4 19h16M6 16v-5M10 16V7M14 16v-3M18 16V4', permission: 'qos:read' },
-  { to: '/bgp', label: 'BGP Monitoring', icon: 'M4 19h16M5 15l4-5 4 3 6-8', permission: 'bgp:read' },
+  // { to: '/flow-analytics', label: 'Flow Analytics', icon: 'M4 19V5m0 14h16M8 16v-5m4 5V7m4 9v-8', permission: 'flows:read' },
+  // { to: '/apm', label: 'APM Service Health', icon: 'M4 19h16M6 16v-5m4 5V7m4 9v-3m4 3V4', permission: 'apm:read' },
+  // { to: '/cmdb', label: 'CMDB', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'cmdb:read' },
+  // { to: '/rca', label: 'Root Cause Analysis', icon: 'M12 3v18M3 12h18M5 5l14 14M19 5L5 19', permission: 'rca:read' },
+  // { to: '/incident-management', label: 'Incident Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'incidents:read' },
+  // { to: '/problem-management', label: 'Problem Management', icon: 'M12 3a9 9 0 100 18 9 9 0 000-18zm0 5v5m0 3h.01', permission: 'problems:read' },
+  // { to: '/change-management', label: 'Change Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'changes:read' },
+  // { to: '/knowledge-base', label: 'Knowledge Base', icon: 'M4 5h16v14H4zM8 9h8M8 13h6M8 17h4', permission: 'knowledge:read' },
+  // { to: '/configuration-backups', label: 'Configuration Backups', icon: 'M5 4h14v16H5zM8 8h8M8 12h8M8 16h5', permission: 'config_backups:read' },
+  // { to: '/configuration-compliance', label: 'Configuration Compliance', icon: 'M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7zM9 12l2 2 4-4', permission: 'config_compliance:read' },
+  // { to: '/availability', label: 'Availability Reports', icon: 'M4 19h16M6 16v-5M10 16V7M14 16v-3M18 16V4', permission: 'availability:read' },
+  // { to: '/qos', label: 'QoS Monitoring', icon: 'M4 19h16M6 16v-5M10 16V7M14 16v-3M18 16V4', permission: 'qos:read' },
+  // { to: '/bgp', label: 'BGP Monitoring', icon: 'M4 19h16M5 15l4-5 4 3 6-8', permission: 'bgp:read' },
   // { to: '/nginx', label: 'Nginx Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01', permission: 'nginx:read' },
   // { to: '/firewall', label: 'Firewall', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', permission: 'firewall:read' },
-  { to: '/snmp/devices', label: 'SNMP Devices', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z', permission: 'devices:read' },
   { to: '/servers', label: 'Server Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2', permission: 'server_monitoring:read' },
   { to: '/linux-servers', label: 'Linux Server Monitoring', icon: 'M4 5h16v14H4zM8 9h8M8 13h5', permission: 'linux_servers:read' },
   // { to: '/forensics', label: 'Forensics', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z', permission: 'forensics:read' },
@@ -45,6 +45,7 @@ const nav = [
   // Management section
   { to: '/alerts-management', label: 'Alert Management', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', permission: 'alerts:read', management: true },
   { to: '/events', label: 'Events', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', permission: 'events:read', management: true },
+  { to: '/syslog', label: 'Syslog Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'syslog:read', management: true },
   { to: '/notifications', label: 'Notifications', icon: 'M15 17h5l-5 5v-5zM4.868 19.504L8.094 12l-3.226-7.504L3 5.496z', permission: 'notifications:read', management: true },
   // { to: '/thresholds', label: 'Thresholds', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', permission: 'thresholds:read', management: true },
   { to: '/monitoring-jobs', label: 'Monitoring Jobs', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', permission: 'monitoring_jobs:read', management: true },
@@ -100,7 +101,10 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
       controller?.abort()
       controller = new AbortController()
       try {
-        const live = await requestJson<DashboardSummary>('/dashboard/summary', { signal: controller.signal })
+        const live = await requestJson<DashboardSummary>('/dashboard/summary', {
+          signal: controller.signal,
+          cache: 'no-store',
+        })
         if (!mounted) return
         const total = live.total_devices ?? 0
         const online = live.online_devices ?? 0
@@ -108,8 +112,28 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
         setOnlineCount(online)
         setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
       } catch (error) {
-        if (!(error instanceof Error && error.name === 'AbortError')) {
-          // Keep the last known values if the live summary is temporarily unavailable.
+        if (error instanceof Error && error.name === 'AbortError') return
+        // The device list is the same DB-backed source used by SNMP Devices.
+        // Use it as a recovery path instead of replacing a valid count with 0.
+        try {
+          const fallback = await requestJson<{
+            items?: Array<{ status?: string }>
+            total?: number
+          }>('/snmp/devices?page=1&page_size=200', {
+            signal: controller.signal,
+            cache: 'no-store',
+          })
+          if (!mounted) return
+          const items = fallback.items ?? []
+          const total = fallback.total ?? items.length
+          const online = items.filter(item => String(item.status ?? '').toLowerCase() === 'online').length
+          setTotalDevices(total)
+          setOnlineCount(online)
+          setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
+        } catch (fallbackError) {
+          if (!(fallbackError instanceof Error && fallbackError.name === 'AbortError')) {
+            // Keep the last known values if both authoritative requests fail.
+          }
         }
       } finally {
         inFlight = false
@@ -165,6 +189,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
     '/compliance': () => import('../pages/Compliance'),
     '/alerts-management': () => import('../pages/AlertsManagement'),
     '/events': () => import('../pages/Events'),
+    '/syslog': () => import('../pages/SyslogManagement'),
     '/notifications': () => import('../pages/Notifications'),
     '/thresholds': () => import('../pages/Thresholds'),
     '/monitoring-jobs': () => import('../pages/MonitoringJobs'),

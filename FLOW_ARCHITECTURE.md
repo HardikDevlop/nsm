@@ -22,7 +22,7 @@ the NMS, while SNMP remains a pull-based device and interface telemetry path.
 
 ```text
 Exporter
-  -> UDP/TCP listener (NetFlow/IPFIX/sFlow/J-Flow/NetStream)
+  -> UDP listener (IPFIX/sFlow)
   -> bounded receive queue
   -> protocol decoder
   -> common normalizer
@@ -51,20 +51,11 @@ class FlowProtocolAdapter(Protocol):
 
 | Protocol | Adapter responsibility | Device/exporter identity |
 |---|---|---|
-| NetFlow v5/v9 | Header, template-independent v5 records and v9 templates/data | exporter IP, optional observation domain |
 | IPFIX | Template lifecycle, enterprise fields, data sets and withdrawals | exporter IP + observation domain |
 | sFlow | Datagram/sample decoding and sampled packet counters | agent address + sub-agent |
-| J-Flow | Juniper export variants mapped through NetFlow/IPFIX-compatible records | exporter IP + observation domain |
-| NetStream | Huawei export variants mapped through NetFlow/IPFIX-compatible records | exporter IP + observation domain |
 
-J-Flow and NetStream are accepted only when their configured exporter format
-is wire-compatible with NetFlow v5/v9 or IPFIX. The compatibility adapters
-reuse those parsers and the same storage/analytics pipeline. Vendor-specific
-extensions that cannot be decoded from those formats are not guessed: they are
-reported as unsupported fields and may remain in bounded raw evidence when the
-adapter provides it. Examples include proprietary application IDs, vendor
-NAT/VRF annotations, opaque service identifiers, and exporter-specific counter
-semantics that do not have a common meaning.
+Only standards-compliant IPFIX and sFlow exporters are accepted. No vendor
+identity is required; compatible exporters use the same protocol adapter.
 
 Templates are cached per exporter, protocol and observation domain. A data
 record received before its template is retained only as a bounded decode miss;
@@ -84,9 +75,9 @@ but reporting and querying use the common columns.
 | `id` | bigint | Database identity |
 | `device_id` | bigint nullable | Matched NMS device, nullable for unresolved exporters |
 | `exporter_ip` | inet/text | Source exporter address |
-| `observation_domain` | text nullable | NetFlow/IPFIX domain or equivalent |
-| `protocol` | enum/text | `netflow`, `ipfix`, `sflow`, `jflow`, `netstream` |
-| `source_version` | text nullable | Protocol version, such as `5`, `9`, or `10` |
+| `observation_domain` | text nullable | IPFIX domain or sFlow sub-agent |
+| `protocol` | enum/text | `ipfix` or `sflow` for newly ingested records |
+| `source_version` | text nullable | Protocol version, such as `5` for sFlow or `10` for IPFIX |
 | `flow_start` | timestamp | Original start time normalized to UTC |
 | `flow_end` | timestamp | Original end time normalized to UTC |
 | `received_at` | timestamp | NMS receive time |
@@ -317,7 +308,7 @@ action; a failed rollup does not delete raw data.
 
 1. Add feature flags/configuration and protocol-independent interfaces.
 2. Add migrations for exporter, template, raw, error and rollup tables.
-3. Implement one parser adapter at a time, beginning with NetFlow/IPFIX.
+3. Implement protocol adapters for IPFIX and sFlow without vendor-specific assumptions.
 4. Add batch persistence and retention with PostgreSQL query-plan tests.
 5. Add read/admin APIs and RBAC permissions without changing existing routes.
 6. Integrate lifecycle and scheduler jobs with restart/single-flight tests.

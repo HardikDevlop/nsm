@@ -30,6 +30,8 @@ export default function ConfigurationBackups() {
   const baseline = useQuery({ queryKey: ['configuration-baseline-current', deviceId], queryFn: () => compareBaselineCurrent(deviceId!), enabled: false, staleTime: 30_000, refetchOnWindowFocus: false })
   const capture = useMutation({ mutationFn: () => captureConfiguration({ device_id: deviceId!, source, content }), onSuccess: () => { setContent(''); client.invalidateQueries({ queryKey: ['configuration-versions', deviceId] }) } })
   if (!hasPermission('config_backups:read')) return <div className="p-6 font-mono text-sm" style={{ color: 'var(--t-muted)' }}>You do not have permission to view configuration backups.</div>
+  if (versions.isLoading) return <div className="p-6 font-mono text-sm" style={{ color: 'var(--t-accent)' }}>Loading configuration history...</div>
+  if (versions.error) return <div className="p-6 font-mono text-sm" style={{ color: '#ff6b8a' }}>Unable to load configuration history: {versions.error instanceof Error ? versions.error.message : 'Request failed'}</div>
   const rows: ConfigurationVersion[] = versions.data?.items ?? []; const diff = comparison.data ?? baseline.data
   return <div className="p-4 md:p-6 space-y-5">
     <div><h1 className="font-display font-bold text-2xl tracking-widest" style={{ color: 'var(--t-text)' }}>CONFIGURATION BACKUPS</h1><p className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted)' }}>Encrypted device configuration versions with checksum deduplication</p></div>

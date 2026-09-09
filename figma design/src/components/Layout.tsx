@@ -6,6 +6,8 @@ import { listAlerts, recordPageView, type AlertRecord } from '../lib/api'
 import { useI18n } from '../i18n/I18nContext'
 import { useBranding } from './BrandingContext'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
+import { useQueryClient } from '../lib/queryProvider'
+import { clearClientCache } from '../lib/clearClientCache'
 
 const PAGE_VIEW_THROTTLE_MS = 30_000
 const ALERT_CACHE_KEY = 'nms.layout.alerts.v1'
@@ -24,11 +26,13 @@ export default function Layout() {
   const { theme, toggleTheme, colors } = useTheme()
   const { locale, setLocale, t } = useI18n()
   const branding = useBranding()
+  const queryClient = useQueryClient()
   const isDark = theme === 'dark'
   const navigate = useNavigate()
   const location = useLocation()
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
   const [hiddenAlertIds, setHiddenAlertIds] = useState<number[]>([])
+  const [clearingCache, setClearingCache] = useState(false)
   const showBack = location.pathname !== '/'
 
   useKeyboardShortcuts(() => setNotifOpen(open => !open))
@@ -145,6 +149,13 @@ export default function Layout() {
       persistHiddenAlertIds(merged)
       return merged
     })
+  }
+
+  const handleClearCache = async () => {
+    if (clearingCache) return
+    setClearingCache(true)
+    await clearClientCache(queryClient)
+    window.location.reload()
   }
 
   useEffect(() => {
@@ -267,6 +278,24 @@ export default function Layout() {
                 <span className="hidden sm:inline font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{openAlertCount}</span>
                 {openAlertCount > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full pulse-glow"
                   style={{ background: '#ff3366', boxShadow: '0 0 8px rgba(255,51,102,0.8)' }} />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { void handleClearCache() }}
+                disabled={clearingCache}
+                aria-label="Clear website cache"
+                title="Clear all website cache"
+                className={`${isDark ? 'glass-bright' : 'glass-light'} rounded px-2 md:px-3 py-1.5 flex items-center gap-1 md:gap-2 cursor-pointer transition-all disabled:cursor-wait disabled:opacity-60`}
+                style={{ border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 7h16" />
+                  <path d="M10 11v6M14 11v6" />
+                  <path d="M6 7l1 14h10l1-14" />
+                  <path d="M9 7V4h6v3" />
+                </svg>
+                <span className="hidden md:inline font-mono text-xs">{clearingCache ? 'CLEARING' : 'CLEAR CACHE'}</span>
               </button>
             </div>
           </div>

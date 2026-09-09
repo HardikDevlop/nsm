@@ -32,8 +32,15 @@ class Settings(BaseSettings):
     redis_cache_ttl_seconds: int = 10
     flow_enabled: bool = False
     flow_bind_host: str = "0.0.0.0"
-    flow_netflow_port: int = 2055
+    flow_ipfix_port: int = 4739
     flow_sflow_port: int = 6343
+    syslog_enabled: bool = False
+    syslog_bind_host: str = "0.0.0.0"
+    syslog_udp_port: int = 5514
+    syslog_tcp_port: int = 6514
+    syslog_enable_udp: bool = True
+    syslog_enable_tcp: bool = True
+    syslog_retention_days: int = 0
     branding_application_name: str = "NMS"
     branding_logo_url: str = ""
     branding_allowed_themes: str = "light,dark"
@@ -49,4 +56,22 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.environment.lower() == "production":
+        weak_secret = settings.secret_key in {
+            "change-this-secret-key",
+            "CHANGE_ME",
+            "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
+        } or len(settings.secret_key) < 32
+        if weak_secret:
+            raise ValueError(
+                "Production requires SECRET_KEY with at least 32 non-placeholder characters"
+            )
+        if not settings.credential_encryption_key or settings.credential_encryption_key in {
+            "CHANGE_ME",
+            "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
+        }:
+            raise ValueError(
+                "Production requires CREDENTIAL_ENCRYPTION_KEY for stored device credentials"
+            )
+    return settings

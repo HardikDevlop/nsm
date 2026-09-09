@@ -4,10 +4,45 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from backend.api.manual_topology_routes import _link_key, _observed_links
 from backend.api.snmp_device_routes import _persist_topology_snapshot, get_snmp_topology
 from backend.database.session import Base
 from backend.models import Device  # noqa: F401
 from backend.models.identity import DeviceCapabilities  # noqa: F401
+
+
+def test_manual_topology_link_key_is_direction_independent_and_normalized():
+    first = {"from": "A", "fromPort": " Gi1 ", "to": "B", "toPort": "Eth0"}
+    reverse = {"from": "b", "fromPort": " eth0", "to": "a", "toPort": "gi1 "}
+    assert _link_key(first) == _link_key(reverse)
+
+
+def test_manual_topology_observed_links_require_port_evidence():
+    payload = {
+        "devices": [
+            {"id": "manual-a", "backendId": 1, "name": "core"},
+            {"id": "manual-b", "backendId": 2, "name": "edge"},
+        ]
+    }
+    links = _observed_links({"links": [{"source_node": "1", "target_node": "2"}]}, payload)
+    assert links == []
+
+    links = _observed_links({"links": [{
+        "source_node": "1", "target_node": "2",
+        "source_port": "Gi1", "target_port": "Eth0", "evidence_source": "lldp",
+    }]}, payload)
+    assert links[0]["evidence_available"] is True
+    assert links[0]["evidence_source"] == "lldp"
+
+    # MAC/ARP can prove the monitored switch-side port while the endpoint's
+    # local port is unavailable. That is still sufficient physical evidence.
+    links = _observed_links({"links": [{
+        "source_node": "1", "target_node": "2", "source_port": "1",
+        "protocol": "mac_table",
+    }]}, payload)
+    assert links[0]["fromPort"] == "1"
+    assert links[0]["toPort"] == ""
+    assert links[0]["evidence_available"] is True
 
 
 def test_live_topology_snapshot_survives_reload_and_rejects_older_data():

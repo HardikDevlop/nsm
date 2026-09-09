@@ -9,10 +9,26 @@ export default function SNMPTopologyMonitoring() {
   const id = Number(deviceId)
   const moduleConfig = getModuleConfig('topology')!
 
-  const { data: caps } = useDeviceCapabilities(id)
-  const { data: monitoringData } = useMonitoringData(id)
+  const { data: caps, isLoading: capabilitiesLoading, error: capabilitiesError } = useDeviceCapabilities(id)
+  const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
 
   const supported = caps?.topology === true || caps?.lldp === true
+
+  if (capabilitiesLoading || monitoringLoading) {
+    return (
+      <SNMPModuleShell module="topology" title="Topology" showMonitoringControls={false}>
+        <GlassCard className="p-6 text-center font-mono text-xs" style={{ color: '#00d4ff' }}>Loading topology data...</GlassCard>
+      </SNMPModuleShell>
+    )
+  }
+
+  if (capabilitiesError || monitoringError) {
+    return (
+      <SNMPModuleShell module="topology" title="Topology" showMonitoringControls={false}>
+        <GlassCard className="p-6 text-center font-mono text-xs" style={{ color: '#ff6b8a' }}>Unable to load topology data.</GlassCard>
+      </SNMPModuleShell>
+    )
+  }
 
   if (!supported) {
     return (
