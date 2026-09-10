@@ -1389,6 +1389,11 @@ export interface MonitoringStreamEvent {
   data: MonitoringStatusResponse
 }
 
+export interface TopologyStreamEvent {
+  event: "topology"
+  data: { revision: string; updated_at: string }
+}
+
 export async function pingIps(ips: string[], timeoutMs = 1000): Promise<{
   count: number
   results: Array<{ ip: string reachable: boolean status: string rtt?: number }>
@@ -1399,24 +1404,25 @@ export async function pingIps(ips: string[], timeoutMs = 1000): Promise<{
   })
 }
 
-export async function streamMonitoring(
-  onEvent: (event: MonitoringStreamEvent) => void,
+async function streamJsonEvents<T>(
+  path: string,
+  onEvent: (event: T) => void,
 ): Promise<() => void> {
   const token = await ensureAuth()
   const controller = new AbortController()
 
-  const response = await fetch(buildUrl("/discovery/monitoring/stream"), {
+  const response = await fetch(buildUrl(path), {
     headers: { Authorization: `Bearer ${token}` },
     signal: controller.signal,
   })
 
   if (!response.ok) {
-    throw new Error(`Monitoring stream failed: ${response.status}`)
+    throw new Error(`Event stream failed: ${response.status}`)
   }
 
   const reader = response.body?.getReader()
   if (!reader) {
-    throw new Error("Monitoring stream is not available")
+    throw new Error("Event stream is not available")
   }
 
   const decoder = new TextDecoder()
@@ -1443,10 +1449,7 @@ export async function streamMonitoring(
               payload += `${line.slice(5).trimStart()}\n`
           }
           if (payload.trim()) {
-            onEvent({
-              event: eventName as MonitoringStreamEvent["event"],
-              data: JSON.parse(payload.trim()),
-            })
+            onEvent({ event: eventName, data: JSON.parse(payload.trim()) } as T)
           }
         }
       }
@@ -1460,6 +1463,18 @@ export async function streamMonitoring(
   return () => {
     controller.abort()
   }
+}
+
+export function streamMonitoring(
+  onEvent: (event: MonitoringStreamEvent) => void,
+): Promise<() => void> {
+  return streamJsonEvents("/discovery/monitoring/stream", onEvent)
+}
+
+export function streamTopologyUpdates(
+  onEvent: (event: TopologyStreamEvent) => void,
+): Promise<() => void> {
+  return streamJsonEvents("/snmp/topology/stream", onEvent)
 }
 
 // ── Organizations ──

@@ -101,6 +101,7 @@ def create_device_added_alert(
     status: str,
     mac_address: str | None = None,
     snmp_version: str | None = None,
+    notify: bool = True,
 ) -> Alert | None:
     """Create one active informational alert when discovery adds a device."""
     title = f"New Device Added: {hostname}"
@@ -134,7 +135,8 @@ def create_device_added_alert(
     db.add(alert)
     db.flush()
     _process_incident_safely(db, alert)
-    _notify(db, alert)
+    if notify:
+        _notify(db, alert)
     return alert
 
 
@@ -144,6 +146,7 @@ def create_operational_alert(
     description: str,
     severity: str = "info",
     device_id: int | None = None,
+    notify: bool = True,
 ) -> Alert:
     """Create a notification-backed alert for an explicit operator action."""
     alert = Alert(
@@ -156,7 +159,8 @@ def create_operational_alert(
     )
     db.add(alert)
     db.flush()
-    _notify(db, alert)
+    if notify:
+        _notify(db, alert)
     return alert
 
 

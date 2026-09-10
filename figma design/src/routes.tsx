@@ -1,25 +1,10 @@
-import { lazy } from "react"
+import { lazyRetry } from "./components/lazyRetry"
 import { createBrowserRouter } from "react-router"
 import Layout from "./components/Layout"
 import ProtectedLayout from "./components/ProtectedLayout"
 import { withPermission } from "./components/ProtectedLayout"
 import ErrorPage from "./pages/ErrorPage"
 import { snmpRoutes } from "./features/snmp/routes"
-
-function lazyRetry<T extends { default: React.ComponentType<any> }>(
-  loader: () => Promise<T>,
-) {
-  return lazy(async () => {
-    try {
-      return await loader()
-    } catch (error) {
-      // A transient dev-server/module-resolution failure can leave the route
-      // tree unusable. Retry once before falling back to the page error UI.
-      await new Promise((resolve) => setTimeout(resolve, 120))
-      return loader()
-    }
-  })
-}
 
 const Login = lazyRetry(() => import("./pages/Login"))
 const Unauthorized = lazyRetry(() => import("./pages/Unauthorized"))

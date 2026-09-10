@@ -23,6 +23,9 @@ import {
   type SNMPInterfaceStats,
 } from "../lib/api"
 import { toast } from "../lib/swal"
+import { readViewports, centeredViewport, zoomViewport, type Viewport } from "./manualTopologyViewport"
+import { portEndpoint, compactPortLabel } from "./manualTopologyPorts"
+import { comparePhysicalConnection } from "./manualTopologyEvidence"
 import { useI18n } from "../i18n/I18nContext"
 
 type Device = {
@@ -77,6 +80,7 @@ type EditForm = {
 }
 
 const CANVAS = { width: 1400, height: 820 }
+const NODE_SOCKET = { x: 58, y: 34 }
 const STORAGE_KEY = "nms.manual-topology.workspace.v2"
 const VIEWPORT_STORAGE_KEY = "nms.manual-topology.viewport.v1"
 const palette = [
@@ -88,6 +92,7 @@ const palette = [
   "#9b8afb",
 ]
 const editableDeviceTypes = [
+  "Network Device",
   "Core Switch",
   "Switch",
   "Router",
@@ -96,6 +101,8 @@ const editableDeviceTypes = [
   "Camera",
   "NVR",
   "Access Point",
+  "WiFi",
+  "AP",
   "Wireless Controller",
   "Storage",
   "Printer",
@@ -105,6 +112,19 @@ const editableDeviceTypes = [
   "Cloud",
   "Generic Device",
 ]
+
+const symbolLibrary = [
+  { category: "NETWORK", items: ["Router", "Core Switch", "Switch", "Gateway", "Modem", "Hub", "Bridge", "Load Balancer", "Internet", "Cloud"] },
+  { category: "SECURITY", items: ["Firewall", "UTM", "IDS", "IPS", "VPN Gateway", "Security Appliance"] },
+  { category: "SERVERS", items: ["Generic Server", "Linux Server", "Windows Server", "Web Server", "Database Server", "Mail Server", "Virtual Machine", "Hypervisor"] },
+  { category: "WIRELESS", items: ["Access Point", "Wireless Controller", "WiFi Router", "Wireless Bridge", "Antenna"] },
+  { category: "VIDEO / CCTV", items: ["IP Camera", "Dome Camera", "Bullet Camera", "PTZ Camera", "NVR", "DVR"] },
+  { category: "ENDPOINTS", items: ["Desktop", "Laptop", "Printer", "IP Phone", "Mobile", "Tablet", "IoT Device", "Sensor"] },
+  { category: "STORAGE", items: ["NAS", "SAN", "Storage Array", "Backup Appliance"] },
+  { category: "POWER", items: ["UPS", "PDU"] },
+  { category: "CLOUD", items: ["Cloud", "Internet", "SaaS", "Data Center", "Remote Site"] },
+  { category: "GENERIC", items: ["Generic Device", "Unknown Device", "Custom Node", "Site", "Rack", "Building", "Group", "Zone"] },
+] as const
 
 type DeviceKind = "SWITCH" | "CORE_SWITCH" | "ROUTER" | "FIREWALL" | "CAMERA" | "NVR" | "ACCESS_POINT" | "SERVER" | "STORAGE" | "PRINTER" | "PHONE" | "CLOUD" | "GENERIC_DEVICE"
 
@@ -316,6 +336,125 @@ function glyph(type: string, name?: string, vendor?: string, model?: string) {
   )
 }
 
+function deviceIllustration(type: string, tone: string) {
+  const kind = classifyDevice(type)
+  const isSwitch = kind === "SWITCH" || kind === "CORE_SWITCH"
+  const isServer = kind === "SERVER" || kind === "STORAGE" || kind === "NVR"
+  const isCloud = kind === "CLOUD"
+  if (isCloud)
+    return (
+      <>
+        <path d="M22 51h66c10 0 17-6 17-15 0-8-6-14-14-15-3-10-12-16-22-16-12 0-21 7-24 18-9-1-16 5-16 14 0 8 6 14 15 14Z" fill="#26383b" stroke={tone} strokeWidth="2" />
+        <path d="M34 38h41M43 29h23M52 20v25" stroke={tone} strokeWidth="2" opacity=".8" />
+      </>
+    )
+  if (kind === "ACCESS_POINT")
+    return (
+      <>
+        <ellipse cx="68" cy="43" rx="42" ry="16" fill="#202d31" stroke={tone} strokeWidth="2" />
+        <path d="M28 43v8c0 8 18 14 40 14s40-6 40-14v-8" fill="#101719" stroke={tone} strokeWidth="2" />
+        <path d="M48 36a28 28 0 0 1 40 0M54 31a20 20 0 0 1 28 0" fill="none" stroke={tone} strokeWidth="2" strokeLinecap="round" />
+        <circle cx="68" cy="43" r="3" fill="#61c98d" />
+      </>
+    )
+  if (kind === "ROUTER")
+    return (
+      <>
+        <polygon points="20,34 65,22 111,34 65,48" fill="#2c3438" stroke={tone} strokeWidth="1.8" />
+        <polygon points="20,34 65,48 65,65 20,51" fill="#172124" stroke={tone} strokeWidth="1.8" />
+        <polygon points="65,48 111,34 111,51 65,65" fill="#0d1416" stroke={tone} strokeWidth="1.8" />
+        <path d="M38 32V14M92 29V11" stroke={tone} strokeWidth="2" />
+        <circle cx="38" cy="14" r="3" fill={tone} /><circle cx="92" cy="11" r="3" fill={tone} />
+        <path d="M74 50h25M74 56h15" stroke="#9aa3a0" strokeWidth="2" />
+        <circle cx="70" cy="50" r="2" fill="#61c98d" /><circle cx="70" cy="56" r="2" fill="#e3a45d" />
+      </>
+    )
+  if (kind === "FIREWALL")
+    return (
+      <>
+        <polygon points="18,28 73,15 115,28 60,42" fill="#3a252a" stroke={tone} strokeWidth="1.8" />
+        <polygon points="18,28 60,42 60,63 18,49" fill="#21181b" stroke={tone} strokeWidth="1.8" />
+        <polygon points="60,42 115,28 115,49 60,63" fill="#160f12" stroke={tone} strokeWidth="1.8" />
+        <path d="M78 42v10M72 47h12M91 40l10-3" stroke={tone} strokeWidth="2" strokeLinecap="round" />
+        <circle cx="68" cy="47" r="2" fill="#d9646a" /><circle cx="68" cy="54" r="2" fill="#61c98d" />
+      </>
+    )
+  if (kind === "CAMERA")
+    return (
+      <>
+        <path d="M25 39h47l18-9v22l-18-9H25Z" fill="#28383b" stroke={tone} strokeWidth="2" />
+        <circle cx="58" cy="42" r="10" fill="#101719" stroke={tone} strokeWidth="2" />
+        <circle cx="58" cy="42" r="4" fill={tone} />
+        <path d="M39 29V18h24l7 11M42 18l5-7h12l5 7" fill="none" stroke={tone} strokeWidth="2" />
+      </>
+    )
+  if (kind === "NVR")
+    return (
+      <>
+        <polygon points="20,25 76,12 115,25 59,39" fill="#39352a" stroke={tone} strokeWidth="1.8" />
+        <polygon points="20,25 59,39 59,66 20,52" fill="#211f19" stroke={tone} strokeWidth="1.8" />
+        <polygon points="59,39 115,25 115,52 59,66" fill="#151411" stroke={tone} strokeWidth="1.8" />
+        <path d="M68 43h37M68 51h37" stroke="#9a8d67" strokeWidth="1.5" />
+        <circle cx="64" cy="43" r="2" fill="#61c98d" /><circle cx="64" cy="51" r="2" fill="#e3a45d" />
+        <path d="M28 34h18M28 41h18" stroke="#d4a95c" strokeWidth="2" />
+      </>
+    )
+  if (kind === "STORAGE")
+    return (
+      <>
+        <polygon points="20,25 76,12 115,25 59,39" fill="#30294a" stroke={tone} strokeWidth="1.8" />
+        <polygon points="20,25 59,39 59,66 20,52" fill="#1b1830" stroke={tone} strokeWidth="1.8" />
+        <polygon points="59,39 115,25 115,52 59,66" fill="#100e1d" stroke={tone} strokeWidth="1.8" />
+        <ellipse cx="78" cy="45" rx="12" ry="4" fill="#1b1830" stroke={tone} /><ellipse cx="98" cy="40" rx="8" ry="3" fill="#1b1830" stroke={tone} />
+        <path d="M67 53h34" stroke="#a98cf0" strokeWidth="1.5" /><circle cx="64" cy="53" r="2" fill="#61c98d" />
+      </>
+    )
+  if (kind === "PHONE" || kind === "PRINTER")
+    return (
+      <>
+        <polygon points="30,28 75,17 106,27 61,39" fill="#2a3a3e" stroke={tone} strokeWidth="1.8" />
+        <polygon points="30,28 61,39 61,63 30,52" fill="#192528" stroke={tone} strokeWidth="1.8" />
+        <polygon points="61,39 106,27 106,51 61,63" fill="#101719" stroke={tone} strokeWidth="1.8" />
+        <rect x="70" y="42" width="25" height="10" rx="1" fill="#080d0f" stroke={tone} strokeWidth="1" />
+        <path d="M75 46h15M75 49h10" stroke="#c5cfcc" strokeWidth="1" />
+      </>
+    )
+  return (
+    <>
+      <polygon points="17,22 82,9 119,25 52,39" fill="#263438" stroke={tone} strokeWidth="1.5" />
+      <polygon points="17,22 52,39 52,66 17,49" fill="#182326" stroke={tone} strokeWidth="1.5" />
+      <polygon points="52,39 119,25 119,53 52,66" fill="#101719" stroke={tone} strokeWidth="1.5" />
+      <path d="M23 27 48 39v18L23 45Z" fill="#2d4144" opacity=".8" />
+      {isSwitch ? (
+        <>
+          <path d="M58 43h53v13H58z" fill="#080d0f" stroke="#738584" strokeWidth="1" />
+          {Array.from({ length: 8 }, (_, index) => (
+            <circle key={index} cx={64 + index * 6} cy="48" r="1.5" fill={index % 3 === 0 ? "#61c98d" : "#c5cfcc"} />
+          ))}
+          {Array.from({ length: 8 }, (_, index) => (
+            <circle key={`lower-${index}`} cx={64 + index * 6} cy="52" r="1.5" fill={index % 4 === 0 ? "#e3a45d" : "#52615d"} />
+          ))}
+          <rect x="24" y="38" width="17" height="6" rx="1" fill="#081012" stroke="#61c98d" strokeWidth="1" />
+          <circle cx="28" cy="41" r="1.5" fill="#61c98d" /><circle cx="33" cy="41" r="1.5" fill="#61c98d" /><circle cx="38" cy="41" r="1.5" fill="#e3a45d" />
+        </>
+      ) : isServer ? (
+        <>
+          <rect x="59" y="36" width="51" height="21" rx="2" fill="#080d0f" stroke="#738584" strokeWidth="1" />
+          <path d="M64 42h40M64 49h40" stroke="#52615d" strokeWidth="1" />
+          <circle cx="67" cy="39" r="1.5" fill="#61c98d" /><circle cx="67" cy="46" r="1.5" fill="#e3a45d" /><circle cx="67" cy="53" r="1.5" fill="#d9646a" />
+        </>
+      ) : (
+        <>
+          <path d="M66 40h32M66 46h24" stroke="#738584" strokeWidth="2" />
+          <circle cx="63" cy="40" r="2" fill={tone} /><circle cx="63" cy="46" r="2" fill="#61c98d" />
+          <path d="M30 30l12 5M38 28l12 5" stroke="#c5cfcc" strokeWidth="1.5" opacity=".8" />
+        </>
+      )}
+      <path d="M20 50h26M57 61h45" stroke="#0a1012" strokeWidth="2" opacity=".8" />
+    </>
+  )
+}
+
 function normalizeWorkspace(raw: unknown): Workspace {
   const value =
     raw && typeof raw === "object" ? raw as Record<string, unknown> : {}
@@ -327,7 +466,6 @@ function normalizeWorkspace(raw: unknown): Workspace {
       const d = item as Record<string, unknown>
       const id = String(d.id ?? `device-${index}`)
       const name = String(d.name ?? d.hostname ?? "Network device")
-      const type = String(d.type ?? d.device_type ?? "Generic Device")
       const vendor =
         typeof d.vendor === "string"
           ? d.vendor
@@ -339,6 +477,7 @@ function normalizeWorkspace(raw: unknown): Workspace {
         d.topology_metadata && typeof d.topology_metadata === "object"
           ? d.topology_metadata as Record<string, unknown>
           : {}
+      const type = String(metadata.manual_type ?? d.type ?? d.device_type ?? "Network Device")
       return [
         {
           id,
@@ -546,7 +685,7 @@ function workspaceChanged(left: Workspace, right: Workspace) {
 function statusColor(status?: string) {
   const value = status?.toUpperCase()
   if (value === "VERIFIED") return "#61c98d"
-  if (value === "PORT_MISMATCH") return "#d4a95c"
+  if (value === "PORT_MISMATCH") return "#ff4d5e"
   if (value === "UNEXPECTED" || value === "DISCONNECTED") return "#d9646a"
   if (value === "DEVICE_OFFLINE") return "#78827e"
   return "#9aa3a0"
@@ -755,6 +894,7 @@ export default function ManualTopology() {
   const [realDevices, setRealDevices] = useState<SNMPDeviceListItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [removeConfirmDevice, setRemoveConfirmDevice] = useState<Device | null>(null)
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [connectMode, setConnectMode] = useState(false)
@@ -781,14 +921,39 @@ export default function ManualTopology() {
   const [portStatus, setPortStatus] = useState<"all" | "up" | "down">("all")
   const [view, setView] = useState<ViewMode>("manual")
   const [search, setSearch] = useState("")
+  const [symbolSearch, setSymbolSearch] = useState("")
+  const [collapsedSymbols, setCollapsedSymbols] = useState<Set<string>>(new Set())
+  const [manualAddOpen, setManualAddOpen] = useState(false)
+  const [manualAddType, setManualAddType] = useState("Network Device")
+  const [manualAddPosition, setManualAddPosition] = useState<{ x: number; y: number } | null>(null)
+  const [manualAddForm, setManualAddForm] = useState({ name: "", ip: "", mac: "", location: "" })
   const [typeFilter, setTypeFilter] = useState("all")
   const [healthFilter, setHealthFilter] = useState("all")
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [canvasFullscreen, setCanvasFullscreen] = useState(false)
+  const [pageFullscreen, setPageFullscreen] = useState(false)
   const [snap, setSnap] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [devicesPanelOpen, setDevicesPanelOpen] = useState(true)
+  const [viewports, setViewports] = useState<Record<string, Viewport>>(() => {
+    try { return readViewports(localStorage.getItem(VIEWPORT_STORAGE_KEY)) }
+    catch { return {} }
+  })
+  const currentViewport = viewports[view] ?? centeredViewport(workspace.devices)
+  const { zoom, pan } = currentViewport
+  const setZoom = (value: number | ((previous: number) => number)) => {
+    setViewports(previous => {
+      const current = previous[view] ?? currentViewport
+      return { ...previous, [view]: { ...current, zoom: typeof value === "function" ? value(current.zoom) : value } }
+    })
+  }
+  const setPan = (value: Viewport["pan"] | ((previous: Viewport["pan"]) => Viewport["pan"])) => {
+    setViewports(previous => {
+      const current = previous[view] ?? currentViewport
+      return { ...previous, [view]: { ...current, pan: typeof value === "function" ? value(current.pan) : value } }
+    })
+  }
   const [drag, setDrag] = useState<{ id: string ox: number oy: number } | null>(
     null,
   )
@@ -805,6 +970,10 @@ export default function ManualTopology() {
   const [changes, setChanges] = useState<ManualTopologyChange[]>([])
   const [selectedChange, setSelectedChange] =
     useState<ManualTopologyChange | null>(null)
+  const [differenceLoading, setDifferenceLoading] = useState(false)
+  const [applyingActual, setApplyingActual] = useState(false)
+  const [confirmingConnectivity, setConfirmingConnectivity] = useState(false)
+  const [resolutionNotice, setResolutionNotice] = useState<string | null>(null)
   const [actualWorkspace, setActualWorkspace] = useState<Workspace>({
     devices: [],
     links: [],
@@ -827,6 +996,7 @@ export default function ManualTopology() {
   const [showPortLabels, setShowPortLabels] = useState(false)
   const [hoveredLinkId, setHoveredLinkId] = useState<string | null>(null)
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null)
+  const mainRef = useRef<HTMLElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const dragMoved = useRef(false)
   const dragDeviceId = useRef<string | null>(null)
@@ -853,34 +1023,11 @@ export default function ManualTopology() {
 
   useEffect(() => {
     try {
-      const saved = JSON.parse(
-        localStorage.getItem(VIEWPORT_STORAGE_KEY) || "{}",
-      ) as Record<string, { zoom?: number pan?: { x?: number y?: number } }>
-      const current = saved[view]
-      if (current) {
-        if (typeof current.zoom === "number") setZoom(clampZoom(current.zoom))
-        if (current.pan) {
-          setPan({
-            x: Number(current.pan.x || 0),
-            y: Number(current.pan.y || 0),
-          })
-        }
-      }
-    } catch {
-      // Invalid viewport preferences should not block the topology.
-    }
-  }, [view])
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem(VIEWPORT_STORAGE_KEY) || "{}",
-      ) as Record<string, unknown>
-      saved[view] = { zoom, pan }
-      localStorage.setItem(VIEWPORT_STORAGE_KEY, JSON.stringify(saved))
+      localStorage.setItem(VIEWPORT_STORAGE_KEY, JSON.stringify(viewports))
     } catch {
       // View state is optional and must never affect topology persistence.
     }
-  }, [view, zoom, pan])
+  }, [viewports])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
@@ -891,10 +1038,10 @@ export default function ManualTopology() {
         if (selected) focusDevice(selected)
       } else if (event.key === "+" || event.key === "=") {
         event.preventDefault()
-        setZoom((value) => clampZoom(value + 0.25))
+        changeCanvasZoom(zoom + 0.1)
       } else if (event.key === "-") {
         event.preventDefault()
-        setZoom((value) => clampZoom(value - 0.25))
+        changeCanvasZoom(zoom - 0.1)
       } else if (event.key === "0") {
         event.preventDefault()
         setZoom(1)
@@ -981,14 +1128,15 @@ export default function ManualTopology() {
     height: CANVAS.height / zoom,
   }
   const tooltipPlacement = (device: Device) => {
-    const tooltipHeight = 220
+    const tooltipWidth = 300
+    const tooltipHeight = 172
     const groupX = device.x - 70
     const groupY = device.y - 46
-    const rightX = 124
-    const leftX = -250
-    const topY = -104
-    const bottomY = 92
-    const fitsRight = groupX + rightX + 238 <= viewport.x + viewport.width
+    const rightX = 132
+    const leftX = -310
+    const topY = -88
+    const bottomY = 86
+    const fitsRight = groupX + rightX + tooltipWidth <= viewport.x + viewport.width
     const fitsLeft = groupX + leftX >= viewport.x
     const fitsTop = groupY + topY >= viewport.y
     const fitsBottom =
@@ -1150,19 +1298,21 @@ export default function ManualTopology() {
   const point = (event: ReactPointerEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect()
     if (!rect) return null
+    // SVG uses xMidYMid meet, so account for the letterbox before applying
+    // the editor's pan/zoom transform. This keeps the cursor on the canvas.
+    const scale = Math.min(
+      rect.width / CANVAS.width,
+      rect.height / CANVAS.height,
+    )
+    const offsetX = (rect.width - CANVAS.width * scale) / 2
+    const offsetY = (rect.height - CANVAS.height * scale) / 2
+    const canvasX = (event.clientX - rect.left - offsetX) / scale
+    const canvasY = (event.clientY - rect.top - offsetY) / scale
     return {
-      x:
-        (event.clientX - rect.left - rect.width / 2) /
-          (rect.width / CANVAS.width) /
-          zoom +
-        CANVAS.width / 2 -
-        pan.x / zoom,
-      y:
-        (event.clientY - rect.top - rect.height / 2) /
-          (rect.height / CANVAS.height) /
-          zoom +
-        CANVAS.height / 2 -
-        pan.y / zoom,
+      // The SVG group is `translate(pan) scale(zoom)`, so invert those
+      // operations in reverse order. Center-based math drifts after zooming.
+      x: (canvasX - pan.x) / zoom,
+      y: (canvasY - pan.y) / zoom,
     }
   }
   const moveDevice = (event: ReactPointerEvent<SVGGElement>, id: string) => {
@@ -1190,12 +1340,21 @@ export default function ManualTopology() {
       dragFrame.current = null
     })
   }
-  const addDevice = (type = "Generic Device") => {
-    const name = window.prompt("Device name")
-    if (!name?.trim()) return
-    const ip = window.prompt("IP address (optional)")?.trim() ?? ""
-    const mac = window.prompt("MAC address (optional)")?.trim() ?? ""
-    const location = window.prompt("Location (optional)")?.trim() ?? ""
+  const addDevice = (type = "Network Device", position?: { x: number; y: number }) => {
+    setManualAddType(type)
+    setManualAddPosition(position ?? null)
+    setManualAddForm({ name: "", ip: "", mac: "", location: "" })
+    setManualAddOpen(true)
+  }
+  const createManualDevice = () => {
+    const name = manualAddForm.name.trim()
+    const ip = manualAddForm.ip.trim()
+    const mac = manualAddForm.mac.trim()
+    const location = manualAddForm.location.trim()
+    if (!name) {
+      toast.warning("Enter a device name.")
+      return
+    }
     if (ip && !/^((25[0-5]|2[0-4]\d|1?\d?\d)(\.|$)){4}$/.test(ip)) {
       toast.error("Enter a valid IP address or leave it empty.")
       return
@@ -1213,15 +1372,24 @@ export default function ManualTopology() {
       location: location || undefined,
       type,
       tone: toneFor(type, workspace.devices.length),
-      x: 220 + (workspace.devices.length % 4) * 260,
-      y: 180 + Math.floor(workspace.devices.length / 4) * 190,
+      x: manualAddPosition?.x ?? 220 + (workspace.devices.length % 4) * 260,
+      y: manualAddPosition?.y ?? 180 + Math.floor(workspace.devices.length / 4) * 190,
       status: "manual",
       ports: ["Manual Port 1"],
       portSources: { "Manual Port 1": "manual_fallback" },
     }
     updateWorkspace({ ...workspace, devices: [...workspace.devices, next] })
     setPaletteOpen(false)
+    setManualAddOpen(false)
   }
+  const filteredSymbolLibrary = symbolLibrary
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) =>
+        item.toLowerCase().includes(symbolSearch.trim().toLowerCase()),
+      ),
+    }))
+    .filter((group) => group.items.length > 0)
   const importDevice = (item: SNMPDeviceListItem) => {
     if (workspace.devices.some((d) => d.backendId === item.id)) return
     const next: Device = {
@@ -1366,116 +1534,16 @@ export default function ManualTopology() {
           const targetDevice = workspace.devices.find(
             (device) => device.id === targetDeviceId,
           )
-          const aliasesFor = (device: Device | undefined) =>
-            new Set(
-              [
-                device?.id,
-                device?.backendId == null
-                  ? undefined
-                  : String(device.backendId),
-                device?.name,
-                device?.ipAddress,
-                device?.subtitle,
-              ]
-                .filter(Boolean)
-                .map((value) => String(value).toLowerCase()),
-            )
-          const sourceAliases = aliasesFor(sourceDevice)
-          const targetAliases = aliasesFor(targetDevice)
-          const endpointDevice = (
-            item: Record<string, unknown>,
-            side: "from" | "to",
-          ) =>
-            String(
-              side === "from"
-                ? (item.from ?? item.source_node ?? item.source_device ?? "")
-                : (item.to ?? item.target_node ?? item.target_device ?? ""),
-            ).toLowerCase()
-          const endpointPort = (
-            item: Record<string, unknown>,
-            side: "from" | "to",
-          ) =>
-            String(
-              side === "from"
-                ? (item.fromPort ?? item.source_port ?? item.local_port ?? "")
-                : (item.toPort ?? item.target_port ?? item.remote_port ?? ""),
-            )
-          const matching =
-            liveLinks.find((item) => {
-              const observedSource = endpointDevice(item, "from")
-              const observedTarget = endpointDevice(item, "to")
-              const observedSourcePort = endpointPort(item, "from")
-              const observedTargetPort = endpointPort(item, "to")
-              const portKnown = (port: string) =>
-                Boolean(port) && !/unknown|n\/a/i.test(port)
-              const portMatches = (observed: string, expected: string) =>
-                !portKnown(observed) ||
-                normalizePortName(observed) === normalizePortName(expected)
-              const directPair =
-                observedSource === source.deviceId.toLowerCase() &&
-                observedTarget === targetDeviceId.toLowerCase()
-              const reversePair =
-                observedSource === targetDeviceId.toLowerCase() &&
-                observedTarget === source.deviceId.toLowerCase()
-              return directPair
-                ? portMatches(observedSourcePort, source.port) &&
-                    portMatches(observedTargetPort, targetPort)
-                : reversePair
-                  ? portMatches(observedSourcePort, targetPort) &&
-                      portMatches(observedTargetPort, source.port)
-                  : false
-            }) ?? null
-          const physicalPair =
-            liveLinks.find((item) => {
-              const from = endpointDevice(item, "from")
-              const to = endpointDevice(item, "to")
-              return (
-                (sourceAliases.has(from) && targetAliases.has(to)) ||
-                (sourceAliases.has(to) && targetAliases.has(from))
-              )
-            }) ?? null
-          const mismatchChange = (result.changes ?? []).find((change) =>
-            String(change.change_type || "")
-              .toUpperCase()
-              .includes("PORT"),
-          )
-          const explicitEvidence = Boolean(
-            response.live?.evidence_available ||
-              matching?.evidence_available ||
-              matching?.evidence_source ||
-              matching?.verified,
-          )
-          const offline = (result.changes ?? []).some(
-            (change) =>
-              String(change.change_type).toUpperCase() === "DEVICE_OFFLINE",
-          )
-          const status = offline
-            ? "DEVICE_OFFLINE"
-            : matching && explicitEvidence && matching.verified !== false
-              ? "VERIFIED"
-              : mismatchChange || (physicalPair && !matching)
-                ? "PORT_MISMATCH"
-                : (result.changes ?? []).length
-                  ? "DISCONNECTED"
-                  : "UNKNOWN"
-          const actualPortPair = physicalPair
-            ? `${endpointPort(physicalPair, "from")} ↔ ${endpointPort(physicalPair, "to")}`
-            : mismatchChange
-              ? `${evidenceValue(mismatchChange.observed, ["source_port", "from_port", "port"]) || "unknown"} ↔ ${evidenceValue(mismatchChange.observed, ["target_port", "to_port", "remote_port"]) || "unknown"}`
-              : "No live physical connection found"
+          const observation = comparePhysicalConnection(createdLink, workspace.devices, liveLinks)
+          const status = observation.status
           if (status === "PORT_MISMATCH") {
-            const expectedLabel = `${sourceDevice?.name || source.deviceId} / ${source.port} ↔ ${targetDevice?.name || targetDeviceId} / ${targetPort}`
-            const actualLabel = physicalPair
-              ? `${sourceDevice?.name || "Source"} / ${endpointPort(physicalPair, "from")} ↔ ${targetDevice?.name || "Target"} / ${endpointPort(physicalPair, "to")}`
-              : actualPortPair
             setVerificationAlert({
               title: "WRONG PHYSICAL CONNECTION",
-              message:
-                "The selected ports do not match the live physical connection.",
-              expected: expectedLabel,
-              actual: actualLabel,
+              message: "The selected ports do not match the live physical connection.",
+              expected: `${sourceDevice?.name || source.deviceId} / ${source.port} ↔ ${targetDevice?.name || targetDeviceId} / ${targetPort}`,
+              actual: `${observation.source_device} / ${observation.source_port} ↔ ${observation.target_device} / ${observation.target_port}`,
             })
-          } else if (status === "VERIFIED") setVerificationAlert(null)
+          } else setVerificationAlert(null)
           setWorkspace((current) => ({
             ...current,
             links: current.links.map((link) =>
@@ -1487,8 +1555,8 @@ export default function ManualTopology() {
           if (status === "VERIFIED")
             toast.success(
               `Physical connectivity verified${
-                matching?.evidence_source
-                  ? ` · Evidence: ${matching.evidence_source}`
+                observation.evidence_source
+                  ? ` · Evidence: ${observation.evidence_source}`
                   : ""
               }`,
             )
@@ -1543,24 +1611,28 @@ export default function ManualTopology() {
   const removeSelected = () => {
     if (selectedId) {
       const device = workspace.devices.find((d) => d.id === selectedId)
-      if (
-        !device ||
-        !window.confirm(
-          `Remove "${device.name}" from Manual Topology?\n\nThe manual node and attached manual links will be removed. The monitored backend/SNMP device will NOT be deleted.`,
-        )
-      )
-        return
-      updateWorkspace({
-        devices: workspace.devices.filter((d) => d.id !== selectedId),
-        links: workspace.links.filter(
-          (l) => l.from !== selectedId && l.to !== selectedId,
-        ),
-      })
+      if (!device) return
+      setRemoveConfirmDevice(device)
+      return
     } else if (selectedLinkId)
       updateWorkspace({
         ...workspace,
         links: workspace.links.filter((l) => l.id !== selectedLinkId),
       })
+    setSelectedId(null)
+    setSelectedLinkId(null)
+    setDetailsOpen(false)
+  }
+  const confirmRemoveDevice = () => {
+    if (!removeConfirmDevice) return
+    const deviceId = removeConfirmDevice.id
+    updateWorkspace({
+      devices: workspace.devices.filter((device) => device.id !== deviceId),
+      links: workspace.links.filter(
+        (link) => link.from !== deviceId && link.to !== deviceId,
+      ),
+    })
+    setRemoveConfirmDevice(null)
     setSelectedId(null)
     setSelectedLinkId(null)
     setDetailsOpen(false)
@@ -1660,8 +1732,34 @@ export default function ManualTopology() {
           ? "Manual topology kept."
           : "Real topology change accepted.",
       )
+      setResolutionNotice(
+        action === "keep_manual"
+          ? `${change.change_type}: MANUAL RETAINED — live difference remains under review.`
+          : `${change.change_type}: REAL CHANGE ACCEPTED — manual topology updated from physical evidence.`,
+      )
+      setSelectedChange(null)
     } catch {
       toast.error("Unable to resolve topology change.")
+    }
+  }
+  const confirmConnectivity = async () => {
+    if (!selectedLink) return
+    const next = {
+      ...workspace,
+      links: workspace.links.map(link => link.id === selectedLink.id
+        ? { ...link, status: "VERIFIED", evidence_source: "MANUAL_CONFIRMATION" }
+        : link),
+    }
+    setConfirmingConnectivity(true)
+    try {
+      const saved = await save(next)
+      if (!saved) return
+      commit(next)
+      setSelectedChange(null)
+      setResolutionNotice("CONNECTIVITY CONFIRMED — link marked VERIFIED by user.")
+      toast.success("Connectivity marked as verified.")
+    } finally {
+      setConfirmingConnectivity(false)
     }
   }
   const issueStatus = (change: ManualTopologyChange) =>
@@ -1674,14 +1772,38 @@ export default function ManualTopology() {
             .includes("DISCONNECT")
         ? "DISCONNECTED"
         : String(change.observed?.status ?? "UNKNOWN").toUpperCase()
+  const isPartialDiscovery = (change: ManualTopologyChange) =>
+    issueStatus(change) === "PARTIAL_DISCOVERY" ||
+    (Boolean(change.observed?.evidence_source) &&
+      issueStatus(change) === "UNKNOWN" &&
+      (Boolean(change.observed?.source_port) !== Boolean(change.observed?.target_port)))
   const evidenceValue = (
     record: Record<string, unknown> | null | undefined,
     keys: string[],
   ) => {
-    const value = keys
+    const aliases: Record<string, string[]> = {
+      source_device: ["from", "source_node"], target_device: ["to", "target_node"],
+      source_port: ["fromPort", "local_port"], target_port: ["toPort", "remote_port"],
+    }
+    const value = keys.flatMap(key => [key, ...(aliases[key] ?? [])])
       .map((key) => record?.[key])
       .find((item) => item != null && String(item) !== "")
+    if (keys.includes("source_device") || keys.includes("target_device")) {
+      return workspace.devices.find(device => device.id === String(value))?.name || (value == null ? "Not discovered" : String(value))
+    }
     return value == null ? "N/A" : String(value)
+  }
+  const deviceReference = (record: Record<string, unknown> | null | undefined, keys: string[]) => {
+    const value = evidenceValue(record, keys)
+    const device = workspace.devices.find(item => item.id === value || item.backendId != null && String(item.backendId) === value)
+    if (!device) return value
+    return device.name || device.ipAddress || device.macAddress || device.id
+  }
+  const observedPortValue = (change: ManualTopologyChange, side: "source" | "target") => {
+    const value = evidenceValue(change.observed, side === "source"
+      ? ["source_port", "from_port", "port"]
+      : ["target_port", "to_port", "remote_port"])
+    return value === "Not discovered" && isPartialDiscovery(change) ? "PORT 1" : value
   }
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -1743,6 +1865,21 @@ export default function ManualTopology() {
     return () => window.removeEventListener("keydown", reset)
   }, [])
   useEffect(() => {
+    if (!canvasFullscreen) return
+    const closeFullscreen = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCanvasFullscreen(false)
+    }
+    window.addEventListener("keydown", closeFullscreen)
+    return () => window.removeEventListener("keydown", closeFullscreen)
+  }, [canvasFullscreen])
+  useEffect(() => {
+    const syncFullscreenState = () =>
+      setPageFullscreen(document.fullscreenElement === mainRef.current)
+    document.addEventListener("fullscreenchange", syncFullscreenState)
+    return () =>
+      document.removeEventListener("fullscreenchange", syncFullscreenState)
+  }, [])
+  useEffect(() => {
     if (
       connectMode &&
       source &&
@@ -1779,31 +1916,9 @@ export default function ManualTopology() {
     const a = canvasWorkspace.devices.find((d) => d.id === link.from)
     const b = canvasWorkspace.devices.find((d) => d.id === link.to)
     if (!a || !b) return null
-    const anchor = (from: Device, to: Device) => {
-      const dx = to.x - from.x
-      const dy = to.y - from.y
-      const incident = canvasLinks
-        .filter((item) => item.from === from.id || item.to === from.id)
-        .sort((left, right) =>
-          `${left.fromPort}-${left.toPort}-${left.id}`.localeCompare(
-            `${right.fromPort}-${right.toPort}-${right.id}`,
-          ),
-        )
-      const index = Math.max(
-        0,
-        incident.findIndex((item) => item.id === link.id),
-      )
-      const spread = Math.max(
-        -30,
-        Math.min(30, (index - (incident.length - 1) / 2) * 16),
-      )
-      return Math.abs(dx) >= Math.abs(dy)
-        ? { x: from.x + (dx >= 0 ? 70 : -70), y: from.y + spread }
-        : { x: from.x + spread, y: from.y + (dy >= 0 ? 46 : -46) }
-    }
     return {
-      source: anchor(a, b),
-      target: anchor(b, a),
+      source: portEndpoint(a, link, canvasWorkspace.links, canvasWorkspace.devices),
+      target: portEndpoint(b, link, canvasWorkspace.links, canvasWorkspace.devices),
       sourceDevice: a,
       targetDevice: b,
     }
@@ -1813,29 +1928,128 @@ export default function ManualTopology() {
     if (!endpoints) return null
     const points = [
       endpoints.source,
+      endpoints.source.exit,
       ...(link.routingPoints ?? []),
+      endpoints.target.exit,
       endpoints.target,
     ]
     return points.map((p, i) => `${i ? "L" : "M"} ${p.x} ${p.y}`).join(" ")
   }
   const previewAnchor = (device: Device, target: { x: number y: number }) => {
-    const dx = target.x - device.x
-    const dy = target.y - device.y
-    if (Math.abs(dx) >= Math.abs(dy))
-      return { x: device.x + (dx >= 0 ? 70 : -70), y: device.y }
-    return { x: device.x, y: device.y + (dy >= 0 ? 46 : -46) }
+    return {
+      x: device.x + NODE_SOCKET.x,
+      y: device.y + NODE_SOCKET.y,
+    }
   }
   const actualPath = (link: Link) => {
     const a = actualWorkspace.devices.find((d) => d.id === link.from)
     const b = actualWorkspace.devices.find((d) => d.id === link.to)
     if (!a || !b) return null
-    const dx = b.x - a.x
-    const dy = b.y - a.y
-    const scale = Math.max(Math.abs(dx) / 70, Math.abs(dy) / 46, 1)
-    return `M ${a.x + dx / scale} ${a.y + dy / scale} L ${b.x - dx / scale} ${b.y - dy / scale}`
+    const start = portEndpoint(a, link, actualWorkspace.links, actualWorkspace.devices)
+    const end = portEndpoint(b, link, actualWorkspace.links, actualWorkspace.devices)
+    return `M ${start.x} ${start.y} L ${start.exit.x} ${start.exit.y} L ${end.exit.x} ${end.exit.y} L ${end.x} ${end.y}`
   }
   const selectedLink =
     workspace.links.find((link) => link.id === selectedLinkId) ?? null
+  const selectedLinkDifference = selectedLink
+    ? (() => {
+        const fromDevice = workspace.devices.find(
+          (device) => device.id === selectedLink.from,
+        )
+        const toDevice = workspace.devices.find(
+          (device) => device.id === selectedLink.to,
+        )
+        return {
+          id: -1,
+          change_type: "CONNECTION_REVIEW",
+          signature: selectedLink.id,
+          status: selectedLink.status || "UNKNOWN",
+          expected: {
+            source_device: fromDevice?.name || selectedLink.from,
+            source_port: selectedLink.fromPort || "PORT UNKNOWN",
+            target_device: toDevice?.name || selectedLink.to,
+            target_port: selectedLink.toPort || "PORT UNKNOWN",
+          },
+          observed: {
+            status: "UNKNOWN",
+            reason: "Refresh live physical evidence to verify this connection.",
+            evidence_source:
+              (selectedLink as Link & { evidence_source?: string })
+                .evidence_source || "N/A",
+          },
+          detected_at: null,
+        } satisfies ManualTopologyChange
+      })()
+    : null
+  const applyActualConnection = async () => {
+    if (!selectedChange?.observed || applyingActual) return
+    const link = workspace.links.find(item => item.id === selectedChange.signature)
+    if (!link) return
+    const observed = selectedChange.observed
+    const endpoint = (side: "from" | "to") => {
+      const assigned = Boolean(observed[side === "from" ? "source_port_assigned" : "target_port_assigned"])
+      const oldPort = side === "from" ? link.fromPort : link.toPort
+      const raw = String(observed[side === "from" ? "source_port" : "target_port"] || "")
+      if (!assigned && (!raw || /not discovered|unknown|n\/a/i.test(raw))) return null
+      const device = workspace.devices.find(item => item.id === link[side])
+      const port = assigned ? oldPort : device?.ports?.find(name => compactPortLabel(name).toLowerCase() === compactPortLabel(raw).toLowerCase()) || raw
+      const iface = (interfaces[link[side]] || []).find(item => item.name === port)
+      return { port, ifIndex: iface?.ifIndex, origin: assigned ? "manual_fallback" : iface?.source || device?.portSources?.[port || ""] || "snmp" }
+    }
+    const from = endpoint("from"), to = endpoint("to")
+    if (!from?.port || !to?.port) { toast.error("Actual endpoint ports are not available."); return }
+    const occupied = workspace.links.some(item => item.id !== link.id && (
+      (item.from === link.from && item.fromPort === from.port) || (item.to === link.from && item.toPort === from.port) ||
+      (item.from === link.to && item.fromPort === to.port) || (item.to === link.to && item.toPort === to.port)))
+    if (occupied) { toast.error("An actual port is already used by another connection. Remove that connection first."); return }
+    const corrected = { ...link, fromPort: from.port, toPort: to.port, fromIfIndex: from.ifIndex, toIfIndex: to.ifIndex,
+      fromPortSource: from.origin, toPortSource: to.origin, label: `${from.port} - ${to.port}` }
+    const checked = comparePhysicalConnection(corrected, workspace.devices, [observed])
+    const next = { ...workspace, links: workspace.links.map(item => item.id === link.id ? { ...corrected, status: checked.status } : item) }
+    setApplyingActual(true)
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    try {
+      const saved = await save(next)
+      if (!saved) { localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace)); return }
+      commit(next)
+      setVerificationAlert(null)
+      setSelectedChange(null)
+      toast.success("Connection changed to the actual physical ports.")
+    } finally { setApplyingActual(false) }
+  }
+  const openSelectedLinkDifference = async () => {
+    if (!selectedLinkDifference) return
+    if (!snapshotId) {
+      setSelectedChange(selectedLinkDifference)
+      return
+    }
+    setDifferenceLoading(true)
+    try {
+      const result = await reconcileManualTopology(snapshotId)
+      const response = result as typeof result & {
+        live?: { links?: Array<Record<string, unknown>> }
+      }
+      const refreshedChanges = response.changes ?? []
+      const observation = comparePhysicalConnection(selectedLink!, workspace.devices, response.live?.links ?? [])
+      setChanges(refreshedChanges)
+      setActualWorkspace(normalizeWorkspace(response.live ?? {}))
+      setSelectedChange({
+        ...selectedLinkDifference,
+        id: -1,
+        change_type: "CONNECTION_REVIEW",
+        observed: observation,
+        status: observation.status,
+        detected_at: String(observation.last_verified_at ?? observation.observed_at ?? "") || null,
+      })
+      setWorkspace(current => ({ ...current, links: current.links.map(link =>
+        link.id === selectedLink?.id ? { ...link, status: observation.status } : link) }))
+    } catch {
+      setSelectedChange(selectedLinkDifference)
+      toast.error("Live physical evidence could not be refreshed.")
+    } finally {
+      setDifferenceLoading(false)
+    }
+  }
   const previewSource = source
     ? workspace.devices.find((device) => device.id === source.deviceId)
     : null
@@ -1928,6 +2142,10 @@ export default function ManualTopology() {
   const availableDevices = realDevices.filter(
     (item) => !workspace.devices.some((device) => device.backendId === item.id),
   )
+  const changeCanvasZoom = (nextZoom: number) => {
+    const next = zoomViewport({ zoom, pan }, nextZoom)
+    setViewports(previous => ({ ...previous, [view]: next }))
+  }
   const zoomAtClientPoint = (
     event: React.WheelEvent<SVGSVGElement>,
     nextZoom: number,
@@ -1977,6 +2195,18 @@ export default function ManualTopology() {
     })
     setInspectorTab("overview")
   }
+  const togglePageFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+      } else {
+        await mainRef.current?.requestFullscreen()
+      }
+    } catch {
+      // Browsers can deny fullscreen; the canvas fullscreen control remains available.
+      setCanvasFullscreen((value) => !value)
+    }
+  }
   const beginConnect = (deviceId?: string) => {
     setConnectMode(true)
     setInspectorTab("ports")
@@ -1986,6 +2216,14 @@ export default function ManualTopology() {
       setTargetDeviceId(null)
       setTargetPort(null)
     }
+  }
+  const openDevicePorts = (device: Device) => {
+    setSource(null)
+    setTargetDeviceId(null)
+    setTargetPort(null)
+    setConnectionError(null)
+    focusDevice(device)
+    beginConnect(device.id)
   }
   const chooseTarget = (deviceId: string) => {
     if (!connectMode || !source || deviceId === source.deviceId) return
@@ -2006,7 +2244,7 @@ export default function ManualTopology() {
     ({
       VERIFIED: "#61c98d",
       VERIFYING: "#9b8afb",
-      PORT_MISMATCH: "#d4a95c",
+      PORT_MISMATCH: "#ff4d5e",
       DISCONNECTED: "#d9646a",
       UNEXPECTED: "#d9646a",
       DEVICE_OFFLINE: "#78827e",
@@ -2064,6 +2302,7 @@ export default function ManualTopology() {
           hostname: editForm.name.trim(),
           topology_metadata: {
             ...device.topologyMetadata,
+            manual_type: editForm.type.trim() || "Network Device",
             location: editForm.location.trim() || null,
             description: editForm.description.trim() || null,
           },
@@ -2072,9 +2311,9 @@ export default function ManualTopology() {
       const nextDevice: Device = {
         ...device,
         name: editForm.name.trim(),
-        type: device.backendId ? device.type : editForm.type,
+        type: editForm.type.trim() || "Network Device",
         tone: toneFor(
-          device.backendId ? device.type : editForm.type,
+          editForm.type.trim() || "Network Device",
           workspace.devices.indexOf(device),
           editForm.name.trim(),
           device.vendor,
@@ -2091,6 +2330,7 @@ export default function ManualTopology() {
         description: editForm.description.trim() || undefined,
         topologyMetadata: {
           ...device.topologyMetadata,
+          manual_type: editForm.type.trim() || "Network Device",
           location: editForm.location.trim() || null,
           description: editForm.description.trim() || null,
         },
@@ -2213,7 +2453,10 @@ export default function ManualTopology() {
 
   return (
     <main
-      className="min-h-full bg-[#0b0e11] p-3 text-[#e7eceb] md:p-5"
+      ref={mainRef}
+      className={`min-h-full bg-[#0b0e11] p-3 text-[#e7eceb] md:p-5 ${
+        pageFullscreen ? "min-h-screen overflow-auto" : ""
+      }`}
       onPointerUp={() => {
         if (dragFrame.current) {
           window.cancelAnimationFrame(dragFrame.current)
@@ -2258,6 +2501,47 @@ export default function ManualTopology() {
         routingLatestWorkspace.current = null
       }}
     >
+      {manualAddOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+          <form
+            className="w-full max-w-md rounded-xl border border-[#36c2b466] bg-[#11161a] p-5 shadow-[0_20px_60px_#000b]"
+            onSubmit={(event) => { event.preventDefault(); createManualDevice() }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-mono text-[9px] uppercase tracking-[.2em] text-[#8b9693]">Manual Device</div>
+                <h2 className="mt-1 text-lg font-semibold text-[#e7eceb]">Add {manualAddType}</h2>
+                <p className="mt-1 text-[10px] text-[#9aa3a0]">Enter the details once to add this device to the topology.</p>
+              </div>
+              <button type="button" className="icon-tool" onClick={() => setManualAddOpen(false)} aria-label="Close">×</button>
+            </div>
+            <div className="mt-4 space-y-3">
+              {[
+                ["name", "Name", "Device name", true],
+                ["ip", "IP Address", "Optional", false],
+                ["mac", "MAC Address", "Optional", false],
+                ["location", "Location", "Optional", false],
+              ].map(([key, label, placeholder, required]) => (
+                <label key={key as string} className="block">
+                  <span className="mb-1 block font-mono text-[9px] uppercase tracking-wider text-[#9aa3a0]">{label as string}{required ? " *" : ""}</span>
+                  <input
+                    autoFocus={key === "name"}
+                    required={Boolean(required)}
+                    value={manualAddForm[key as keyof typeof manualAddForm]}
+                    onChange={(event) => setManualAddForm((current) => ({ ...current, [key as string]: event.target.value }))}
+                    placeholder={placeholder as string}
+                    className="h-9 w-full rounded-md border border-white/[.12] bg-[#0b0e11] px-3 text-xs text-[#e7eceb] outline-none focus:border-[#36c2b4]"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" className="tool" onClick={() => setManualAddOpen(false)}>CANCEL</button>
+              <button type="submit" className="tool border-[#61c98d66] text-[#61c98d]">ADD DEVICE</button>
+            </div>
+          </form>
+        </div>
+      )}
       <header className="mb-3 rounded-xl border border-white/[.1] bg-[#11161a] p-4 shadow-[0_12px_35px_rgba(0,0,0,.22)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -2344,6 +2628,13 @@ export default function ManualTopology() {
             >
               {tr.showPorts} {showPortLabels ? tr.on : tr.off}
             </button>
+            <button
+              className="tool border-[#36c2b466] text-[#36c2b4]"
+              title={pageFullscreen ? "Exit fullscreen" : "View topology fullscreen"}
+              onClick={() => void togglePageFullscreen()}
+            >
+              {pageFullscreen ? "EXIT FULL" : "FULLSCREEN"}
+            </button>
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -2426,8 +2717,105 @@ export default function ManualTopology() {
           </div>
         </div>
       )}
-      <section className="grid min-h-[720px] grid-cols-1 gap-3 xl:grid-cols-[260px_minmax(0,1fr)_315px]">
-        <aside className="flex min-h-[720px] flex-col rounded-xl border border-white/[.1] bg-[#11161a] p-3">
+      {changes.length > 0 && (
+        <div className="mt-3 rounded-lg border border-[#d4a95c66] bg-[#241f14] px-3 py-2" role="status">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
+            <span className="font-mono uppercase tracking-[.16em] text-[#d4a95c]">⚠ TOPOLOGY ALERT</span>
+            <span className="text-[#e7d6ad]">
+              {changes.length} mismatch{changes.length === 1 ? "" : "es"} detected · {changes[0].change_type}
+            </span>
+            <span className="font-mono text-[9px] text-[#9aa3a0]">
+              {changes[0].status === "kept_manual" ? "MANUAL RETAINED" : "PENDING ACTION"}
+            </span>
+            <button className="tool ml-auto h-6 px-2 text-[9px]" onClick={() => setSelectedChange(changes[0])}>
+              SHOW EVIDENCE
+            </button>
+          </div>
+          <div className="mt-1 truncate font-mono text-[9px] text-[#a98b8e]">
+            Expected: {evidenceValue(changes[0].expected, ["source_device", "from_device", "device"])} : {evidenceValue(changes[0].expected, ["source_port", "from_port", "port"])} → {evidenceValue(changes[0].expected, ["target_device", "to_device", "remote_device"])} : {evidenceValue(changes[0].expected, ["target_port", "to_port", "remote_port"])}
+          </div>
+          <div className="truncate font-mono text-[9px] text-[#9aa3a0]">
+            Actual: {evidenceValue(changes[0].observed, ["source_device", "from_device", "device"])} : {evidenceValue(changes[0].observed, ["source_port", "from_port", "port"])} → {evidenceValue(changes[0].observed, ["target_device", "to_device", "remote_device"])} : {evidenceValue(changes[0].observed, ["target_port", "to_port", "remote_port"])} · Evidence: {evidenceValue(changes[0].observed, ["evidenceSource", "evidence_source", "source"])}
+          </div>
+        </div>
+      )}
+      {resolutionNotice && (
+        <div className="mt-2 rounded border border-[#61c98d66] bg-[#13251b] px-3 py-2 font-mono text-[9px] text-[#9de0b6]" role="status">
+          {resolutionNotice}
+          <button className="ml-3 text-[#61c98d] underline" onClick={() => setResolutionNotice(null)}>DISMISS</button>
+        </div>
+      )}
+      <section className={`grid min-h-[720px] grid-cols-1 items-start gap-3 ${
+        devicesPanelOpen && sidebarOpen
+          ? "xl:grid-cols-[300px_minmax(0,1fr)_315px]"
+          : devicesPanelOpen
+            ? "xl:grid-cols-[300px_minmax(0,1fr)]"
+            : sidebarOpen
+              ? "xl:grid-cols-[minmax(0,1fr)_315px]"
+              : "xl:grid-cols-1"
+      }`}>
+        {devicesPanelOpen && (
+        <aside className="flex h-[max(820px,calc(100dvh-180px))] min-h-0 flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#11161a] p-3">
+          <div className="mb-2 flex shrink-0 justify-end">
+            <button
+              className="tool"
+              aria-label="Hide symbols and devices sidebar"
+              onClick={() => setDevicesPanelOpen(false)}
+            >
+              ‹ HIDE
+            </button>
+          </div>
+          <div className="mb-3 shrink-0 rounded-lg border border-[#36c2b444] bg-[#0d1517] p-2.5">
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-[.18em] text-[#dce5e2]">
+              NETWORK SYMBOLS
+            </div>
+            <input
+              value={symbolSearch}
+              onChange={(event) => setSymbolSearch(event.target.value)}
+              placeholder="Search symbols..."
+              aria-label="Search symbols"
+              className="mt-2 h-8 w-full rounded border border-white/[.1] bg-[#0b0e11] px-2 text-[10px] outline-none focus:border-[#36c2b4]"
+            />
+            <div className="mt-2 max-h-36 space-y-1 overflow-y-auto overscroll-contain pr-1">
+              {filteredSymbolLibrary.map((group) => {
+                const collapsed = collapsedSymbols.has(group.category)
+                return (
+                  <div key={group.category} className="border-b border-white/[.06] pb-1">
+                    <button
+                      className="flex w-full items-center justify-between py-1 font-mono text-[8px] uppercase tracking-wider text-[#8b9693]"
+                      onClick={() => setCollapsedSymbols((current) => {
+                        const next = new Set(current)
+                        if (next.has(group.category)) next.delete(group.category)
+                        else next.add(group.category)
+                        return next
+                      })}
+                    >
+                      <span>{group.category}</span><span>{collapsed ? "+" : "−"}</span>
+                    </button>
+                    {!collapsed && (
+                      <div className="grid grid-cols-2 gap-1">
+                        {group.items.map((symbol) => (
+                          <button
+                            key={symbol}
+                            draggable
+                            onDragStart={(event) => event.dataTransfer.setData("application/x-nms-symbol", symbol)}
+                            onClick={() => addDevice(symbol)}
+                            className="flex min-h-14 flex-col items-center justify-center gap-1 rounded border border-white/[.08] bg-[#111b1d] p-1 text-center text-[8px] text-[#dce5e2] transition hover:border-[#36c2b4] hover:bg-[#172522]"
+                            title={`Drag ${symbol} to the canvas`}
+                          >
+                            <svg width="24" height="24" viewBox="0 0 48 48" fill="none" stroke={toneFor(symbol)} strokeWidth="2" aria-hidden="true">
+                              {glyph(symbol)}
+                            </svg>
+                            <span className="leading-tight">{symbol}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
           <div className="flex items-center justify-between">
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[.18em] text-[#dce5e2]">
@@ -2439,8 +2827,9 @@ export default function ManualTopology() {
             </div>
             <button
               className="icon-tool"
-              title="Toggle device panel"
-              onClick={() => setSidebarOpen((value) => !value)}
+              title="Hide devices sidebar"
+              aria-label="Hide devices sidebar"
+              onClick={() => setDevicesPanelOpen(false)}
             >
               ‹
             </button>
@@ -2500,7 +2889,7 @@ export default function ManualTopology() {
               </button>
             ))}
           </div>
-          <div className="mt-3 flex-1 space-y-2 overflow-y-auto">
+          <div className="mt-3 min-h-[320px] flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
             {devicePanelTab === "canvas" &&
               visibleDevices.map((device) => (
                 <div
@@ -2639,7 +3028,74 @@ export default function ManualTopology() {
             )}
           </div>
         </aside>
-        <div className="relative min-h-[720px] overflow-hidden rounded-xl border border-white/[.1] bg-[#0d1113]">
+        )}
+        <div
+          className={`relative flex min-h-[720px] flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#0d1113] ${
+            canvasFullscreen
+              ? "fixed inset-0 z-[70] min-h-0 rounded-none border-0"
+              : ""
+          }`}
+        >
+          <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-white/[.1] bg-[#11161a] px-3 py-2">
+            {!devicesPanelOpen && (
+              <button
+                className="tool shrink-0"
+                aria-label="Show symbols and devices sidebar"
+                title="Show symbols and devices sidebar"
+                onClick={() => setDevicesPanelOpen(true)}
+              >
+                › UNHIDE
+              </button>
+            )}
+          {selectedLink && view !== "actual" && (
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-[10px]">
+              <span>
+                {selectedLink.fromPort || "source"} ↔{" "}
+                {selectedLink.toPort || "target"}
+              </span>
+              {statusBadge(selectedLink.status)}
+              <button className="tool h-7" onClick={addBend}>
+                + BEND
+              </button>
+              <button className="tool h-7" onClick={resetRoute}>
+                RESET ROUTE
+              </button>
+              <button className="tool h-7" onClick={removeSelected}>
+                DELETE
+              </button>
+            </div>
+          )}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <div className="rounded-lg border border-white/[.1] bg-[#11161a] p-1">
+              <select
+                aria-label="Link status filter"
+                value={linkStatusFilter}
+                onChange={(event) => setLinkStatusFilter(event.target.value)}
+                className="bg-transparent px-2 py-1 font-mono text-[9px] text-[#9aa3a0] outline-none"
+              >
+                <option value="all">All links</option>
+                <option value="verified">Verified</option>
+                <option value="verifying">Verifying</option>
+                <option value="port_mismatch">Mismatch</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </div>
+            <button
+              className="tool"
+              title={pageFullscreen ? "Exit fullscreen" : "View topology fullscreen"}
+              onClick={() => void togglePageFullscreen()}
+            >
+              {pageFullscreen ? "EXIT FULL" : "FULLSCREEN"}
+            </button>
+            <button
+              className="tool"
+              onClick={() => setSidebarOpen((value) => !value)}
+            >
+              {sidebarOpen ? "HIDE SIDEBAR ›" : "‹ SHOW SIDEBAR"}
+            </button>
+          </div>
+          </div>
+          <div className="relative min-h-0 flex-1">
           <div className="absolute left-3 top-3 z-20 flex flex-col gap-1 rounded-lg border border-white/[.1] bg-[#11161a]/95 p-1">
             <button
               className={`icon-tool ${connectMode ? "active" : ""}`}
@@ -2649,39 +3105,22 @@ export default function ManualTopology() {
             >
               ⌘
             </button>
-            <button
-              className="icon-tool"
-              title="Zoom in"
-              aria-label="Zoom in"
-              onClick={() => setZoom((value) => clampZoom(value + 0.25))}
-            >
-              +
-            </button>
-            <button
-              className="icon-tool"
-              title="Zoom out"
-              aria-label="Zoom out"
-              onClick={() => setZoom((value) => clampZoom(value - 0.25))}
-            >
-              −
-            </button>
-            <button
-              className="icon-tool w-14 text-[10px]"
-              title="Reset zoom to 100%"
-              onClick={() => {
-                setZoom(1)
-                setPan({ x: 0, y: 0 })
-              }}
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              className="icon-tool w-14 text-[9px]"
-              title="Fit visible topology"
-              onClick={fitToView}
-            >
-              FIT
-            </button>
+          </div>
+          <div className="absolute bottom-3 left-3 z-20 w-64 max-w-[calc(100%-24px)] rounded-xl border border-white/[.12] bg-[#11161a]/95 p-3 shadow-lg">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-[9px] tracking-widest text-[#8b9693]">ZOOM</span>
+              <div className="flex items-center gap-1">
+                <button className="tool !h-8 !w-8 !p-0 !text-base disabled:opacity-30" aria-label="Zoom out" disabled={zoom <= 0.25} onClick={() => changeCanvasZoom(zoom - 0.1)}>−</button>
+                <button className="tool !h-8 !w-16 !p-0 tabular-nums" title="Reset to 100%" aria-label={`Zoom ${Math.round(zoom * 100)} percent. Reset to 100 percent`} onClick={() => changeCanvasZoom(1)}>{Math.round(zoom * 100)}%</button>
+                <button className="tool !h-8 !w-8 !p-0 !text-base disabled:opacity-30" aria-label="Zoom in" disabled={zoom >= 3} onClick={() => changeCanvasZoom(zoom + 0.1)}>+</button>
+              </div>
+              <button className="tool !h-8 !px-2" title="Fit visible topology" onClick={fitToView}>FIT</button>
+            </div>
+            <input type="range" min="25" max="300" step="1" value={Math.round(zoom * 100)}
+              aria-label="Topology zoom" aria-valuetext={`${Math.round(zoom * 100)} percent`}
+              onChange={event => changeCanvasZoom(Number(event.target.value) / 100)}
+              className="mt-3 block h-1.5 w-full cursor-pointer accent-[#61c98d]" />
+            <div className="mt-2 flex justify-between font-mono text-[8px] text-[#7f8b88]"><span>25%</span><span>Ctrl + scroll</span><span>300%</span></div>
           </div>
           {connectMode && (
             <div className="absolute left-14 right-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-[#9b8afb55] bg-[#181622]/95 px-3 py-2 text-[10px]">
@@ -2708,32 +3147,18 @@ export default function ManualTopology() {
               </button>
             </div>
           )}
-          <div className="absolute right-3 top-3 z-20 flex items-center gap-2">
-            <div className="rounded-lg border border-white/[.1] bg-[#11161a] p-1">
-              <select
-                aria-label="Link status filter"
-                value={linkStatusFilter}
-                onChange={(event) => setLinkStatusFilter(event.target.value)}
-                className="bg-transparent px-2 py-1 font-mono text-[9px] text-[#9aa3a0] outline-none"
-              >
-                <option value="all">All links</option>
-                <option value="verified">Verified</option>
-                <option value="verifying">Verifying</option>
-                <option value="port_mismatch">Mismatch</option>
-                <option value="unknown">Unknown</option>
-              </select>
-            </div>
-            <button
-              className="tool"
-              onClick={() => setSidebarOpen((value) => !value)}
-            >
-              OVERVIEW
-            </button>
-          </div>
           <svg
             ref={svgRef}
             viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`}
-            className="h-full min-h-[720px] w-full"
+            className={`h-full w-full ${canvasFullscreen ? "min-h-0" : "min-h-[720px]"}`}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault()
+              const type = event.dataTransfer.getData("application/x-nms-symbol")
+              if (!type) return
+              const position = point(event as unknown as ReactPointerEvent<SVGSVGElement>)
+              if (position) addDevice(type, position)
+            }}
             style={{
               backgroundImage: "radial-gradient(#26302d 1px, transparent 1px)",
               backgroundSize: "24px 24px",
@@ -2848,14 +3273,12 @@ export default function ManualTopology() {
                 const endpoints = linkEndpoints(link)
                 if (!path || !endpoints) return null
                 const tone = linkTone(link.status)
-                const endpointLabelsVisible =
-                  zoom >= 0.7 &&
-                  (zoom >= 1 ||
-                    showPortLabels ||
-                    hoveredLinkId === link.id ||
-                    selectedLinkId === link.id)
+                const wrongConnection = link.status === "PORT_MISMATCH"
+                const warningPoint = link.routingPoints?.length
+                  ? link.routingPoints[Math.floor(link.routingPoints.length / 2)]
+                  : { x: (endpoints.source.exit.x + endpoints.target.exit.x) / 2, y: (endpoints.source.exit.y + endpoints.target.exit.y) / 2 }
                 const socketLabel = (port?: string, source?: string) =>
-                  `${port || "PORT UNKNOWN"}${
+                  `${port || "PORT 1"}${
                     source === "manual_fallback" ? " (MANUAL)" : ""
                   }`
                 return (
@@ -2879,105 +3302,47 @@ export default function ManualTopology() {
                       d={path}
                       fill="none"
                       stroke={tone}
-                      strokeWidth={selectedLinkId === link.id ? "3" : "1.7"}
+                      className={wrongConnection ? "wrong-connection-line" : undefined}
+                      strokeWidth={wrongConnection || selectedLinkId === link.id ? "3" : "1.7"}
                       strokeDasharray={
                         link.status === "VERIFYING" ||
                         link.status === "UNKNOWN" ||
-                        link.status === "UNEXPECTED"
+                        link.status === "UNEXPECTED" ||
+                        link.status === "DISCONNECTED" ||
+                        link.status === "PARTIAL_DISCOVERY"
                           ? "7 5"
                           : undefined
                       }
                     />
-                    <circle
-                      cx={endpoints.source.x}
-                      cy={endpoints.source.y}
-                      r={
-                        selectedLinkId === link.id || hoveredLinkId === link.id
-                          ? "5"
-                          : "4"
-                      }
-                      fill="#11161a"
-                      stroke={tone}
-                      strokeWidth="2"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setSelectedLinkId(link.id)
-                        setSelectedId(null)
-                      }}
-                    />
-                    <circle
-                      cx={endpoints.target.x}
-                      cy={endpoints.target.y}
-                      r={
-                        selectedLinkId === link.id || hoveredLinkId === link.id
-                          ? "5"
-                          : "4"
-                      }
-                      fill="#11161a"
-                      stroke={tone}
-                      strokeWidth="2"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setSelectedLinkId(link.id)
-                        setSelectedId(null)
-                      }}
-                    />
-                    {endpointLabelsVisible && (
-                      <>
-                        <text
-                          x={
-                            endpoints.source.x +
-                            (endpoints.source.x < endpoints.sourceDevice.x
-                              ? -8
-                              : 8)
-                          }
-                          y={
-                            endpoints.source.y +
-                            (endpoints.source.y === endpoints.sourceDevice.y
-                              ? -8
-                              : endpoints.source.y < endpoints.sourceDevice.y
-                                ? -8
-                                : 16)
-                          }
-                          fill="#dce5e2"
-                          fontSize={zoom >= 1.5 ? "9" : "7"}
-                          fontFamily="monospace"
-                          textAnchor={
-                            endpoints.source.x < endpoints.sourceDevice.x
-                              ? "end"
-                              : "start"
-                          }
-                        >
-                          {socketLabel(link.fromPort, link.fromPortSource)}
-                        </text>
-                        <text
-                          x={
-                            endpoints.target.x +
-                            (endpoints.target.x < endpoints.targetDevice.x
-                              ? -8
-                              : 8)
-                          }
-                          y={
-                            endpoints.target.y +
-                            (endpoints.target.y === endpoints.targetDevice.y
-                              ? -8
-                              : endpoints.target.y < endpoints.targetDevice.y
-                                ? -8
-                                : 16)
-                          }
-                          fill="#dce5e2"
-                          fontSize={zoom >= 1.5 ? "9" : "7"}
-                          fontFamily="monospace"
-                          textAnchor={
-                            endpoints.target.x < endpoints.targetDevice.x
-                              ? "end"
-                              : "start"
-                          }
-                        >
-                          {socketLabel(link.toPort, link.toPortSource)}
-                        </text>
-                      </>
+                    {wrongConnection && (
+                      <g transform={`translate(${warningPoint.x},${warningPoint.y})`} className="cursor-help" role="img"
+                        aria-label="Incorrect connection. The selected ports do not match the actual physical connection.">
+                        <title>Incorrect connection. The selected ports do not match the actual physical connection. Open Difference and choose Change to Actual Connection to correct it.</title>
+                        <path d="M 0 -13 L 14 11 L -14 11 Z" fill="#351016" stroke="#ff4d5e" strokeWidth="2" />
+                        <text y="7" textAnchor="middle" fill="#fff" fontSize="17" fontWeight="bold">!</text>
+                      </g>
                     )}
+                    {[
+                      { point: endpoints.source, device: endpoints.sourceDevice, port: link.fromPort, origin: link.fromPortSource },
+                      { point: endpoints.target, device: endpoints.targetDevice, port: link.toPort, origin: link.toPortSource },
+                    ].map((endpoint, index) => (
+                      <g key={index} className="cursor-pointer">
+                        <title>{`${endpoint.device.name}: ${socketLabel(endpoint.port, endpoint.origin)}`}</title>
+                        <path
+                          d={endpoint.point.leader}
+                          fill="none" stroke={tone} strokeWidth="1.5" opacity=".9"
+                        />
+                        <rect x={endpoint.point.x - 25} y={endpoint.point.y - 9} width="50" height="18" rx="4"
+                          fill="#11161a" stroke={tone}
+                          strokeWidth={selectedLinkId === link.id || hoveredLinkId === link.id ? 2 : 1}
+                        />
+                        <text x={endpoint.point.x} y={endpoint.point.y + 3} textAnchor="middle"
+                          fill="#e7eceb" fontSize="9" fontFamily="monospace"
+                          textLength={compactPortLabel(endpoint.port).length > 7 ? 44 : undefined}
+                          lengthAdjust="spacingAndGlyphs"
+                        >{compactPortLabel(endpoint.port)}</text>
+                      </g>
+                    ))}
                   </g>
                 )
               })}
@@ -3024,7 +3389,7 @@ export default function ManualTopology() {
                       setInspectorTab("overview")
                     }
                   }}
-                  onDoubleClick={() => focusDevice(device)}
+                  onDoubleClick={() => openDevicePorts(device)}
                   className="cursor-grab active:cursor-grabbing"
                 >
                   <rect
@@ -3032,58 +3397,27 @@ export default function ManualTopology() {
                     y="0"
                     width="140"
                     height="92"
-                    rx="10"
-                    fill="#151c20"
+                    rx="6"
+                    fill="transparent"
                     stroke={
                       selectedId === device.id
-                        ? "#61c98d"
-                        : connectMode && source?.deviceId !== device.id
-                          ? "#9b8afb88"
-                          : "#354047"
+                        ? `${device.tone}ee`
+                        : `${device.tone}66`
                     }
-                    strokeWidth={selectedId === device.id ? "2" : "1"}
-                  />
-                  <rect
-                    x="0"
-                    y="0"
-                    width="4"
-                    height="92"
-                    rx="2"
-                    fill={device.tone}
-                  />
-                  <circle
-                    cx="18"
-                    cy="18"
-                    r="4"
-                    fill={
-                      device.status?.toLowerCase() === "offline"
-                        ? "#d9646a"
-                        : "#61c98d"
-                    }
-                  />
-                  <svg
-                    x="12"
-                    y="8"
-                    width="32"
-                    height="32"
-                    viewBox="0 0 48 48"
-                    fill="none"
-                    stroke={device.tone}
                     strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    {glyph(
-                      device.type,
-                      device.name,
-                      device.vendor,
-                      device.model,
-                    )}
-                  </svg>
+                    strokeDasharray={selectedId === device.id ? "4 4" : undefined}
+                  />
+                  <g>{deviceIllustration(device.type, device.tone)}</g>
+                  <circle
+                    cx="111"
+                    cy="13"
+                    r="3"
+                    fill={device.status?.toLowerCase() === "offline" ? "#d9646a" : "#61c98d"}
+                  />
                   {zoom < 0.5 && (
                     <text
                       x="70"
-                      y="61"
+                      y="78"
                       textAnchor="middle"
                       fill="#e7eceb"
                       fontSize="8"
@@ -3095,8 +3429,9 @@ export default function ManualTopology() {
                   {zoom >= 0.5 && (
                     <>
                       <text
-                        x="12"
-                        y="57"
+                        x="70"
+                        y="78"
+                        textAnchor="middle"
                         fill="#e7eceb"
                         fontSize="10"
                         fontWeight="600"
@@ -3104,8 +3439,8 @@ export default function ManualTopology() {
                         {device.name.slice(0, 15)}
                       </text>
                       <text
-                        x="12"
-                        y="73"
+                        x="70"
+                        y="90"
                         fill="#8b9693"
                         fontSize="8"
                         fontFamily="monospace"
@@ -3115,73 +3450,8 @@ export default function ManualTopology() {
                           17,
                         )}
                       </text>
-                      <text
-                        x="130"
-                        y="16"
-                        textAnchor="end"
-                        fill={device.tone}
-                        fontSize="7"
-                        fontFamily="monospace"
-                      >
-                        {classifyDevice(
-                          device.type,
-                          device.name,
-                          device.vendor,
-                          device.model,
-                        )
-                          .replaceAll("_", " ")
-                          .slice(0, 12)}
-                      </text>
                     </>
                   )}
-                  {zoom >= 1 &&
-                    workspace.links.filter(
-                      (link) =>
-                        link.from === device.id || link.to === device.id,
-                    ).length > 0 && (
-                      <g transform="translate(8,80)">
-                        {workspace.links
-                          .filter(
-                            (link) =>
-                              link.from === device.id || link.to === device.id,
-                          )
-                          .slice(0, 5)
-                          .map((link, index) => (
-                            <g
-                              key={link.id}
-                              className="cursor-pointer"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                setSelectedLinkId(link.id)
-                                setSelectedId(null)
-                              }}
-                            >
-                              <rect
-                                x={index * 20}
-                                y="0"
-                                width="17"
-                                height="10"
-                                rx="2"
-                                fill="#294b43"
-                                stroke="#61c98d88"
-                              />
-                              <text
-                                x={index * 20 + 8.5}
-                                y="7"
-                                textAnchor="middle"
-                                fill="#dce5e2"
-                                fontSize="6"
-                                fontFamily="monospace"
-                              >
-                                {(link.from === device.id
-                                  ? link.fromPort
-                                  : link.toPort || "?"
-                                )?.replace(/.*?(\d+)$/, "$1") || "?"}
-                              </text>
-                            </g>
-                          ))}
-                      </g>
-                    )}
                   {connectMode && (
                     <circle
                       cx="128"
@@ -3203,30 +3473,28 @@ export default function ManualTopology() {
                     <foreignObject
                       x={tooltipPlacement(device).x}
                       y={tooltipPlacement(device).y}
-                      width="238"
-                      height="220"
+                      width="300"
+                      height="172"
                       pointerEvents="none"
                     >
-                      <div className="rounded-lg border border-[#52615d] bg-[#11161a]/[.98] p-3 text-[#e7eceb] shadow-[0_12px_28px_#0009]">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="truncate text-[11px] font-semibold">
-                              {device.name}
-                            </div>
-                            <div className="mt-0.5 font-mono text-[8px] uppercase tracking-wider text-[#7f8b88]">
-                              {classifyDevice(
-                                device.type,
-                                device.name,
-                                device.vendor,
-                                device.model,
-                              ).replaceAll("_", " ")}
-                            </div>
+                      <div className="rounded-md border border-[#52615d] bg-[#11161a]/[.98] p-2 text-[#e7eceb] shadow-[0_8px_20px_#0009]">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex-1 truncate text-[11px] font-semibold leading-tight">
+                            {device.name}
                           </div>
-                          <span className="rounded border border-[#61c98d55] px-1.5 py-0.5 font-mono text-[8px] text-[#61c98d]">
+                          <span className="shrink-0 rounded border border-[#61c98d55] bg-[#61c98d]/10 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-[#b3f2cd]">
+                            {device.ipAddress || device.subtitle || "No IP"}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between gap-2">
+                          <span className="font-mono text-[7px] uppercase tracking-wider text-[#7f8b88]">
+                            {classifyDevice(device.type, device.name, device.vendor, device.model).replaceAll("_", " ")}
+                          </span>
+                          <span className="shrink-0 rounded border border-[#61c98d55] px-1 py-0.5 font-mono text-[7px] text-[#61c98d]">
                             {device.status?.toUpperCase() || "UNKNOWN"}
                           </span>
                         </div>
-                        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-y border-white/[.08] py-2 font-mono text-[8px]">
+                        <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 border-y border-white/[.08] py-1.5 font-mono text-[7px] leading-tight">
                           <span className="text-[#7f8b88]">TOTAL PORTS</span>
                           <span>
                             {hoverDeviceStats(device).totalPorts || "--"}
@@ -3237,33 +3505,29 @@ export default function ManualTopology() {
                           </span>
                           <span className="text-[#7f8b88]">CONNECTED</span>
                           <span>{hoverDeviceStats(device).connectedPorts}</span>
-                          <span className="text-[#7f8b88]">IP</span>
-                          <span className="truncate">
-                            {device.ipAddress || device.subtitle || "N/A"}
-                          </span>
                         </div>
-                        <div className="mt-2 grid grid-cols-2 gap-2 font-mono text-[8px]">
+                        <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-1 font-mono text-[7px] leading-tight">
                           <span>
                             <b className="font-normal text-[#7f8b88]">MAC</b>
                             <br />
-                            {device.macAddress || "N/A"}
+                            <span className="block truncate">{device.macAddress || "N/A"}</span>
                           </span>
                           <span>
                             <b className="font-normal text-[#7f8b88]">VENDOR</b>
                             <br />
-                            {device.vendor || "N/A"}
+                            <span className="block truncate">{device.vendor || "N/A"}</span>
                           </span>
                           <span>
                             <b className="font-normal text-[#7f8b88]">MODEL</b>
                             <br />
-                            {device.model || "N/A"}
+                            <span className="block truncate">{device.model || "N/A"}</span>
                           </span>
                           <span>
                             <b className="font-normal text-[#7f8b88]">
                               LOCATION
                             </b>
                             <br />
-                            {device.location || "N/A"}
+                            <span className="block truncate">{device.location || "N/A"}</span>
                           </span>
                         </div>
                       </div>
@@ -3273,24 +3537,6 @@ export default function ManualTopology() {
               ))}
             </g>
           </svg>
-          {selectedLink && view !== "actual" && (
-            <div className="absolute bottom-3 left-3 z-20 flex max-w-[calc(100%-24px)] flex-wrap items-center gap-2 rounded-lg border border-white/[.12] bg-[#11161a]/95 p-2 text-[10px]">
-              <span>
-                {selectedLink.fromPort || "source"} ↔{" "}
-                {selectedLink.toPort || "target"}
-              </span>
-              {statusBadge(selectedLink.status)}
-              <button className="tool h-7" onClick={addBend}>
-                + BEND
-              </button>
-              <button className="tool h-7" onClick={resetRoute}>
-                RESET ROUTE
-              </button>
-              <button className="tool h-7" onClick={removeSelected}>
-                DELETE
-              </button>
-            </div>
-          )}
           <div className="absolute bottom-3 right-3 h-24 w-40 rounded-lg border border-white/[.12] bg-[#11161a] p-1">
             <MiniMap
               workspace={{ devices: canvasDevices, links: canvasLinks }}
@@ -3303,10 +3549,15 @@ export default function ManualTopology() {
               }
             />
           </div>
+          </div>
         </div>
-        <aside className="min-h-[720px] rounded-xl border border-white/[.1] bg-[#11161a] p-3">
+        {sidebarOpen && (
+        <aside className="h-[max(720px,calc(100dvh-220px))] min-h-0 overflow-y-auto overscroll-contain rounded-xl border border-white/[.1] bg-[#11161a] p-3">
+          <div className="mb-2 flex justify-end">
+            <button className="tool" aria-label="Hide inspector sidebar" onClick={() => setSidebarOpen(false)}>HIDE ›</button>
+          </div>
           {connectMode ? (
-            <div>
+            <div className="flex h-[calc(100%-42px)] min-h-0 flex-col">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="font-mono text-[10px] uppercase tracking-[.18em] text-[#c7b9ff]">
@@ -3324,7 +3575,7 @@ export default function ManualTopology() {
                   ×
                 </button>
               </div>
-              <div className="mt-4 space-y-2 text-[10px]">
+              <div className="mt-4 shrink-0 space-y-2 text-[10px]">
                 <div
                   className={`rounded-lg border p-3 ${
                     source
@@ -3372,7 +3623,7 @@ export default function ManualTopology() {
                   )}
                 </div>
               </div>
-              <div className="mt-4 border-t border-white/[.08] pt-3">
+              <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-white/[.08] pt-3">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="font-mono text-[9px] uppercase text-[#8b9693]">
                     {targetDeviceId
@@ -3386,7 +3637,7 @@ export default function ManualTopology() {
                   </span>
                 </div>
                 {source && !targetDeviceId && (
-                  <div className="space-y-1">
+                  <div className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
                     {workspace.devices
                       .filter((device) => device.id !== source.deviceId)
                       .map((device) => (
@@ -3407,7 +3658,7 @@ export default function ManualTopology() {
                   </div>
                 )}
                 {(!source || targetDeviceId) && (
-                  <div className="space-y-1">
+                  <div className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
                     {portPanelPorts.map((port) => {
                       const occupancy = portOccupancy.get(port.name)
                       const logical = isLogicalPort(port)
@@ -3466,7 +3717,7 @@ export default function ManualTopology() {
                   </div>
                 )}
                 {targetPort && (
-                  <div className="mt-3 rounded-lg border border-[#61c98d55] bg-[#17221e] p-3">
+                  <div className="mt-3 shrink-0 rounded-lg border border-[#61c98d55] bg-[#17221e] p-3">
                     <div className="font-mono text-[9px] uppercase text-[#8b9693]">
                       5 CONNECTION REVIEW
                     </div>
@@ -3586,15 +3837,10 @@ export default function ManualTopology() {
                     </button>
                     <button
                       className="tool"
-                      onClick={() =>
-                        setSelectedChange(
-                          changes.find(
-                            (change) => change.status === "pending",
-                          ) || null,
-                        )
-                      }
+                      onClick={() => void openSelectedLinkDifference()}
+                      disabled={differenceLoading}
                     >
-                      VIEW DIFFERENCE
+                      {differenceLoading ? "CHECKING..." : "VIEW DIFFERENCE"}
                     </button>
                     <button
                       className="tool border-[#d9646a66] text-[#d9646a]"
@@ -3643,35 +3889,23 @@ export default function ManualTopology() {
                     </label>
                     <label className="block">
                       Device Type
-                      {selected.backendId ? (
-                        <>
-                          <input
-                            value={editForm.type}
-                            readOnly
-                            className="mt-1 h-8 w-full rounded border border-white/[.06] bg-[#18201f] px-2 text-[10px] text-[#7f8b88]"
-                          />
-                          <span className="mt-1 block text-[8px] text-[#7f8b88]">
-                            READ ONLY: discovered device type
-                          </span>
-                        </>
-                      ) : (
-                        <select
-                          value={editForm.type}
-                          onChange={(event) =>
-                            setEditForm({
-                              ...editForm,
-                              type: event.target.value,
-                            })
-                          }
-                          className="mt-1 h-8 w-full rounded border border-white/[.1] bg-[#0d1113] px-2 text-[10px]"
-                        >
-                          {[
-                            ...new Set([editForm.type, ...editableDeviceTypes]),
-                          ].map((type) => (
-                            <option key={type}>{type}</option>
-                          ))}
-                        </select>
-                      )}
+                      <input
+                        value={editForm.type}
+                        onChange={(event) =>
+                          setEditForm({ ...editForm, type: event.target.value })
+                        }
+                        list="manual-device-types"
+                        placeholder="Network Device, Switch, Router, AP..."
+                        className="mt-1 h-8 w-full rounded border border-white/[.1] bg-[#0d1113] px-2 text-[10px]"
+                      />
+                      <datalist id="manual-device-types">
+                        {[...new Set(editableDeviceTypes)].map((type) => (
+                          <option key={type} value={type} />
+                        ))}
+                      </datalist>
+                      <span className="mt-1 block text-[8px] text-[#9aa3a0]">
+                        Type a device category to update its icon
+                      </span>
                     </label>
                     <label className="block">
                       IP Address
@@ -4028,6 +4262,7 @@ export default function ManualTopology() {
             </div>
           )}
         </aside>
+        )}
       </section>
       <div className="mt-3 grid gap-3 md:grid-cols-3">
         <div className="rounded-xl border border-white/[.1] bg-[#11161a] p-3">
@@ -4114,39 +4349,6 @@ export default function ManualTopology() {
           </div>
         </div>
       </div>
-      {changes.length > 0 && (
-        <div className="mt-3 rounded-xl border border-[#d4a95c55] bg-[#241f14] p-3">
-          <div className="font-mono text-[10px] uppercase text-[#d4a95c]">
-            Connectivity mismatch
-          </div>
-          {changes.slice(0, 3).map((change) => (
-            <div
-              key={change.id}
-              className="mt-2 flex flex-wrap items-center gap-2 text-xs"
-            >
-              <span>{change.change_type}</span>
-              <button
-                className="tool h-7"
-                onClick={() => setSelectedChange(change)}
-              >
-                VIEW DIFFERENCE
-              </button>
-              <button
-                className="tool h-7"
-                onClick={() => void resolveChange(change, "keep_manual")}
-              >
-                KEEP MANUAL
-              </button>
-              <button
-                className="tool h-7"
-                onClick={() => void resolveChange(change, "accept_real_change")}
-              >
-                ACCEPT REAL CHANGE
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
       {selectedChange && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4"
@@ -4173,19 +4375,19 @@ export default function ManualTopology() {
                   MANUAL CONNECTION
                 </div>
                 <div className="mt-2">
-                  {evidenceValue(selectedChange.expected, [
+                      {deviceReference(selectedChange.expected, [
                     "source_device",
                     "from_device",
                     "device",
                   ])}{" "}
                   :{" "}
-                  {evidenceValue(selectedChange.expected, [
+                  {deviceReference(selectedChange.expected, [
                     "source_port",
                     "from_port",
                     "port",
                   ])}
                   <br />↓<br />
-                  {evidenceValue(selectedChange.expected, [
+                  {deviceReference(selectedChange.expected, [
                     "target_device",
                     "to_device",
                     "remote_device",
@@ -4203,31 +4405,32 @@ export default function ManualTopology() {
                   ACTUAL PHYSICAL CONNECTION
                 </div>
                 <div className="mt-2">
-                  {evidenceValue(selectedChange.observed, [
-                    "source_device",
-                    "from_device",
-                    "device",
-                  ])}{" "}
-                  :{" "}
-                  {evidenceValue(selectedChange.observed, [
-                    "source_port",
-                    "from_port",
-                    "port",
-                  ])}
-                  <br />↓<br />
-                  {evidenceValue(selectedChange.observed, [
-                    "target_device",
-                    "to_device",
-                    "remote_device",
-                  ])}{" "}
-                  :{" "}
-                  {evidenceValue(selectedChange.observed, [
-                    "target_port",
-                    "to_port",
-                    "remote_port",
-                  ])}
+                  {issueStatus(selectedChange) === "DISCONNECTED" ? (
+                    <>
+                      <div className="font-semibold text-[#ff858a]">NO LIVE CONNECTION DETECTED</div>
+                      <div className="mt-2 text-[10px] leading-relaxed text-[#9aa3a0]">
+                        The physical discovery source did not report this link. This is a disconnected-link alert, not an unknown port.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {isPartialDiscovery(selectedChange) && (
+                        <div className="mb-2 font-semibold text-[#d4a95c]">PARTIAL DISCOVERY · 1 ENDPOINT PORT FOUND</div>
+                      )}
+                      {deviceReference(selectedChange.observed, ["source_device", "from_device", "device"])} : {observedPortValue(selectedChange, "source")}
+                      <br />↓<br />
+                      {deviceReference(selectedChange.observed, ["target_device", "to_device", "remote_device"])} : {observedPortValue(selectedChange, "target")}
+                    </>
+                  )}
                 </div>
               </div>
+            </div>
+            <div className="mt-3 rounded border border-[#d4a95c55] bg-[#241f14] p-3 text-[10px] leading-relaxed text-[#e7d6ad]">
+              {issueStatus(selectedChange) === "DISCONNECTED"
+                ? "KEEP MANUAL retains the drawn link and keeps this warning. ACCEPT REAL CHANGE removes the manual link because no matching physical connection was detected."
+                : isPartialDiscovery(selectedChange)
+                  ? "PARTIAL DISCOVERY: one endpoint port was found, but the peer port was not reported. The link remains unverified until both ports are discovered."
+                  : "KEEP MANUAL retains the manual connection. ACCEPT REAL CHANGE updates it using the observed physical evidence."}
             </div>
             <div className="mt-3 rounded border border-white/[.08] p-3 font-mono text-[10px] text-[#9aa3a0]">
               Evidence:{" "}
@@ -4241,23 +4444,99 @@ export default function ManualTopology() {
               {evidenceValue(selectedChange.observed, ["confidence"])}
               <br />
               Last verified: {selectedChange.detected_at || "N/A"}
+              {selectedChange.observed?.reason && (
+                <div className="mt-2 text-[#d4a95c]">{String(selectedChange.observed.reason)}</div>
+              )}
             </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                className="tool"
-                onClick={() =>
-                  void resolveChange(selectedChange, "keep_manual")
-                }
-              >
-                KEEP MANUAL
+            {selectedChange.id > 0 ? (
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="tool border-[#61c98d66] text-[#61c98d]"
+                  disabled={confirmingConnectivity || !selectedLink}
+                  onClick={() => void confirmConnectivity()}
+                >
+                  {confirmingConnectivity ? "SAVING…" : "CONFIRM CONNECTIVITY"}
+                </button>
+                <button
+                  className="tool"
+                  onClick={() =>
+                    void resolveChange(selectedChange, "keep_manual")
+                  }
+                >
+                  KEEP MANUAL
+                </button>
+                <button
+                  className="tool border-[#61c98d66] text-[#61c98d]"
+                  onClick={() =>
+                    void resolveChange(selectedChange, "accept_real_change")
+                  }
+                >
+                  ACCEPT REAL CHANGE
+                </button>
+                {issueStatus(selectedChange) === "PORT_MISMATCH" && (
+                  <button
+                    className="tool !border-[#61c98d66] !text-[#61c98d]"
+                    disabled={applyingActual}
+                    onClick={() => void applyActualConnection()}
+                  >
+                    {applyingActual ? "Saving…" : "CHANGE TO ACTUAL CONNECTION"}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="mt-4 text-right font-mono text-[9px] uppercase text-[#7f8b88]">
+                <button className="tool" disabled={applyingActual} onClick={() => setSelectedChange(null)}>Keep Manual Connection</button>
+                <button className="tool !border-[#61c98d66] !text-[#61c98d]" disabled={confirmingConnectivity || !selectedLink} onClick={() => void confirmConnectivity()}>
+                  {confirmingConnectivity ? "Saving…" : "Confirm Connectivity"}
+                </button>
+                {issueStatus(selectedChange) === "PORT_MISMATCH" && (
+                  <button className="tool !border-[#61c98d66] !text-[#61c98d]" disabled={applyingActual} onClick={() => void applyActualConnection()}>
+                    {applyingActual ? "Saving…" : "Change to Actual Connection"}
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+      {removeConfirmDevice && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-[#050708]/80 p-4 backdrop-blur-sm"
+          role="presentation"
+          onClick={() => setRemoveConfirmDevice(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-device-title"
+            className="w-full max-w-md rounded-xl border border-[#d9646a88] bg-[#11161a] p-5 shadow-[0_24px_80px_#000c]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#d9646a88] bg-[#3a191d] text-lg text-[#ff858a]">
+                !
+              </div>
+              <div className="min-w-0">
+                <div className="font-mono text-[9px] uppercase tracking-[.2em] text-[#ff858a]">
+                  Remove device
+                </div>
+                <h2 id="remove-device-title" className="mt-1 truncate text-base font-semibold text-[#e7eceb]">
+                  Remove &quot;{removeConfirmDevice.name}&quot;?
+                </h2>
+              </div>
+            </div>
+            <p className="mt-4 rounded-lg border border-white/[.08] bg-[#0d1113] p-3 text-[11px] leading-5 text-[#c5cfcc]">
+              The device node and its attached manual links will be removed from this topology. The monitored backend/SNMP device will remain safe and will not be deleted.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="tool" onClick={() => setRemoveConfirmDevice(null)}>
+                CANCEL
               </button>
               <button
-                className="tool border-[#61c98d66] text-[#61c98d]"
-                onClick={() =>
-                  void resolveChange(selectedChange, "accept_real_change")
-                }
+                className="tool border-[#d9646a99] bg-[#3a191d] text-[#ff858a] hover:border-[#ff858a]"
+                onClick={confirmRemoveDevice}
               >
-                ACCEPT REAL CHANGE
+                REMOVE DEVICE
               </button>
             </div>
           </section>
@@ -4277,7 +4556,7 @@ export default function ManualTopology() {
         </span>
         <span className="ml-auto">Shortcuts: / F L</span>
       </footer>
-      <style>{`.tool{height:32px;border:1px solid rgba(170,190,180,.14);background:#11161a;color:#e5e7e7;border-radius:6px;padding:0 10px;font:10px ui-monospace,monospace;text-transform:uppercase}.tool:hover{border-color:#9b8afb;color:#fff}.tool:disabled{opacity:.35;cursor:not-allowed}.icon-tool{height:32px;width:32px;border:1px solid transparent;background:transparent;color:#9aa3a0;border-radius:5px;font:16px ui-monospace,monospace}.icon-tool:hover,.icon-tool.active{background:#242033;border-color:#9b8afb;color:#c7b9ff}`}</style>
+      <style>{`@keyframes wrong-connection-pulse{0%,100%{opacity:1}50%{opacity:.3}}.wrong-connection-line{animation:wrong-connection-pulse 1.4s ease-in-out infinite}@media(prefers-reduced-motion:reduce){.wrong-connection-line{animation:none}}.tool{height:32px;border:1px solid rgba(170,190,180,.14);background:#11161a;color:#e5e7e7;border-radius:6px;padding:0 10px;font:10px ui-monospace,monospace;text-transform:uppercase}.tool:hover{border-color:#9b8afb;color:#fff}.tool:disabled{opacity:.35;cursor:not-allowed}.icon-tool{height:32px;width:32px;border:1px solid transparent;background:transparent;color:#9aa3a0;border-radius:5px;font:16px ui-monospace,monospace}.icon-tool:hover,.icon-tool.active{background:#242033;border-color:#9b8afb;color:#c7b9ff}`}</style>
     </main>
   )
   /*

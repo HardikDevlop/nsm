@@ -480,15 +480,34 @@ export default function DevicePortMap() {
           </div>
           <div className="mt-5 overflow-x-auto rounded-xl border border-white/[.1] bg-[#0d1113] p-4">
             <div
-              className="mx-auto min-w-[720px] rounded-lg border border-[#4b5752] bg-[linear-gradient(145deg,#26302e,#111716_55%,#202927)] p-4 shadow-[inset_0_1px_0_#ffffff18,0_12px_30px_#0008]"
+              className="mx-auto min-w-[720px] rounded-lg border border-[#4b5752] bg-[linear-gradient(145deg,#303936_0%,#111716_42%,#252d2b_100%)] p-4 shadow-[inset_0_1px_0_#ffffff18,0_16px_36px_#000b]"
               style={{
                 width: `${Math.min(100, Math.max(70, panelZoom * 0.82))}%`,
               }}
             >
-              <div className="mb-3 flex items-center justify-between border-b border-white/[.1] pb-3 font-mono text-[9px] uppercase text-[#aab5b1]">
-                <span>{categoryLabel(device)}</span>
-                <span>
-                  {device.name} / {device.model || "N/A"}
+              <div className="mb-3 flex items-center justify-between border-b border-[#080b0c] pb-3">
+                <div>
+                  <div className="font-sans text-xl font-black tracking-[.18em] text-[#d9dfdc] drop-shadow-[0_1px_1px_#000]">
+                    {device.vendor || "AGNIGATE"}
+                  </div>
+                  <div className="mt-0.5 font-mono text-[8px] uppercase tracking-[.2em] text-[#77827f]">
+                    {categoryLabel(device)}
+                  </div>
+                </div>
+                <div className="text-right font-mono text-[8px] uppercase text-[#aab5b1]">
+                  <div>{device.name}</div>
+                  <div className="mt-1 text-[#61c98d]">
+                    {device.status?.toUpperCase() || "UNKNOWN"} / LIVE PORT MAP
+                  </div>
+                </div>
+              </div>
+              <div className="mb-3 flex items-center gap-3 rounded border border-[#080b0c] bg-[#0a0d0e] px-3 py-2 shadow-[inset_0_1px_3px_#000]">
+                <span className="h-2 w-2 rounded-full bg-[#61c98d] shadow-[0_0_8px_#61c98d]" />
+                <span className="font-mono text-[8px] uppercase tracking-widest text-[#aab5b1]">
+                  {device.ipAddress || device.subtitle || "NO MANAGEMENT IP"}
+                </span>
+                <span className="ml-auto font-mono text-[8px] text-[#77827f]">
+                  {ports.length} INTERFACES / {used} CONNECTED
                 </span>
               </div>
               {connectionsLoading && !dataLoading && (

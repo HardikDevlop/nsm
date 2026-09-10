@@ -198,28 +198,14 @@ class SNMPClient:
     # ------------------------------------------------------------------
 
     def walk(self, host: str, root_oid: str) -> dict[str, Any]:
-        """
-        Walk the OID subtree rooted at *root_oid*.
+        """Fetch table rows in bounded GETBULK batches, with GETNEXT fallback.
 
-        Returns {oid_str: value_str} for every OID inside the subtree.
-
-        Fix applied here
-        ----------------
-        pysnmp >= 6.x nextCmd is a *coroutine* (not an async-generator).
-        Each ``await nextCmd(...)`` returns exactly ONE (errInd, errSt,
-        errIdx, varBindTable) tuple.  To walk a full table we must call it
-        repeatedly, passing the last received OID as the next seed, until:
-          • the returned OID falls outside the requested subtree, OR
-          • the agent returns an error / end-of-MIB.
-
-        The old ``async for ... in nextCmd(...)`` raised:
-          TypeError: 'async for' requires __aiter__, got coroutine
-        which was swallowed silently, leaving raw={} and making every
-        table-based collector return supported=False.
+        Stops at subtree boundaries, end-of-MIB, non-increasing OIDs, the row
+        limit, or the operation deadline. Always closes the SNMP dispatcher.
         """
         from pysnmp.hlapi.asyncio import (  # noqa: PLC0415
             ContextData, ObjectIdentity, ObjectType,
-            SnmpEngine, UdpTransportTarget, nextCmd,
+            SnmpEngine, UdpTransportTarget, nextCmd, bulkCmd,
         )
 
         t0       = time.perf_counter()
@@ -238,50 +224,52 @@ class SNMPClient:
             current_var_binds = [ObjectType(ObjectIdentity(root_oid))]
             rows = 0
 
-            while rows < _MAX_WALK_ROWS:
-                # ── single GETNEXT call ──────────────────────────────
-                errInd, errSt, _errIdx, var_bind_table = await nextCmd(
-                    engine, auth, target, ctx,
-                    *current_var_binds,
-                    lexicographicMode=False,
-                )
-
-                # Agent-level error or end-of-MIB
-                if errInd:
-                    logger.debug(
-                        "WALK %s %s errInd=%s after %d rows",
-                        host, root_oid, errInd, rows,
-                    )
-                    break
-                if int(errSt):
-                    logger.debug(
-                        "WALK %s %s errSt=%s after %d rows",
-                        host, root_oid, errSt, rows,
-                    )
-                    break
-
-                # No data returned → subtree exhausted
-                if not var_bind_table:
-                    break
-
-                # var_bind_table is a list-of-lists: [[ObjectType, ...], ...]
-                # For nextCmd with one seed OID there is always one inner list.
-                row_vars = var_bind_table[0]  # list of (OID, value) pairs
-
-                # Check if we have walked past the requested subtree
-                first_oid_str = str(row_vars[0][0])
-                if not first_oid_str.startswith(root_dot):
-                    break
-
-                # Collect this row
-                for oid_obj, val_obj in row_vars:
-                    result[str(oid_obj)] = val_obj.prettyPrint()
-
-                # Advance seed to the last OID received
-                current_var_binds = row_vars
-                rows += 1
-
-            return result
+            use_bulk = True
+            previous_oid = tuple(int(part) for part in root_oid.strip(".").split("."))
+            try:
+                while rows < _MAX_WALK_ROWS:
+                    if use_bulk:
+                        response = await bulkCmd(
+                            engine, auth, target, ctx, 0, min(25, _MAX_WALK_ROWS - rows),
+                            *current_var_binds, lexicographicMode=False,
+                        )
+                    else:
+                        response = await nextCmd(
+                            engine, auth, target, ctx, *current_var_binds,
+                            lexicographicMode=False,
+                        )
+                    errInd, errSt, _errIdx, var_bind_table = response
+                    if errInd:
+                        logger.debug("WALK %s %s error=%s after %d rows", host, root_oid, errInd, rows)
+                        break
+                    if int(errSt):
+                        # Some agents reject GETBULK (e.g. tooBig). Retry the
+                        # same cursor with GETNEXT without dropping prior rows.
+                        if use_bulk:
+                            use_bulk = False
+                            continue
+                        break
+                    if not var_bind_table:
+                        break
+                    for row_vars in var_bind_table:
+                        if not row_vars:
+                            return result
+                        for oid_obj, val_obj in row_vars:
+                            oid = str(oid_obj)
+                            numeric_oid = tuple(int(part) for part in oid.split("."))
+                            from pysnmp.proto.rfc1905 import endOfMibView, noSuchObject, noSuchInstance
+                            terminal = any(marker.isSameTypeWith(val_obj) for marker in (endOfMibView, noSuchObject, noSuchInstance))
+                            if terminal or not oid.startswith(root_dot) or numeric_oid <= previous_oid:
+                                return result
+                            result[oid] = val_obj.prettyPrint()
+                            previous_oid = numeric_oid
+                            rows += 1
+                            if rows >= _MAX_WALK_ROWS:
+                                return result
+                        current_var_binds = row_vars
+                return result
+            finally:
+                engine.transportDispatcher.closeDispatcher()
 
         try:
             result = _run_in_thread(_run(), self.operation_timeout)

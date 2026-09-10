@@ -1,4 +1,5 @@
 import { useRouteError, isRouteErrorResponse, Link, useRevalidator } from 'react-router'
+import { isModuleLoadError } from '../components/moduleLoadError'
 import GlassCard from '../components/GlassCard'
 
 export default function ErrorPage() {
@@ -52,7 +53,10 @@ export default function ErrorPage() {
           </Link>
           
           <button 
-            onClick={() => revalidator.revalidate()}
+            onClick={() => {
+              if (isModuleLoadError(error)) window.location.reload()
+              else revalidator.revalidate()
+            }}
             className="w-full px-4 py-2 rounded font-mono text-sm transition-all"
             style={{ background: 'rgba(255,170,0,0.15)', color: '#ffaa00', border: '1px solid rgba(255,170,0,0.4)' }}
           >

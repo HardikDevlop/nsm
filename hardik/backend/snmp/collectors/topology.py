@@ -251,7 +251,9 @@ class TopologyCollector(BaseCollector):
                     "vlan_id": entry.get("vlan_id"),
                     "interface": interfaces.get(str(entry.get("if_index") or entry.get("port")), {}),
                     "confidence": "INFERRED",
-                    "verified":      True,
+                    # FDB learning is port evidence, not LLDP/CDP neighbour
+                    # verification. Keep it visible but never confirmed.
+                    "verified":      False,
                 })
 
         # ---------------------------------------------------------------

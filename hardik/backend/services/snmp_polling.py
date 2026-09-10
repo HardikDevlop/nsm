@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from functools import wraps
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -655,6 +656,14 @@ class SNMPPoller:
         ))
 
 
+def _database_worker(method):
+    """Run synchronous SQL work in a session-owning worker, not the API loop."""
+    @wraps(method)
+    async def wrapped(*args, **kwargs):
+        return await asyncio.to_thread(lambda: asyncio.run(method(*args, **kwargs)))
+    return wrapped
+
+
 class PollingScheduler:
     """Centralized polling scheduler with APScheduler."""
 
@@ -683,6 +692,7 @@ class PollingScheduler:
         self._running = False
         logger.info("Polling scheduler stopped")
 
+    @_database_worker
     async def _load_jobs_from_db(self) -> None:
         """Load all enabled monitoring configs from DB and schedule them."""
         db = SessionLocal()
@@ -740,6 +750,22 @@ class PollingScheduler:
         )
         logger.debug("Scheduled job %s for %s", job_id, next_poll)
 
+    @staticmethod
+    def _poll_in_worker(job: PollJob) -> dict[str, Any]:
+        """Keep synchronous DB writes and alert delivery off the API event loop.
+
+        Create and close sessions in the worker that owns them, including the
+        replacement session opened by poll() after the SNMP round-trip.
+        """
+        db = SessionLocal()
+        poller = SNMPPoller(db)
+        try:
+            return asyncio.run(poller.poll(job))
+        finally:
+            if poller.db is not db and poller.db is not None:
+                poller.db.close()
+            db.close()
+
     async def _execute_poll_job(self, device_id: int, module_name: str, interval_seconds: int, config_id: int) -> None:
         """Execute a poll job and reschedule."""
         async with self._worker_semaphore:
@@ -753,9 +779,8 @@ class PollingScheduler:
 
             db = SessionLocal()
             try:
-                poller = SNMPPoller(db)
                 started = time.perf_counter()
-                result = await poller.poll(job)
+                result = await asyncio.to_thread(self._poll_in_worker, job)
                 duration_ms = round((time.perf_counter() - started) * 1000, 1)
 
                 # Update polling history with actual duration
@@ -803,6 +828,7 @@ class PollingScheduler:
             finally:
                 db.close()
 
+    @_database_worker
     async def add_job(self, device_id: int, module_name: str, interval_seconds: int) -> MonitoringConfig:
         """Add or update a monitoring config and schedule it."""
         db = SessionLocal()
@@ -835,6 +861,7 @@ class PollingScheduler:
         finally:
             db.close()
 
+    @_database_worker
     async def stop_job(self, device_id: int, module_name: str) -> bool:
         """Stop a monitoring job."""
         job_id = f"{device_id}:{module_name}"
@@ -858,6 +885,7 @@ class PollingScheduler:
         finally:
             db.close()
 
+    @_database_worker
     async def update_job_interval(self, device_id: int, module_name: str, interval_seconds: int) -> bool:
         """Update polling interval for a running job."""
         if interval_seconds not in ALLOWED_INTERVALS:
@@ -882,6 +910,7 @@ class PollingScheduler:
         finally:
             db.close()
 
+    @_database_worker
     async def get_job_status(self, device_id: int, module_name: str) -> dict[str, Any] | None:
         """Get status of a monitoring job."""
         db = SessionLocal()
@@ -912,6 +941,7 @@ class PollingScheduler:
         finally:
             db.close()
 
+    @_database_worker
     async def get_device_jobs(self, device_id: int) -> list[dict[str, Any]]:
         """Get all monitoring jobs for a device."""
         db = SessionLocal()

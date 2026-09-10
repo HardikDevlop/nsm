@@ -20,7 +20,7 @@ from threading import Lock
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -37,6 +37,25 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 _monitor_start_lock = Lock()
 _monitoring_start_inflight: set[str] = set()
+
+
+def _send_device_added_notifications(alert_ids: list[int]) -> None:
+    """Send bulk-discovery emails after the inventory response is committed."""
+    if not alert_ids:
+        return
+    from backend.database.session import SessionLocal
+    from backend.models import Alert
+    from backend.services.alerting import _notify
+
+    try:
+        with SessionLocal() as db:
+            for alert_id in alert_ids:
+                alert = db.query(Alert).filter(Alert.id == alert_id).first()
+                if alert is not None:
+                    _notify(db, alert)
+            db.commit()
+    except Exception:
+        logger.exception("Bulk device-added notifications failed")
 
 
 def _bad_request(message: str) -> HTTPException:
@@ -812,7 +831,10 @@ async def chunked_scan_progress(job_id: str):
 
 
 @router.post("/discovery/add-devices")
-def add_discovered_devices(payload: AddDevicesRequest):
+def add_discovered_devices(
+    payload: AddDevicesRequest,
+    background_tasks: BackgroundTasks,
+):
     """Add discovered devices to the PostgreSQL database.
 
     Accepts a list of device dicts (from the chunked scan results) and
@@ -828,6 +850,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
 
     added = []
     skipped = []
+    notification_alert_ids: list[int] = []
 
     try:
         with SessionLocal() as db:
@@ -933,7 +956,7 @@ def add_discovered_devices(payload: AddDevicesRequest):
                 # informational alert/notification path has a DB or SMTP issue.
                 try:
                     with db.begin_nested():
-                        create_device_added_alert(
+                        alert = create_device_added_alert(
                             db,
                             device.id,
                             device.hostname,
@@ -941,7 +964,10 @@ def add_discovered_devices(payload: AddDevicesRequest):
                             discovery_method,
                             device.status,
                             device.mac_address,
+                            notify=False,
                         )
+                        if alert is not None:
+                            notification_alert_ids.append(alert.id)
                 except Exception:
                     logger.exception("Could not create device-added alert for device %s", device.id)
 
@@ -1090,6 +1116,10 @@ def add_discovered_devices(payload: AddDevicesRequest):
                 added.append({"id": device.id, "ip": ip, "hostname": hostname})
 
             db.commit()
+        background_tasks.add_task(
+            _send_device_added_notifications,
+            notification_alert_ids,
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()

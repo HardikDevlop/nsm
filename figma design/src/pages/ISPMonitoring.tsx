@@ -93,6 +93,8 @@ export default function ISPMonitoring() {
   const [crudMessage, setCrudMessage] = useState('')
   const [crudError, setCrudError] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  const [selectedManagedDeviceIds, setSelectedManagedDeviceIds] = useState<Set<number>>(new Set())
+  const [deletingSelectedManaged, setDeletingSelectedManaged] = useState(false)
 
   // ── Topology graph data ──
   interface TopoNode { id: string; ip: string; hostname: string; status: string; mac: string; x: number; y: number; type: 'gateway' | 'device' }
@@ -715,12 +717,45 @@ export default function ISPMonitoring() {
       await deleteDevice(id)
       queryClient.clear()
       setDevices(prev => prev.filter(d => d.id !== id))
+      setSelectedManagedDeviceIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
       setCrudMessage(`Device "${hostname}" deleted`)
       toast.success(`Device "${hostname}" deleted`)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete device'
       setCrudError(message)
       toast.error(message)
+    }
+  }
+
+  const handleDeleteSelectedManaged = async () => {
+    if (selectedManagedDeviceIds.size === 0) return
+    const selected = devices.filter((device) => selectedManagedDeviceIds.has(device.id))
+    const ok = await confirmDanger({
+      title: `Delete ${selected.length} selected device${selected.length === 1 ? '' : 's'}?`,
+      text: 'This will permanently remove the selected devices and their data from the database. This cannot be undone.',
+      confirmText: 'Delete selected',
+    })
+    if (!ok) return
+    setDeletingSelectedManaged(true)
+    setCrudError('')
+    setCrudMessage('')
+    try {
+      await Promise.all(selected.map((device) => deleteDevice(device.id)))
+      queryClient.clear()
+      setDevices((current) => current.filter((device) => !selectedManagedDeviceIds.has(device.id)))
+      setSelectedManagedDeviceIds(new Set())
+      setCrudMessage(`${selected.length} selected device${selected.length === 1 ? '' : 's'} deleted successfully`)
+      toast.success(`${selected.length} selected device${selected.length === 1 ? '' : 's'} deleted`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete selected devices'
+      setCrudError(message)
+      toast.error(message)
+    } finally {
+      setDeletingSelectedManaged(false)
     }
   }
 
@@ -740,6 +775,7 @@ export default function ISPMonitoring() {
       // by SNMP/detail pages, so remove every cached device response too.
       queryClient.clear()
       setDevices([])
+      setSelectedManagedDeviceIds(new Set())
       setCrudMessage(`All ${result.deleted} devices deleted successfully`)
       toast.success(`All ${result.deleted} devices deleted`)
     } catch (err) {
@@ -1018,6 +1054,14 @@ export default function ISPMonitoring() {
           </div>
           <div className="flex gap-2 shrink-0">
             <PermissionGuard permission="devices:delete">
+            <button
+              onClick={handleDeleteSelectedManaged}
+              disabled={selectedManagedDeviceIds.size === 0 || deletingSelectedManaged}
+              className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80 disabled:opacity-40"
+              style={{ background: 'rgba(255,51,102,0.12)', border: '1px solid rgba(255,51,102,0.3)', color: '#ff3366' }}
+            >
+              {deletingSelectedManaged ? 'DELETING…' : `DELETE SELECTED (${selectedManagedDeviceIds.size})`}
+            </button>
             <button
               onClick={handleDeleteAll}
               disabled={devices.length === 0}
@@ -1300,6 +1344,18 @@ export default function ISPMonitoring() {
                   <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <input
+                          type="checkbox"
+                          checked={selectedManagedDeviceIds.has(device.id)}
+                          onChange={() => setSelectedManagedDeviceIds((current) => {
+                            const next = new Set(current)
+                            if (next.has(device.id)) next.delete(device.id)
+                            else next.add(device.id)
+                            return next
+                          })}
+                          aria-label={`Select ${device.hostname}`}
+                          className="h-4 w-4 accent-[#ff3366]"
+                        />
                         <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: device.status === 'online' ? '#00ff88' : '#ff3366' }} />
                         <div className="font-display text-sm tracking-wider truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{device.hostname}</div>
                         <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address}</div>

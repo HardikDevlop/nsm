@@ -1,4 +1,5 @@
 from backend.api.snmp_device_routes import _merge_collector_topology
+from backend.snmp.collectors.topology import TopologyCollector
 
 
 def _baseline():
@@ -55,3 +56,15 @@ def test_only_explicit_positive_removal_deletes_entity_and_link():
     assert not any(item["id"] == "link-1" for item in merged_links)
     assert len(merged_devices) == 49
     assert len(merged_links) == 54
+
+
+def test_mac_table_link_is_inferred_and_never_lldp_verified():
+    raw = {
+        "1.3.6.1.2.1.1.5.0": "core-switch",
+        "1.3.6.1.2.1.17.4.3.1.2.10.20.30.40.50.60": 7,
+        "1.3.6.1.2.1.17.4.3.1.3.10.20.30.40.50.60": 3,
+    }
+    result = TopologyCollector().collect(raw, None, None)
+    mac_link = next(link for link in result.data["links"] if link["protocol"] == "mac_table")
+    assert mac_link["confidence"] == "INFERRED"
+    assert mac_link["verified"] is False

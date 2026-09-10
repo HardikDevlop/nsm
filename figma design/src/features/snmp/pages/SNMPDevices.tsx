@@ -468,9 +468,11 @@ export default function SNMPDevicesPage() {
   const [sortBy, setSortBy] = useState("id")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [editingDevice, setEditingDevice] = useState<any | null>(null)
   const [deleting, setDeleting] = useState<number | null>(null)
+  const [deletingSelected, setDeletingSelected] = useState(false)
 
   // Fetch devices using React Query
   const {
@@ -596,6 +598,33 @@ export default function SNMPDevicesPage() {
     }
   }
 
+  const handleDeleteSelected = async () => {
+    if (!canDelete || selectedDeviceIds.size === 0) return
+    const selectedDevices = devices.filter((device) => selectedDeviceIds.has(device.id))
+    const ok = await confirmDanger({
+      title: `Delete ${selectedDevices.length} selected device${selectedDevices.length === 1 ? "" : "s"}?`,
+      text: "This will remove the selected devices from monitoring, delete collected metrics, and stop monitoring jobs. This action cannot be undone.",
+      confirmText: "Delete selected",
+    })
+    if (!ok) return
+
+    setDeletingSelected(true)
+    try {
+      await Promise.all(selectedDevices.map((device) => deleteDevice(device.id)))
+      selectedDevices.forEach((device) => invalidateDevice(device.id))
+      setSelectedDeviceIds(new Set())
+      setSelectedId(null)
+      await refetch()
+      setError(`${selectedDevices.length} selected device${selectedDevices.length === 1 ? "" : "s"} deleted successfully`)
+      toast.success(`${selectedDevices.length} selected device${selectedDevices.length === 1 ? "" : "s"} deleted`)
+      setTimeout(() => setError(null), 5000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Selected device deletion failed")
+    } finally {
+      setDeletingSelected(false)
+    }
+  }
+
   const handleRefresh = () => {
     refetch()
   }
@@ -674,6 +703,19 @@ export default function SNMPDevicesPage() {
             </svg>
             REFRESH
           </button>
+          {canDelete && (
+            <button
+              onClick={handleDeleteSelected}
+              disabled={selectedDeviceIds.size === 0 || deletingSelected}
+              className="glass-bright px-3 py-1.5 rounded font-mono text-xs hover:bg-red-400/10 flex items-center gap-1.5 disabled:opacity-40"
+              style={{
+                border: "1px solid rgba(255,51,102,0.35)",
+                color: "#ff3366",
+              }}
+            >
+              {deletingSelected ? "DELETING..." : `DELETE SELECTED (${selectedDeviceIds.size})`}
+            </button>
+          )}
           {canCreate && (
             <button
               onClick={() => navigate("/snmp/devices/add")}
@@ -770,6 +812,23 @@ export default function SNMPDevicesPage() {
                   <tr
                     style={{ borderBottom: "1px solid rgba(0,212,255,0.08)" }}
                   >
+                    <th
+                      className="px-4 py-2.5 sticky top-0"
+                      style={{ background: "rgba(8,25,55,0.95)" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={devices.length > 0 && devices.every((device) => selectedDeviceIds.has(device.id))}
+                        onChange={() => setSelectedDeviceIds((current) => {
+                          const next = new Set(current)
+                          const allSelected = devices.every((device) => next.has(device.id))
+                          devices.forEach((device) => allSelected ? next.delete(device.id) : next.add(device.id))
+                          return next
+                        })}
+                        aria-label="Select all devices on this page"
+                        className="h-4 w-4 accent-[#ff3366]"
+                      />
+                    </th>
                     {[
                       { key: "name", label: "NAME" },
                       { key: "ip_address", label: "IP ADDRESS" },
@@ -843,6 +902,23 @@ export default function SNMPDevicesPage() {
                         cursor: "pointer",
                       }}
                     >
+                      <td
+                        className="px-4 py-2"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedDeviceIds.has(device.id)}
+                          onChange={() => setSelectedDeviceIds((current) => {
+                            const next = new Set(current)
+                            if (next.has(device.id)) next.delete(device.id)
+                            else next.add(device.id)
+                            return next
+                          })}
+                          aria-label={`Select ${device.name || device.ip_address}`}
+                          className="h-4 w-4 accent-[#ff3366]"
+                        />
+                      </td>
                       <td
                         className="px-4 py-2 font-mono text-xs font-semibold"
                         style={{ color: "#c8d8ee" }}

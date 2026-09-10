@@ -40,16 +40,20 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import BackgroundTasks, APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload, load_only
 
-from backend.database.session import get_db
+from backend.database.session import SessionLocal, get_db
 from backend.dependencies import require_permission
 from backend.models import Device, DeviceCredential, Event, Vendor, DeviceType
 from backend.models.identity import DeviceCapabilities, DeviceIdentity
@@ -60,6 +64,35 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["SNMP Device Monitoring"])
 MAX_SNMP_TABLE_ROWS = 500
+
+
+def _topology_revision(db: Session) -> dict[str, str]:
+    """Return a stable revision for shared inventory and topology state."""
+    devices = db.query(Device).filter(Device.deleted_at.is_(None)).order_by(Device.id).limit(200).all()
+    inventory = [{
+        "id": row.id,
+        "hostname": row.hostname,
+        "ip": row.ip_address,
+        "mac": row.mac_address,
+        "model": row.model,
+        "status": row.status,
+        "topology_metadata": row.topology_metadata or {},
+    } for row in devices]
+    capability_map = {
+        row.device_id: row
+        for row in db.query(DeviceCapabilities).filter(
+            DeviceCapabilities.device_id.in_([row.id for row in devices])
+        ).all()
+    } if devices else {}
+    topology = _latest_cached_topology(capability_map) or {}
+    snapshot_at = str(topology.get("timestamp") or topology.get("collected_at") or "")
+    payload = json.dumps({"inventory": inventory, "snapshot_at": snapshot_at}, sort_keys=True, default=str)
+    return {
+        "revision": hashlib.sha256(payload.encode()).hexdigest()[:16],
+        # Server time at which this revision was observed. Clients render this
+        # consistently from one ISO value instead of their local refresh time.
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 class TopologySnapshotPayload(BaseModel):
@@ -2266,6 +2299,12 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                     matching_device = next((known for known in all_devices if
                         (node_ip and known.ip_address == node_ip) or
                         (normalized_node_mac and str(getattr(known, "mac_address", "") or '').replace(':', '').replace('-', '').replace('.', '').lower() == normalized_node_mac)), None)
+                    if node_id == local_topology_id:
+                        matching_device = d
+                    if matching_device is None and normalized_node_mac:
+                        interface_identity = identity_maps["by_mac"].get(_normalize_mac(node_mac))
+                        if interface_identity:
+                            matching_device = interface_identity.get("device")
                     canonical_id = str(matching_device.id) if matching_device else node_id
                     node_alias[node_id] = canonical_id
                     enriched = _enrich_topology_node(node, matching_device, identity_maps)
@@ -2323,7 +2362,37 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
         len(nodes),
         len(links),
     )
-    return {"devices": list(nodes.values()), "links": links, "verified_only": True}
+    return {"devices": list(nodes.values()), "links": links, "verified_only": True, "timestamp": datetime.utcnow().isoformat()}
+
+
+@router.get("/snmp/topology/stream")
+async def stream_snmp_topology_updates(
+    request: Request,
+    _: Any = Depends(require_permission("devices:read")),
+) -> StreamingResponse:
+    """Notify every client when shared topology or inventory state changes."""
+    async def events():
+        previous_revision = ""
+        while not await request.is_disconnected():
+            with SessionLocal() as stream_db:
+                state = _topology_revision(stream_db)
+            if state["revision"] != previous_revision:
+                previous_revision = state["revision"]
+                state["updated_at"] = state["updated_at"] or datetime.now(timezone.utc).isoformat()
+                yield f"event: topology\ndata: {json.dumps(state)}\n\n"
+            else:
+                yield ": keep-alive\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/snmp/topology/snapshot")
@@ -2372,11 +2441,24 @@ async def get_device_monitoring_configs(
     return await scheduler.get_device_jobs(device_id)
 
 
+def _notify_monitoring_started(device_id: int, module: str, interval_seconds: int) -> None:
+    from backend.database.session import SessionLocal
+    from backend.services.alerting import create_operational_alert
+    with SessionLocal() as db:
+        create_operational_alert(
+            db, title=f"Monitoring Started: {module}",
+            description=f"SNMP {module} monitoring started for device {device_id} at {interval_seconds}s interval.",
+            device_id=device_id,
+        )
+        db.commit()
+
+
 @router.post("/snmp/devices/{device_id}/monitoring/{module}/start")
 async def start_module_monitoring(
     device_id: int,
     module: str,
     payload: MonitoringConfigRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: Any = Depends(require_permission("devices:update")),
 ) -> dict[str, Any]:
@@ -2404,14 +2486,7 @@ async def start_module_monitoring(
         config = await scheduler.add_job(device_id, module, payload.interval_seconds)
     finally:
         guard.__exit__(None, None, None)
-    from backend.services.alerting import create_operational_alert
-    create_operational_alert(
-        db,
-        title=f"Monitoring Started: {module}",
-        description=f"SNMP {module} monitoring started for device {device_id} at {payload.interval_seconds}s interval.",
-        device_id=device_id,
-    )
-    db.commit()
+    background_tasks.add_task(_notify_monitoring_started, device_id, module, payload.interval_seconds)
     return {
         "device_id": config.device_id,
         "module_name": config.module_name,

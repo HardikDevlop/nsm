@@ -1,6 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import GlassCard from '../components/GlassCard'
-import { persistSNMPTopologySnapshot, requestJson, updateDevice, type DeviceRecord } from '../lib/api'
+import { persistSNMPTopologySnapshot, requestJson, streamTopologyUpdates, updateDevice, type DeviceRecord } from '../lib/api'
 import { agnigateLabel, isAgnigateMac } from '../lib/deviceIdentity'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '../lib/queryProvider'
@@ -270,7 +270,10 @@ function normalizePersistedLink(raw: any, index: number): GraphLink | null {
   const from = str(raw?.from, raw?.source_node, raw?.source, raw?.source_id)
   const to = str(raw?.to, raw?.target_node, raw?.target, raw?.target_id)
   if (!from || !to) return null
-  const sourceValue = lower(raw?.source, raw?.protocol)
+  // Raw collector rows use `source_node` for the endpoint and `protocol` for
+  // evidence. Normalized UI rows use `source` for evidence. Protocol must win
+  // so a MAC-table link can never fall through to the LLDP default.
+  const sourceValue = lower(raw?.evidence_source, raw?.protocol, raw?.link_type, raw?.discovery_source, raw?.source)
   const source: GraphLink['source'] = sourceValue.includes('arp') || sourceValue.includes('mac')
     ? 'MAC/ARP'
     : sourceValue.includes('routing') || sourceValue.includes('route')
@@ -285,7 +288,9 @@ function normalizePersistedLink(raw: any, index: number): GraphLink | null {
     remotePort: str(raw?.remotePort, raw?.remote_port, raw?.target_port),
     status: raw?.status,
     source,
-    confidence: raw?.confidence === 'INFERRED' || raw?.verified === false ? 'INFERRED' : 'CONFIRMED',
+    // Persisted MAC/ARP records are observations, never physical-neighbour
+    // proof, even if an older snapshot incorrectly stored verified=true.
+    confidence: source === 'MAC/ARP' || raw?.confidence === 'INFERRED' || raw?.verified === false ? 'INFERRED' : 'CONFIRMED',
   }
 }
 
@@ -469,6 +474,14 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
     const existingIndex = linkPairs.get(key)
     if (existingIndex !== undefined) {
       const existing = links[existingIndex]
+      if (existing.source === 'MAC/ARP' && link.source === 'LLDP/CDP') {
+        links[existingIndex] = {
+          ...link,
+          localPort: link.localPort || existing.localPort,
+          macCount: existing.macCount || link.macCount,
+        }
+        return
+      }
       if (link.source === 'MAC/ARP' && link.localPort) {
         // Port Summary is authoritative for the monitored switch-side port.
         // Keep that port even when LLDP supplied a neighbor-side eth0 link
@@ -552,7 +565,11 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
 
   // Use verified links returned by the topology endpoint only as a fallback
   // when the direct LLDP response did not expose the same row.
-  topologyLinks.filter((link: any) => link?.verified === true && !lower(link?.protocol, link?.source).includes('routing')).forEach((link: any, index: number) => {
+  topologyLinks.filter((link: any) => {
+    const normalizedSource = link?.from || link?.to ? link?.source : undefined
+    const evidence = lower(link?.evidence_source, link?.protocol, link?.link_type, link?.discovery_source, normalizedSource)
+    return link?.verified === true && (evidence.includes('lldp') || evidence.includes('cdp'))
+  }).forEach((link: any, index: number) => {
     const source = byIdentity({ id: str(link.source_node, link.source) })
     const target = byIdentity({ id: str(link.target_node, link.target), ip: link.target_ip })
     if (!source || !target) return
@@ -811,10 +828,11 @@ function layoutGraph(nodes: GraphNode[], links: GraphLink[]): Layout {
   return { nodes, links, positions, width, height: maxY, rootId: root.id }
 }
 
-const TOPOLOGY_LAST_SNAPSHOT_KEY = 'topology-last-snapshot-v1'
-const TOPOLOGY_LAYOUT_CACHE_KEY = 'topology-layout-cache-v1'
+// v2 invalidates snapshots in which MAC/FDB links were previously persisted
+// as confirmed LLDP links.
+const TOPOLOGY_LAST_SNAPSHOT_KEY = 'topology-last-snapshot-v2'
+const TOPOLOGY_LAYOUT_CACHE_KEY = 'topology-layout-cache-v2'
 const TOPOLOGY_LAYOUT_QUERY_KEY = ['snmp-topology-layout'] as const
-const TOPOLOGY_AUTO_REFRESH_MS = 30_000
 const isCompleteTopologyLayout = (layout: Layout | null | undefined) => Boolean(layout && layout.nodes.length >= 2 && layout.links.length > 0)
 
 function readTopologySnapshot(): any {
@@ -1005,9 +1023,8 @@ export default function Topology() {
   // current reachable inventory before rendering topology nodes.
   const [layout, setLayout] = useState<Layout | null>(topologyLayoutCache)
   const hasLayoutRef = useRef(topologyLayoutCache !== null)
-  const liveLayoutRef = useRef<Layout | null>(null)
-  const liveInventoryKeyRef = useRef('')
   const topologyRequestRef = useRef(false)
+  const topologyRevisionRef = useRef('')
   const topologyTimestampRef = useRef<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1088,7 +1105,7 @@ export default function Topology() {
     }
   }, [])
 
-  const loadTopology = useCallback(async (forceRefresh = false) => {
+  const loadTopology = useCallback(async (forceRefresh = false, acceptServerState = false) => {
     const requestUrl = forceRefresh
       ? `/snmp/topology?refresh=true&requested_at=${Date.now()}`
       : '/snmp/topology'
@@ -1172,30 +1189,9 @@ export default function Topology() {
           if (import.meta.env.DEV) console.debug('[Topology] SNMP inventory fallback unavailable', snmpInventoryError)
         }
       }
-      const inventoryKey = storedInventory
-        .map((device) => String(device.id))
-        .sort()
-        .join(',')
-      // The API intentionally serves cached topology on normal loads. Keep a
-      // successful explicit live refresh authoritative until the inventory
-      // itself changes; otherwise an older stored snapshot can overwrite the
-      // graph a moment after it was refreshed.
-      if (
-        !forceRefresh &&
-        topologyResult?.cached === true &&
-        liveLayoutRef.current &&
-        liveInventoryKeyRef.current === inventoryKey
-      ) {
-        applyTopologyLayout(liveLayoutRef.current, 'cached live layout', requestUrl, responseTimestamp, true)
-        hasLayoutRef.current = true
-        setLastUpdated(new Date())
-        return
-      }
       if (storedInventory.length === 0) {
         // The device inventory is authoritative. An empty inventory means
         // every cached topology node has been deleted and must be cleared.
-        liveLayoutRef.current = null
-        liveInventoryKeyRef.current = ''
         const emptyLayout = { nodes: [], links: [], positions: new Map<string, { x: number; y: number }>(), width: 1200, height: 650 }
         topologyLayoutCache = null
         topologyResponseCache = null
@@ -1371,13 +1367,16 @@ export default function Topology() {
           }
         }
       }
-      applyTopologyLayout(nextLayout, forceRefresh ? 'live refresh graph' : 'persisted topology graph', requestUrl, responseTimestamp, true)
-      if (forceRefresh && liveTopologyEvidence) {
-        liveLayoutRef.current = nextLayout
-        liveInventoryKeyRef.current = inventoryKey
-      }
+      applyTopologyLayout(
+        nextLayout,
+        forceRefresh ? 'live refresh graph' : 'persisted topology graph',
+        requestUrl,
+        responseTimestamp,
+        true,
+        acceptServerState,
+      )
       hasLayoutRef.current = true
-      setLastUpdated(new Date())
+      setLastUpdated(responseTimestamp ? new Date(responseTimestamp) : new Date())
       if (import.meta.env.DEV) {
         console.debug('[Topology] correlated live sources', {
           devices: mergedGraph.nodes.length,
@@ -1404,8 +1403,6 @@ export default function Topology() {
     topologyResponseCache = null
     topologyLayoutCache = null
     topologyGraphRef.current = null
-    liveLayoutRef.current = null
-    liveInventoryKeyRef.current = ''
     queryClient.removeQueries({ queryKey: topologyQueryKey })
     queryClient.removeQueries({ queryKey: TOPOLOGY_LAYOUT_QUERY_KEY })
     try {
@@ -1457,12 +1454,25 @@ export default function Topology() {
   }, [loadTopology])
 
   useEffect(() => {
-    // Keep the graph current while the topology route remains open. The
-    // request-in-flight guard in loadTopology prevents overlapping SNMP walks.
-    const refreshTimer = window.setInterval(() => {
-      void loadTopology(true)
-    }, TOPOLOGY_AUTO_REFRESH_MS)
-    return () => window.clearInterval(refreshTimer)
+    let cancelled = false
+    let closeStream: (() => void) | undefined
+    void streamTopologyUpdates(async event => {
+      if (cancelled || event.event !== 'topology') return
+      const { revision, updated_at: updatedAt } = event.data
+      if (!revision || revision === topologyRevisionRef.current) return
+      const isInitialState = !topologyRevisionRef.current
+      topologyRevisionRef.current = revision
+      if (!isInitialState) await loadTopology(false, true)
+      if (!cancelled && updatedAt) setLastUpdated(new Date(updatedAt))
+    }).then(cleanup => {
+      if (cancelled) cleanup(); else closeStream = cleanup
+    }).catch(() => {
+      // The normal page load still works if the optional live stream is down.
+    })
+    return () => {
+      cancelled = true
+      closeStream?.()
+    }
   }, [loadTopology])
 
   useEffect(() => {
@@ -1548,6 +1558,8 @@ export default function Topology() {
     // The graph view must show the complete discovered topology. PORT SUMMARY
     // intentionally reduces this to one MAC/ARP relationship per core port,
     // but filtering those links here hides valid LLDP/CDP and routing paths.
+    // Keep non-LLDP devices visible through their inferred MAC/ARP port
+    // evidence. Rendering below gives blue solid lines only to LLDP/CDP.
     const openLinks = layout.links.filter(isRenderableConnectedLink)
     // Persisted snapshots can contain numeric endpoint IDs while normalized
     // graph nodes use strings. Compare canonical strings or the graph appears
@@ -1897,7 +1909,7 @@ export default function Topology() {
         <Metric label={tr.macsOnPorts} value={counts.mac} color="#34d399" />
         <Metric label={tr.portGroups} value={counts.endpoints} color="#34d399" />
         <div className="ml-auto flex items-center gap-2 font-mono text-[10px]" style={{ color: '#64748b' }}>
-          <span>{tr.autoRefreshOff}</span>
+          <span>{tr.liveSyncOn}</span>
           <button type="button" onClick={resetView} className="rounded px-2 py-1" style={{ color: '#22d3ee', border: '1px solid rgba(34,211,238,.2)' }}>
             {tr.resetView}
           </button>
@@ -2049,7 +2061,8 @@ export default function Topology() {
                 const displayPort = link.source === 'MAC/ARP'
                   ? link.localPort || link.remotePort
                   : rootPort || link.localPort || link.remotePort
-                const color = link.gatewayPath ? '#a78bfa' : link.wireless ? '#c084fc' : link.confidence === 'CONFIRMED' ? '#22d3ee' : '#fbbf24'
+                const isConfirmedNeighbour = link.source === 'LLDP/CDP' && link.confidence === 'CONFIRMED'
+                const color = link.gatewayPath ? '#a78bfa' : link.wireless ? '#c084fc' : isConfirmedNeighbour ? '#22d3ee' : '#fbbf24'
                 const selected = selectedLink?.id === link.id
                 const highlighted = highlightedLinkIds.has(link.id)
                 const startY = from.y < to.y ? from.y + 45 : from.y - 45
@@ -2088,9 +2101,9 @@ export default function Topology() {
                     style={{ cursor: 'pointer' }}
                   >
                     <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke="transparent" strokeWidth="22" />
-                    <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke={color} strokeWidth={selected ? 4 : highlighted ? 3.2 : link.gatewayPath ? 3 : 2} strokeOpacity={highlighted || selected ? 1 : 0.4} strokeDasharray={link.confidence === 'INFERRED' ? '8 6' : undefined} filter={selected || highlighted ? 'url(#topologyGlow)' : undefined}>
+                    <path d={`M ${from.x} ${startY} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${endY}`} fill="none" stroke={color} strokeWidth={selected ? 4 : highlighted ? 3.2 : link.gatewayPath ? 3 : 2} strokeOpacity={highlighted || selected ? 1 : 0.4} strokeDasharray={!isConfirmedNeighbour ? '8 6' : undefined} filter={selected || highlighted ? 'url(#topologyGlow)' : undefined}>
                       <animate attributeName="stroke-opacity" values={highlighted || selected ? '.7;1;.7' : '.25;.75;.25'} dur={link.gatewayPath ? '1.5s' : '2.4s'} repeatCount="indefinite" />
-                      {link.confidence === 'INFERRED' && <animate attributeName="stroke-dashoffset" values="0;-28" dur="1s" repeatCount="indefinite" />}
+                      {!isConfirmedNeighbour && <animate attributeName="stroke-dashoffset" values="0;-28" dur="1s" repeatCount="indefinite" />}
                     </path>
                     <text x={(from.x + to.x) / 2} y={midY - 10} textAnchor="middle" className="font-mono" style={{ fill: color, fontSize: 8, fontWeight: 700 }}>SRC: {link.localPort || 'PORT UNKNOWN'}</text>
                     <text x={(from.x + to.x) / 2} y={midY + 14} textAnchor="middle" className="font-mono" style={{ fill: '#64748b', fontSize: 8 }}>{link.macCount ? `${link.macCount} MACs` : link.confidence}</text>

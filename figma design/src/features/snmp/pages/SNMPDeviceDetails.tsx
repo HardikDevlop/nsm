@@ -166,6 +166,37 @@ export default function SNMPDeviceDetails() {
 
   const [activeTab, setActiveTab] = useState<'overview' | 'monitoring' | 'metrics' | 'history'>('overview')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [startAllProgress, setStartAllProgress] = useState<{ done: number; total: number } | null>(null)
+  const [startSummary, setStartSummary] = useState<string | null>(null)
+
+  const handleStartAll = async () => {
+    if (startAllProgress || startMonitoring.isPending) return
+    const modules = supportedModules.filter(module => {
+      const config = monitoringList.find(item => item.module_name === module.id)
+      return !config?.enabled || config.status !== 'running'
+    })
+    if (!modules.length) return
+    setErrorMessage(null)
+    setStartSummary(null)
+    setStartAllProgress({ done: 0, total: modules.length })
+    const failures: string[] = []
+    try {
+      for (const [index, module] of modules.entries()) {
+        const config = monitoringList.find(item => item.module_name === module.id)
+        try {
+          await startMonitoring.mutateAsync({ deviceId: id, module: module.id, intervalSeconds: config?.interval_seconds || 60 })
+        } catch (error) {
+          failures.push(`${module.label}: ${error instanceof Error ? error.message : 'Start failed'}`)
+        }
+        setStartAllProgress({ done: index + 1, total: modules.length })
+      }
+      setStartSummary(`${modules.length - failures.length} of ${modules.length} modules started.`)
+      if (failures.length) setErrorMessage(failures.join('; '))
+    } finally {
+      setStartAllProgress(null)
+      void refetch()
+    }
+  }
 
   const handleStartMonitoring = async (module: string, intervalSeconds: number) => {
     try {
@@ -501,7 +532,16 @@ export default function SNMPDeviceDetails() {
       {activeTab === 'monitoring' && (
         <>
           <GlassCard className="p-4">
-            <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-3">MONITORING CONFIGURATION</div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="font-display font-bold text-sm tracking-wider neon-cyan">MONITORING CONFIGURATION</div>
+              <button onClick={handleStartAll}
+                disabled={!!startAllProgress || startMonitoring.isPending || !modulesWithConfig.some(m => m.supported && (!m.config.enabled || m.config.status !== 'running'))}
+                className="rounded px-4 py-2 font-mono text-xs disabled:opacity-40"
+                style={{ color: '#00ff88', background: 'rgba(0,255,136,0.1)', border: '1px solid rgba(0,255,136,0.3)' }}>
+                {startAllProgress ? `STARTING ${startAllProgress.done}/${startAllProgress.total}…` : '▶ START ALL'}
+              </button>
+            </div>
+            {startSummary && <div role="status" className="mb-3 font-mono text-xs text-[#00ff88]">{startSummary}</div>}
             <div className="font-mono text-xs mb-4" style={{ color: '#8899bb' }}>
               Configure per-module monitoring with custom polling intervals. Changes take effect immediately.
             </div>
@@ -555,7 +595,7 @@ export default function SNMPDeviceDetails() {
                               type="checkbox"
                               checked={m.config.enabled}
                               onChange={(e) => handleToggleEnabled(m.module.id, e.target.checked)}
-                              disabled={!m.supported || updateMonitoring.isPending}
+                              disabled={!m.supported || updateMonitoring.isPending || !!startAllProgress}
                               className="w-4 h-4 accent-cyan-400"
                             />
                             <span className="font-mono text-[10px]" style={{ color: m.supported ? '#c8d8ee' : '#667799' }}>
@@ -602,14 +642,14 @@ export default function SNMPDeviceDetails() {
                               <>
                                 {!isRunning ? (
                                   <button onClick={() => handleStartMonitoring(m.module.id, m.config.interval_seconds)}
-                                    disabled={startMonitoring.isPending}
+                                    disabled={startMonitoring.isPending || !!startAllProgress}
                                     className="font-mono text-[10px] px-2 py-1 rounded"
                                     style={{ background: 'rgba(0,255,136,0.1)', color: '#00ff88', border: '1px solid rgba(0,255,136,0.3)' }}>
                                     START
                                   </button>
                                 ) : (
                                   <button onClick={() => handleStopMonitoring(m.module.id)}
-                                    disabled={stopMonitoring.isPending}
+                                    disabled={stopMonitoring.isPending || !!startAllProgress}
                                     className="font-mono text-[10px] px-2 py-1 rounded"
                                     style={{ background: 'rgba(255,51,102,0.1)', color: '#ff3366', border: '1px solid rgba(255,51,102,0.3)' }}>
                                     STOP
@@ -620,7 +660,7 @@ export default function SNMPDeviceDetails() {
                                     type="checkbox"
                                     checked={m.config.enabled}
                                     onChange={(e) => handleToggleEnabled(m.module.id, e.target.checked)}
-                                    disabled={updateMonitoring.isPending}
+                                    disabled={updateMonitoring.isPending || !!startAllProgress}
                                     className="w-4 h-4 accent-cyan-400"
                                   />
                                   <span className="font-mono text-[9px]" style={{ color: '#8899bb' }}>ENABLED</span>

@@ -4,14 +4,21 @@ import { test } from 'node:test'
 
 const page = await readFile(new URL('../src/pages/Topology.tsx', import.meta.url), 'utf8')
 
-test('topology does not overwrite a live refresh with the same cached inventory', () => {
+test('only LLDP or CDP receives the blue confirmed line', () => {
+  assert.match(page, /const openLinks = layout\.links\.filter\(isRenderableConnectedLink\)/)
+  assert.match(page, /const isConfirmedNeighbour = link\.source === 'LLDP\/CDP' && link\.confidence === 'CONFIRMED'/)
+  assert.match(page, /isConfirmedNeighbour \? '#22d3ee' : '#fbbf24'/)
+  assert.match(page, /strokeDasharray=\{!isConfirmedNeighbour \? '8 6' : undefined\}/)
+  assert.match(page, /evidence\.includes\('lldp'\) \|\| evidence\.includes\('cdp'\)/)
+  assert.match(page, /topology-last-snapshot-v2/)
+})
+
+test('topology rebuild persists one shared server snapshot', () => {
   assert.match(page, /const topologyQueryKey = \['snmp-topology'\] as const/)
   assert.match(page, /queryClient\.fetchQuery\(/)
   assert.match(page, /staleTime: 0/)
-  assert.match(page, /const liveLayoutRef = useRef<Layout \| null>\(null\)/)
-  assert.match(page, /const liveInventoryKeyRef = useRef\(''\)/)
-  assert.match(page, /topologyResult\?\.cached === true/)
-  assert.match(page, /liveInventoryKeyRef\.current === inventoryKey/)
+  assert.doesNotMatch(page, /liveLayoutRef/)
+  assert.doesNotMatch(page, /liveInventoryKeyRef/)
   assert.match(page, /const liveTopologyEvidence = liveCollections\.some\(/)
   assert.match(page, /if \(forceRefresh && liveTopologyEvidence && root && Number\.isFinite\(Number\(root\.id\)\)\)/)
   assert.match(page, /persistSNMPTopologySnapshot\(Number\(root\.id\)/)
@@ -36,7 +43,7 @@ test('topology keeps a remount-safe response cache outside the route component',
   assert.match(page, /useState<Layout \| null>\(topologyLayoutCache\)/)
   assert.match(page, /useRef\(topologyLayoutCache !== null\)/)
   assert.match(page, /if \(Array\.isArray\(topologyResult\?\.devices\) && Array\.isArray\(topologyResult\?\.links\)\)/)
-  assert.match(page, /topology-layout-cache-v1/)
+  assert.match(page, /topology-layout-cache-v2/)
   assert.match(page, /snmp-topology-layout/)
   assert.match(page, /queryClient\.setQueryData\(TOPOLOGY_LAYOUT_QUERY_KEY, preservedLayout\)/)
   assert.match(page, /route-remount layout hydration/)
@@ -55,7 +62,7 @@ test('topology never leaves an indefinite loading overlay', () => {
 })
 
 test('topology restores the last complete snapshot after a browser reload', () => {
-  assert.match(page, /topology-last-snapshot-v1/)
+  assert.match(page, /topology-last-snapshot-v2/)
   assert.match(page, /window\.localStorage\.getItem\(TOPOLOGY_LAST_SNAPSHOT_KEY\)/)
   assert.match(page, /window\.localStorage\.setItem\(TOPOLOGY_LAST_SNAPSHOT_KEY, JSON\.stringify\(topologyResult\)\)/)
 })
@@ -271,13 +278,14 @@ test('topology wheel zoom uses a non-passive native listener', () => {
   assert.doesNotMatch(page, /onWheel=\{/)
 })
 
-test('topology auto-refreshes in the background and keeps manual refresh', () => {
-  assert.match(page, /const TOPOLOGY_AUTO_REFRESH_MS = 30_000/)
-  assert.match(page, /const refreshTimer = window\.setInterval\(\(\) => \{[\s\S]*void loadTopology\(true\)/)
-  assert.match(page, /return \(\) => window\.clearInterval\(refreshTimer\)/)
+test('topology live-syncs server changes without browser SNMP polling', () => {
+  assert.match(page, /streamTopologyUpdates\(async event =>/)
+  assert.match(page, /if \(!isInitialState\) await loadTopology\(false, true\)/)
+  assert.doesNotMatch(page, /window\.setInterval/)
+  assert.doesNotMatch(page, /TOPOLOGY_AUTO_REFRESH_MS/)
   assert.match(page, /const refreshTopology = useCallback\(\(\) => \{[\s\S]*return loadTopology\(true\)/)
   assert.match(page, /onClick=\{\(\) => void refreshTopology\(\)\}/)
-  assert.match(page, /AUTO 30S/)
+  assert.match(page, /tr\.liveSyncOn/)
 })
 
 test('topology restores visual view state without changing topology data', () => {

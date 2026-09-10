@@ -27,8 +27,15 @@ class ManualTopologyResolvePayload(BaseModel):
 
 
 def _link_key(link: dict[str, Any]) -> tuple[tuple[str, str], tuple[str, str]]:
-    left = (str(link.get("from") or link.get("source_node") or "").strip().lower(), str(link.get("fromPort") or link.get("source_port") or "").strip().lower())
-    right = (str(link.get("to") or link.get("target_node") or "").strip().lower(), str(link.get("toPort") or link.get("target_port") or "").strip().lower())
+    def port(value: Any) -> str:
+        text = str(value or "").strip().lower().split("·")[-1]
+        for prefix in ("gigabitethernet", "fastethernet", "tengigabitethernet", "ethernet", "gi", "ge", "fa", "te"):
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                break
+        return "".join(text.split())
+    left = (str(link.get("from") or link.get("source_node") or "").strip().lower(), port(link.get("fromPort") or link.get("source_port")))
+    right = (str(link.get("to") or link.get("target_node") or "").strip().lower(), port(link.get("toPort") or link.get("target_port")))
     return tuple(sorted((left, right)))  # type: ignore[return-value]
 
 
@@ -42,32 +49,69 @@ def _device_maps(payload: dict[str, Any]) -> tuple[dict[str, str], dict[str, str
         if manual_id and backend_id is not None:
             manual_to_backend[manual_id] = str(backend_id)
             backend_to_manual[str(backend_id)] = manual_id
-        name = str(device.get("name") or "").strip().lower()
-        if name and backend_id is not None:
-            names[name] = str(backend_id)
+        if backend_id is not None:
+            backend_value = str(backend_id)
+            # SNMP collectors identify the same endpoint inconsistently across
+            # vendors. Accept every identity already present in the snapshot.
+            aliases = (
+                device.get("name"),
+                device.get("hostname"),
+                device.get("ipAddress"),
+                device.get("ip_address"),
+                device.get("ip"),
+                device.get("subtitle"),
+                device.get("macAddress"),
+                device.get("mac_address"),
+            )
+            for alias in aliases:
+                normalized = str(alias or "").strip().lower()
+                if normalized:
+                    names[normalized] = backend_value
     return manual_to_backend, backend_to_manual, names
 
 
 def _observed_links(live: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
     manual_to_backend, backend_to_manual, names = _device_maps(payload)
+    # Collector node IDs can be chassis MACs while the snapshot uses inventory IDs.
+    for node in (live.get("devices") or live.get("nodes") or []):
+        for alias in (node.get("ip_address"), node.get("ip"), node.get("hostname"), node.get("mac_address"), node.get("mac")):
+            backend_id = names.get(str(alias or "").strip().lower())
+            if backend_id is not None:
+                names[str(node.get("id") or "").lower()] = backend_id
+                break
     result: list[dict[str, Any]] = []
     for raw in live.get("links", []) or []:
-        source = str(raw.get("source_node") or raw.get("source_device_id") or "")
-        target = str(raw.get("target_node") or raw.get("target_device_id") or "")
+        source = str(
+            raw.get("source_node")
+            or raw.get("source_device_id")
+            or raw.get("source_device")
+            or raw.get("from")
+            or ""
+        )
+        target = str(
+            raw.get("target_node")
+            or raw.get("target_device_id")
+            or raw.get("target_device")
+            or raw.get("to")
+            or ""
+        )
         source = names.get(source.lower(), source)
         target = names.get(target.lower(), target)
         source = backend_to_manual.get(source, source)
         target = backend_to_manual.get(target, target)
         if source not in backend_to_manual.values() or target not in backend_to_manual.values():
             continue
-        source_port = str(raw.get("source_port") or raw.get("local_port") or raw.get("from_port") or "")
-        target_port = str(raw.get("target_port") or raw.get("remote_port") or raw.get("to_port") or "")
+        source_port = str(raw.get("source_port") or raw.get("local_port") or raw.get("from_port") or raw.get("fromPort") or "")
+        interface = raw.get("interface") or {}
+        if source_port.isdigit() and isinstance(interface, dict):
+            source_port = str(interface.get("name") or interface.get("description") or source_port)
+        target_port = str(raw.get("target_port") or raw.get("remote_port") or raw.get("to_port") or raw.get("toPort") or "")
         # MAC/ARP evidence normally identifies the switch-side port but has
         # no way to know an endpoint's local interface. Keep that evidence
         # instead of rejecting an otherwise valid device-pair observation.
         if not source_port and not target_port:
             continue
-        evidence_source = raw.get("evidence_source") or raw.get("source") or raw.get("collector")
+        evidence_source = raw.get("evidence_source") or raw.get("source") or raw.get("collector") or raw.get("protocol")
         evidence_available = bool(
             raw.get("evidence_available") or raw.get("evidenceAvailable") or
             evidence_source or raw.get("local_port") or raw.get("source_port")
@@ -81,7 +125,7 @@ def _observed_links(live: dict[str, Any], payload: dict[str, Any]) -> list[dict[
             "verified": bool(raw.get("verified", evidence_available)),
             "evidence_source": str(evidence_source) if evidence_source else None,
             "evidence_available": evidence_available,
-            "last_verified_at": raw.get("observed_at") or raw.get("timestamp"),
+            "last_verified_at": raw.get("observed_at") or raw.get("timestamp") or live.get("timestamp"),
             "confidence": raw.get("confidence"),
         })
     return result
@@ -202,6 +246,16 @@ def reconcile_manual_topology(
             differences.append((change_type, signature, {"status": baseline_status, "device_id": backend_id}, {"status": observed_status, "device_id": backend_id}))
 
     now = datetime.now().replace(microsecond=0)
+    current_signatures = {(change_type, signature) for change_type, signature, _, _ in differences}
+    if physical_evidence_available:
+        stale_changes = db.query(ManualTopologyChange).filter(
+            ManualTopologyChange.snapshot_id == snapshot.id,
+            ManualTopologyChange.status == "pending",
+        ).all()
+        for stale in stale_changes:
+            if (stale.change_type, stale.signature) not in current_signatures:
+                stale.status = "resolved"
+                stale.resolved_at = now
     for change_type, signature, expected, observed in differences:
         existing = db.query(ManualTopologyChange).filter(
             ManualTopologyChange.snapshot_id == snapshot.id,

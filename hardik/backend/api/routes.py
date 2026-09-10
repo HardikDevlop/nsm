@@ -5,7 +5,7 @@ import logging
 from threading import Lock
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import case, func, select, text
@@ -118,6 +118,20 @@ from backend.utils.crypto import encrypt_secret
 
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _notify_alert_after_response(alert_id: int) -> None:
+    """Send audit notifications outside the device mutation request."""
+    from backend.database.session import SessionLocal
+
+    try:
+        with SessionLocal() as db:
+            alert = db.query(Alert).filter(Alert.id == alert_id).first()
+            if alert is not None:
+                _notify(db, alert)
+                db.commit()
+    except Exception:
+        logger.exception("Deferred alert notification failed for alert %s", alert_id)
 incident_logger = logging.getLogger(__name__)
 _DASHBOARD_SUMMARY_TTL_SECONDS = 10
 _dashboard_summary_cache: dict[str, object] = {}
@@ -1040,7 +1054,7 @@ def update_device(item_id: int, payload: DeviceUpdate, db: Session = Depends(get
 
 
 @router.delete("/devices/{item_id}")
-def delete_device(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:delete"))):
+def delete_device(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:delete")), background_tasks: BackgroundTasks = None):
     # Device deletion is permanent. The generic CRUD helper soft-deletes
     # models with ``deleted_at``, which leaves the device and stale discovery
     # data available for later re-discovery. Use the model cascade instead.
@@ -1078,12 +1092,19 @@ def delete_device(item_id: int, db: Session = Depends(get_db), current_user: Use
         logger.exception("Failed to permanently delete device %s", item_id)
         raise HTTPException(status_code=409, detail="Device cannot be deleted because related data is still in use") from exc
     if hasattr(db, "add"):
-        create_operational_alert(
+        alert = create_operational_alert(
             db,
             title=f"Device Deleted: {deleted_hostname}",
             description=f"Device {deleted_ip} was deleted from the NMS inventory.",
+            notify=False,
         )
         db.commit()
+        if background_tasks is not None:
+            background_tasks.add_task(_notify_alert_after_response, alert.id)
+        else:
+            # Preserve behavior for direct/internal callers that do not pass
+            # FastAPI background tasks.
+            _notify(db, alert)
     audit(db, current_user.id, "DELETE", "devices")
     return {"deleted": True, "detail": f"Device {item_id} deleted"}
 
