@@ -184,7 +184,7 @@ function PortSocket({
         peerName ? `\nConnected: ${peerName}` : ""
       }`}
       onClick={onSelect}
-      className={`group min-w-[62px] rounded border bg-[#1a2222] px-1.5 pb-1.5 pt-1 text-center transition hover:border-[#d4a95c99] ${
+      className={`device-port-socket group min-w-[62px] rounded border bg-[#1a2222] px-1.5 pb-1.5 pt-1 text-center transition hover:border-[#d4a95c99] ${
         selected ? "border-[#f1f5f4] ring-2 ring-[#61c98d]" : "border-[#56605e]"
       }`}
     >
@@ -388,7 +388,7 @@ export default function DevicePortMap() {
     (_, bank) => visiblePhysical.slice(bank * 12, bank * 12 + 12),
   )
   return (
-    <main className="min-h-full bg-[#0b0f11] p-4 text-[#e5e7e7] sm:p-6">
+    <main className="device-port-map-page min-h-full bg-[#0b0f11] p-4 text-[#e5e7e7] sm:p-6">
       <button
         className="tool mb-4"
         onClick={() => navigate("/manual-topology")}
@@ -440,7 +440,7 @@ export default function DevicePortMap() {
           ].map(([value, label]) => (
             <div
               key={label}
-              className="rounded border border-white/[.08] bg-[#0d1113] p-3"
+              className="device-port-stat rounded border border-white/[.08] bg-[#0d1113] p-3"
             >
               <div className="text-xl text-[#61c98d]">{value}</div>
               <div className="font-mono text-[8px] text-[#7f8b88]">{label}</div>
@@ -480,7 +480,7 @@ export default function DevicePortMap() {
           </div>
           <div className="mt-5 overflow-x-auto rounded-xl border border-white/[.1] bg-[#0d1113] p-4">
             <div
-              className="mx-auto min-w-[720px] rounded-lg border border-[#4b5752] bg-[linear-gradient(145deg,#303936_0%,#111716_42%,#252d2b_100%)] p-4 shadow-[inset_0_1px_0_#ffffff18,0_16px_36px_#000b]"
+              className="device-front-panel mx-auto min-w-[720px] rounded-lg border border-[#4b5752] bg-[linear-gradient(145deg,#303936_0%,#111716_42%,#252d2b_100%)] p-4 shadow-[inset_0_1px_0_#ffffff18,0_16px_36px_#000b]"
               style={{
                 width: `${Math.min(100, Math.max(70, panelZoom * 0.82))}%`,
               }}
@@ -566,11 +566,11 @@ export default function DevicePortMap() {
                     </div>
                   ))}
                   {classified.uplinks.filter(matchesPort).length > 0 && (
-                    <div className="mt-4 rounded border border-[#8a6b35] bg-[#241f16] p-3">
+                    <div className="device-sfp-bay mt-4 rounded border border-[#8a6b35] bg-[#241f16] p-3">
                       <div className="mb-2 font-mono text-[8px] uppercase tracking-widest text-[#f0d28a]">
                         SFP / HIGH-SPEED UPLINK BAY
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="device-sfp-bay flex flex-wrap gap-2">
                         {classified.uplinks.filter(matchesPort).map((port) => {
                           const link = linkForPort(port.name)
                           return (
@@ -672,7 +672,7 @@ export default function DevicePortMap() {
           </div>
           <div className="mt-4 overflow-x-auto rounded border border-white/[.08]">
             <table className="w-full min-w-[760px] text-left text-[10px]">
-              <thead className="bg-[#18201f] font-mono text-[8px] uppercase text-[#7f8b88]">
+              <thead className="device-port-table-head bg-[#18201f] font-mono text-[8px] uppercase text-[#7f8b88]">
                 <tr>
                   {[
                     "PORT",
@@ -777,7 +777,7 @@ export default function DevicePortMap() {
             </div>
           )}
         </div>
-        <aside className="rounded-xl border border-white/[.1] bg-[#11161a] p-5">
+        <aside className="device-port-details-panel rounded-xl border border-white/[.1] bg-[#11161a] p-5">
           <div className="font-mono text-[10px] uppercase tracking-[.16em]">
             Port details
           </div>

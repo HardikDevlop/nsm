@@ -170,7 +170,24 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20260902_0042_knowledge_core_workflow", description="Add Knowledge article metadata, lifecycle and audit history"),
     Migration(migration_id="20260902_0043_knowledge_relationships_usefulness", description="Add Knowledge change, CI, related article and feedback relationships"),
     Migration(migration_id="20260902_0044_syslog_backend_readiness", description="Complete Syslog receiver, parsing, filtering, rules and retention fields"),
+    Migration(migration_id="20260910_0045_snmp_scalability_indexes", description="Add composite indexes for SNMP history and active-alert hot queries"),
 )
+
+
+def _ensure_snmp_scalability_indexes(engine: Engine) -> None:
+    statements = (
+        'CREATE INDEX IF NOT EXISTS "ix_cpu_statistics_device_time" ON cpu_statistics (device_id, created_at DESC, id DESC)',
+        'CREATE INDEX IF NOT EXISTS "ix_memory_statistics_device_time" ON memory_statistics (device_id, created_at DESC, id DESC)',
+        'CREATE INDEX IF NOT EXISTS "ix_storage_statistics_device_time" ON storage_statistics (device_id, created_at DESC, id DESC)',
+        'CREATE INDEX IF NOT EXISTS "ix_environment_statistics_device_time" ON environment_statistics (device_id, created_at DESC, id DESC)',
+        'CREATE INDEX IF NOT EXISTS "ix_interface_statistics_device_interface_time" ON interface_statistics (device_id, interface_id, created_at DESC, id DESC)',
+        'CREATE INDEX IF NOT EXISTS "ix_polling_history_device_collector_time" ON polling_history (device_id, collector, created_at DESC, id DESC)',
+        'CREATE INDEX IF NOT EXISTS "ix_polling_history_device_id_desc" ON polling_history (device_id, id DESC)',
+        "CREATE INDEX IF NOT EXISTS \"ix_alerts_active_device_title_status\" ON alerts (device_id, title, status) WHERE deleted_at IS NULL",
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def _ensure_migration_table(engine: Engine) -> None:
@@ -1157,6 +1174,8 @@ def run_migrations(engine: Engine) -> list[str]:
                     connection.execute(text(f"ALTER TABLE syslog_correlation_rules ADD COLUMN IF NOT EXISTS {column}"))
                 connection.execute(text("CREATE INDEX IF NOT EXISTS ix_syslog_fingerprint_received ON syslog_records (fingerprint, received_at)"))
                 connection.execute(text("CREATE INDEX IF NOT EXISTS ix_syslog_hostname ON syslog_records (hostname)"))
+        elif migration.migration_id == "20260910_0045_snmp_scalability_indexes":
+            _ensure_snmp_scalability_indexes(engine)
         elif migration.migration_id == "20260831_0030_cmdb_reconciliation":
             _ensure_cmdb_reconciliation(engine)
         else:

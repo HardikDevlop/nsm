@@ -221,7 +221,8 @@ export default function ISPMonitoring() {
       // Label
       ctx.font = `${isGateway ? 10 : 8}px "JetBrains Mono", monospace`
       ctx.textAlign = 'center'
-      ctx.fillStyle = isHovered ? '#ffffff' : 'var(--t-muted, #8899bb)'
+      const lightTheme = document.documentElement.getAttribute('data-theme') === 'light'
+      ctx.fillStyle = isHovered ? (lightTheme ? '#111827' : '#ffffff') : (lightTheme ? '#475569' : '#8899bb')
       ctx.fillText(node.ip, px, py + r + 12)
       if (isGateway) {
         ctx.font = '9px "JetBrains Mono", monospace'
@@ -799,7 +800,7 @@ export default function ISPMonitoring() {
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+    <div className="ip-scan-page p-4 md:p-6 space-y-4 md:space-y-5">
       <div>
         <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">{tr.scanTitle}</h1>
         <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.scanSubtitle}</p>
@@ -916,10 +917,10 @@ export default function ISPMonitoring() {
               const isAdding = addingIps.has(ip)
 
               return (
-                <div key={`${ip}-${idx}`} className="rounded-xl overflow-hidden transition-all"
+                <div key={`${ip}-${idx}`} className="ip-discovery-card rounded-xl overflow-hidden transition-all"
                   style={{ border: isStored ? '1px solid rgba(0,255,136,0.25)' : '1px solid rgba(0,212,255,0.15)', background: isStored ? 'rgba(0,255,136,0.02)' : 'rgba(0,212,255,0.02)' }}>
 
-                  <div className="grid grid-cols-[1.4fr_1fr_1.4fr_0.9fr_1.2fr_auto] items-center gap-3 px-4 py-3"
+                  <div className="ip-discovery-row grid grid-cols-[1.4fr_1fr_1.4fr_0.9fr_1.2fr_auto] items-center gap-3 px-4 py-3"
                     style={{ borderBottom: '1px solid rgba(0,212,255,0.08)', background: 'rgba(0,0,0,0.2)' }}>
                     <div className="min-w-0">
                       <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>Device Name</div>
@@ -1340,7 +1341,7 @@ export default function ISPMonitoring() {
               }
 
               return (
-                <div key={device.id} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
+                <div key={device.id} className="ip-managed-device rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
                   <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">

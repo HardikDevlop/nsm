@@ -23,7 +23,14 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import logging
+import hashlib
+import hmac
+import json
+import os
+import queue
+import threading
 import time
 from typing import Any
 
@@ -32,12 +39,10 @@ from .security import AUTH_PROTOCOLS, PRIVACY_PROTOCOLS, protocol_name
 from backend.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
+_FINGERPRINT_KEY = os.urandom(32)
 
-# One shared executor — walks are I/O-bound, 8 workers handles concurrent
-# per-device polling without starving the main thread pool.
-_snmp_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=8,
-    thread_name_prefix="snmp-walk",
+_worker_engine: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
+    "snmp_worker_engine", default=None
 )
 
 # Hard cap: never walk more than this many rows per OID tree.
@@ -46,47 +51,136 @@ _MAX_WALK_ROWS = 2000
 _CANCELLATION_MARGIN_SECONDS = 0.05
 
 
-def _run_in_thread(coro: Any, timeout: float) -> Any:
-    """
-    Run *coro* in a dedicated thread that owns its own event loop.
+class _SNMPWorker:
+    """One thread owning one reusable asyncio loop and SnmpEngine."""
 
-    This is necessary because FastAPI/uvicorn already runs an asyncio loop
-    on the main thread; creating a second loop in the same thread raises
-    "This event loop is already running".  Running in a ThreadPoolExecutor
-    thread gives us a clean loop.
+    def __init__(self, index: int) -> None:
+        self.index = index
+        self.queue: queue.Queue[Any] = queue.Queue()
+        self.thread = threading.Thread(
+            target=self._run, name=f"snmp-worker-{index}", daemon=True
+        )
+        self.thread.start()
 
-    Cleanup note
-    ------------
-    pysnmp's AsyncioDispatcher creates internal timer tasks that never
-    naturally complete (they wait for a future that is never resolved after
-    the SNMP engine is done).  Calling loop.run_until_complete(gather(*pending))
-    on them causes an infinite hang.  The correct approach is to cancel them
-    WITHOUT awaiting the cancellation, then close the loop immediately.
-    """
-    def _worker() -> Any:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    def _run(self) -> None:
+        from pysnmp.hlapi.asyncio import SnmpEngine  # noqa: PLC0415
+
+        def create_runtime() -> tuple[Any, Any]:
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            new_engine = SnmpEngine()
+            logger.debug("SNMP_ENGINE_CREATED worker=%d", self.index)
+            return new_loop, new_engine
+
+        def close_runtime(current_loop: Any, current_engine: Any) -> None:
+            try:
+                current_engine.transportDispatcher.closeDispatcher()
+            except Exception:
+                logger.exception("Failed to close SNMP worker engine %d", self.index)
+            if not current_loop.is_closed():
+                for task in asyncio.all_tasks(current_loop):
+                    task.cancel()
+                current_loop.close()
+
+        loop, engine = create_runtime()
+        logger.debug("SNMP_WORKER_STARTED worker=%d", self.index)
         try:
-            # Enforce the deadline inside the worker as well as on the
-            # executor future so asyncio can cancel the in-flight SNMP task.
-            worker_timeout = max(
-                timeout * 0.9,
-                timeout - _CANCELLATION_MARGIN_SECONDS,
-            )
-            return loop.run_until_complete(asyncio.wait_for(coro, timeout=worker_timeout))
+            while True:
+                item = self.queue.get()
+                if item is None:
+                    self.queue.task_done()
+                    break
+                coro, timeout, future = item
+                token = _worker_engine.set(engine)
+                try:
+                    if not future.set_running_or_notify_cancel():
+                        coro.close()
+                        continue
+                    logger.debug("SNMP_ENGINE_REUSED worker=%d", self.index)
+                    worker_timeout = max(
+                        timeout * 0.9,
+                        timeout - _CANCELLATION_MARGIN_SECONDS,
+                    )
+                    value = loop.run_until_complete(
+                        asyncio.wait_for(coro, timeout=worker_timeout)
+                    )
+                    future.set_result(value)
+                except BaseException as exc:
+                    if not future.done():
+                        future.set_exception(exc)
+                    if isinstance(exc, RuntimeError):
+                        close_runtime(loop, engine)
+                        loop, engine = create_runtime()
+                        logger.debug("SNMP_WORKER_RECOVERED worker=%d", self.index)
+                finally:
+                    _worker_engine.reset(token)
+                    self.queue.task_done()
         finally:
-            # Cancel pysnmp's pending timer tasks without awaiting them.
-            # Awaiting would hang because those tasks wait on unresolvable futures.
-            for task in asyncio.all_tasks(loop):
-                task.cancel()
-            loop.close()
+            close_runtime(loop, engine)
+            logger.debug("SNMP_WORKER_STOPPED worker=%d", self.index)
 
-    future = _snmp_executor.submit(_worker)
-    try:
-        return future.result(timeout=timeout)
-    except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as exc:
-        future.cancel()
-        raise TimeoutError(f"SNMP operation timed out after {timeout:.1f}s") from exc
+
+class SNMPWorkerPool:
+    """Fixed-size dispatcher for worker-owned SNMP runtime state."""
+
+    def __init__(self, workers: int = 8) -> None:
+        self.worker_count = workers
+        self._lock = threading.Lock()
+        self._workers: list[_SNMPWorker] = []
+        self._next = 0
+        self._accepting = True
+
+    def _ensure_started_locked(self) -> None:
+        if not self._workers:
+            self._workers = [_SNMPWorker(index) for index in range(self.worker_count)]
+
+    def submit(self, coro: Any, timeout: float) -> Any:
+        with self._lock:
+            if not self._accepting:
+                coro.close()
+                raise RuntimeError("SNMP worker pool is shut down")
+            self._ensure_started_locked()
+            worker = self._workers[self._next % len(self._workers)]
+            self._next += 1
+            future: concurrent.futures.Future = concurrent.futures.Future()
+            worker.queue.put((coro, timeout, future))
+        try:
+            return future.result(timeout=timeout)
+        except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as exc:
+            future.cancel()
+            raise TimeoutError(f"SNMP operation timed out after {timeout:.1f}s") from exc
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if not self._accepting:
+                return
+            self._accepting = False
+            workers = list(self._workers)
+        for worker in workers:
+            worker.queue.join()
+            worker.queue.put(None)
+        for worker in workers:
+            worker.thread.join()
+
+
+_snmp_workers = SNMPWorkerPool(workers=8)
+
+
+def _run_in_thread(coro: Any, timeout: float) -> Any:
+    """Run a coroutine on a dedicated worker's persistent loop and engine."""
+    return _snmp_workers.submit(coro, timeout)
+
+
+def shutdown_snmp_workers() -> None:
+    """Stop accepting work and deterministically release worker resources."""
+    _snmp_workers.shutdown()
+
+
+def _engine_for_operation(factory: Any) -> tuple[Any, bool]:
+    engine = _worker_engine.get()
+    if engine is not None:
+        return engine, False
+    return factory(), True
 
 
 class SNMPClient:
@@ -102,15 +196,51 @@ class SNMPClient:
         timeout: float | None = None,
         retries: int | None = None,
         operation_timeout: float | None = None,
+        device_id: int | None = None,
     ) -> None:
         settings = get_settings()
         self.credentials = credentials
+        self.device_id = device_id
         self.timeout = settings.snmp_request_timeout if timeout is None else timeout
         self.retries = settings.snmp_retries if retries is None else retries
         self.operation_timeout = (
             settings.snmp_operation_timeout
             if operation_timeout is None else operation_timeout
         )
+        fingerprint_payload = json.dumps({
+            "version": credentials.version.lower(),
+            "community": credentials.community,
+            "username": credentials.username,
+            "auth_protocol": credentials.auth_protocol,
+            "auth_password": credentials.auth_password,
+            "privacy_protocol": credentials.privacy_protocol,
+            "privacy_password": credentials.privacy_password,
+            "security_level": credentials.security_level,
+            "port": credentials.port,
+        }, sort_keys=True, separators=(",", ":")).encode()
+        self._credential_fingerprint = hmac.new(
+            _FINGERPRINT_KEY, fingerprint_payload, hashlib.sha256
+        ).hexdigest()
+
+    def _cached(self, host: str, operation: tuple[Any, ...], request: Any) -> dict[str, Any]:
+        # A stable database device identity is mandatory for reuse. Discovery
+        # and ad-hoc callers retain the exact pre-cache network behavior.
+        if self.device_id is None:
+            return request()
+        from .raw_cache import get_raw_snmp_cache  # noqa: PLC0415
+        settings = get_settings()
+        key = (
+            self.device_id,
+            host,
+            self.credentials.port,
+            self.credentials.version.lower(),
+            operation,
+            self._credential_fingerprint,
+        )
+        return get_raw_snmp_cache(
+            settings.snmp_raw_cache_ttl_seconds,
+            settings.snmp_raw_cache_max_entries,
+        ).execute(key, request)
 
     # ------------------------------------------------------------------
     # Auth object (rebuilt per-call to avoid sharing state across threads)
@@ -163,11 +293,12 @@ class SNMPClient:
         t0 = time.perf_counter()
 
         async def _run() -> Any:
+            engine, _owned = _engine_for_operation(SnmpEngine)
             target = UdpTransportTarget(
                 (host, self.credentials.port or 161), timeout=self.timeout, retries=self.retries
             )
             return await getCmd(
-                SnmpEngine(),
+                engine,
                 self._make_auth(),
                 target,
                 ContextData(),
@@ -175,18 +306,20 @@ class SNMPClient:
             )
 
         try:
-            errInd, errSt, _errIdx, var_binds = _run_in_thread(
-                _run(), self.operation_timeout
-            )
+            def _request() -> dict[str, Any]:
+                errInd, errSt, _errIdx, var_binds = _run_in_thread(
+                    _run(), self.operation_timeout
+                )
+                if errInd or errSt:
+                    raise OSError(str(errInd or errSt))
+                return {str(oid): value.prettyPrint() for oid, value in var_binds}
+
+            result = self._cached(host, ("get", tuple(oids)), _request)
         finally:
             from backend.observability import record_snmp_duration  # noqa: PLC0415
             record_snmp_duration((time.perf_counter() - t0) * 1000)
         elapsed = round((time.perf_counter() - t0) * 1000, 1)
 
-        if errInd or errSt:
-            raise OSError(str(errInd or errSt))
-
-        result = {str(oid): value.prettyPrint() for oid, value in var_binds}
         logger.debug(
             "GET %s oids=%d result=%d ms=%.1f",
             host, len(oids), len(result), elapsed,
@@ -197,7 +330,12 @@ class SNMPClient:
     # WALK — iterative GETNEXT over a subtree
     # ------------------------------------------------------------------
 
-    def walk(self, host: str, root_oid: str) -> dict[str, Any]:
+    def walk(
+        self,
+        host: str,
+        root_oid: str,
+        operation_timeout: float | None = None,
+    ) -> dict[str, Any]:
         """Fetch table rows in bounded GETBULK batches, with GETNEXT fallback.
 
         Stops at subtree boundaries, end-of-MIB, non-increasing OIDs, the row
@@ -210,10 +348,11 @@ class SNMPClient:
 
         t0       = time.perf_counter()
         root_dot = root_oid.rstrip(".") + "."
+        deadline = self.operation_timeout if operation_timeout is None else operation_timeout
 
         async def _run() -> dict[str, Any]:
             result:  dict[str, Any] = {}
-            engine  = SnmpEngine()
+            engine, owns_engine = _engine_for_operation(SnmpEngine)
             auth    = self._make_auth()
             target  = UdpTransportTarget(
                 (host, self.credentials.port or 161), timeout=self.timeout, retries=self.retries
@@ -269,10 +408,15 @@ class SNMPClient:
                         current_var_binds = row_vars
                 return result
             finally:
-                engine.transportDispatcher.closeDispatcher()
+                if owns_engine:
+                    engine.transportDispatcher.closeDispatcher()
 
         try:
-            result = _run_in_thread(_run(), self.operation_timeout)
+            result = self._cached(
+                host,
+                ("walk", root_oid.rstrip(".")),
+                lambda: _run_in_thread(_run(), deadline),
+            )
         finally:
             from backend.observability import record_snmp_duration  # noqa: PLC0415
             record_snmp_duration((time.perf_counter() - t0) * 1000)

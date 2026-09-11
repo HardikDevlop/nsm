@@ -25,6 +25,8 @@ from __future__ import annotations
 import logging
 import platform
 import subprocess
+import socket
+import struct
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -116,6 +118,11 @@ class MonitoredDevice:
 MAX_HISTORY = 20
 PING_INTERVAL = 15  # seconds between monitoring cycles (Web Auto-Ping every 15 seconds)
 PING_TIMEOUT_MS = 1000
+PING_MAX_WORKERS = 20
+METRIC_BATCH_SIZE = 100
+METRIC_BATCH_INTERVAL = 2.0
+DEVICE_CACHE_TTL = 2.0
+DEVICE_CACHE_MAX_SIZE = 1024
 STATUS_CONFIRMATION_FAILURES = 2
 STATUS_CONFIRMATION_SUCCESSES = 2
 
@@ -124,12 +131,55 @@ STATUS_CONFIRMATION_SUCCESSES = 2
 # Ping helper (lightweight, no external imports needed)
 # ---------------------------------------------------------------------------
 
-def _ping(ip: str, timeout_ms: int = PING_TIMEOUT_MS) -> tuple[bool, float | None]:
-    """Ping an IP and return (reachable, rtt_ms).
+_native_icmp_unavailable = False
 
-    Uses the system ping command. On Windows uses ``-w`` (ms timeout),
-    on Linux/macOS uses ``-W`` (seconds timeout).
-    """
+
+class _NativeICMPUnavailable(Exception):
+    pass
+
+
+def _icmp_checksum(data: bytes) -> int:
+    if len(data) % 2:
+        data += b"\0"
+    total = sum((data[i] << 8) + data[i + 1] for i in range(0, len(data), 2))
+    total = (total & 0xFFFF) + (total >> 16)
+    total = (total & 0xFFFF) + (total >> 16)
+    return (~total) & 0xFFFF
+
+
+def _native_ping(ip: str, timeout_ms: int) -> tuple[bool, float | None]:
+    """One-packet raw ICMP probe. Permission/platform failures are explicit."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    except (OSError, PermissionError) as exc:
+        raise _NativeICMPUnavailable from exc
+    try:
+        ident = threading.get_ident() & 0xFFFF
+        payload = struct.pack("!d", time.monotonic())
+        header = struct.pack("!BBHHH", 8, 0, 0, ident, 1)
+        checksum = _icmp_checksum(header + payload)
+        packet = struct.pack("!BBHHH", 8, 0, checksum, ident, 1) + payload
+        started = time.monotonic()
+        sock.settimeout(timeout_ms / 1000.0)
+        sock.sendto(packet, (ip, 0))
+        while True:
+            data, _ = sock.recvfrom(65535)
+            if len(data) < 28:
+                continue
+            ttl = data[8]
+            icmp_type, _, _, reply_ident, _ = struct.unpack("!BBHHH", data[20:28])
+            if icmp_type == 0 and reply_ident == ident and ttl > 0:
+                return True, (time.monotonic() - started) * 1000.0
+    except socket.timeout:
+        return False, None
+    except OSError:
+        return False, None
+    finally:
+        sock.close()
+
+
+def _subprocess_ping(ip: str, timeout_ms: int) -> tuple[bool, float | None]:
+    """Legacy subprocess probe retained as the permission/platform fallback."""
     timeout_s = timeout_ms / 1000.0
     if platform.system().lower() == "windows":
         cmd = ["ping", "-n", "1", "-w", str(timeout_ms), ip]
@@ -161,6 +211,21 @@ def _ping(ip: str, timeout_ms: int = PING_TIMEOUT_MS) -> tuple[bool, float | Non
         return False, None
 
 
+def _ping(ip: str, timeout_ms: int = PING_TIMEOUT_MS) -> tuple[bool, float | None]:
+    """Probe using native ICMP when available, otherwise legacy subprocess."""
+    global _native_icmp_unavailable
+    if not _native_icmp_unavailable:
+        try:
+            reachable, rtt = _native_ping(ip, timeout_ms)
+            logger.debug("ICMP_ENGINE_NATIVE ip=%s", ip)
+            return reachable, rtt
+        except _NativeICMPUnavailable:
+            _native_icmp_unavailable = True
+            logger.warning("ICMP_ENGINE_UNAVAILABLE; using subprocess fallback")
+    logger.debug("ICMP_ENGINE_FALLBACK ip=%s", ip)
+    return _subprocess_ping(ip, timeout_ms)
+
+
 # ---------------------------------------------------------------------------
 # Monitor engine (singleton)
 # ---------------------------------------------------------------------------
@@ -174,6 +239,18 @@ class MonitorEngine:
         self._event = threading.Event()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._executor: ThreadPoolExecutor | None = None
+        self._executor_lock = threading.Lock()
+        self._metric_batch: list[tuple[int, float | None, float, datetime]] = []
+        self._metric_batch_lock = threading.Lock()
+        self._metric_batch_event = threading.Event()
+        self._metric_batch_stop = threading.Event()
+        self._metric_batch_thread = threading.Thread(
+            target=self._metric_batch_loop, daemon=True, name="icmp-metric-batch"
+        )
+        self._metric_batch_thread.start()
+        self._device_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+        self._device_cache_lock = threading.Lock()
 
     # -- Device management --------------------------------------------------
 
@@ -245,6 +322,23 @@ class MonitorEngine:
             self._event.set()
         return count
 
+    def shutdown(self) -> None:
+        """Stop the monitor loop and release its shared ping executor."""
+        self._stop_event.set()
+        self._event.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5.0)
+        self._thread = None
+        with self._executor_lock:
+            executor, self._executor = self._executor, None
+        if executor is not None:
+            executor.shutdown(wait=True)
+        self._metric_batch_stop.set()
+        self._metric_batch_event.set()
+        self._metric_batch_thread.join(timeout=5.0)
+        self._flush_metric_batch()
+
     def get_device(self, ip: str) -> MonitoredDevice | None:
         with self._lock:
             return self._devices.get(ip)
@@ -273,6 +367,12 @@ class MonitorEngine:
         """Start the background ping loop if not already running."""
         if self._thread is not None and self._thread.is_alive():
             return
+        with self._executor_lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(
+                    max_workers=PING_MAX_WORKERS,
+                    thread_name_prefix="mon-ping",
+                )
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="monitor-engine")
         self._thread.start()
@@ -290,14 +390,17 @@ class MonitorEngine:
 
             cycle_start = time.time()
 
-            # Ping all devices concurrently
-            with ThreadPoolExecutor(max_workers=min(len(ips), 20), thread_name_prefix="mon-ping") as pool:
-                futures = {pool.submit(self._ping_one, ip): ip for ip in ips}
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception:
-                        pass
+            # Ping all devices concurrently using the engine-lifetime executor.
+            with self._executor_lock:
+                executor = self._executor
+            if executor is None:
+                break
+            futures = {executor.submit(self._ping_one, ip): ip for ip in ips}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass
 
             self._event.set()  # Wake SSE subscribers
 
@@ -305,6 +408,72 @@ class MonitorEngine:
             elapsed = time.time() - cycle_start
             sleep_time = max(0.1, PING_INTERVAL - elapsed)
             self._stop_event.wait(sleep_time)
+
+    def _metric_batch_loop(self) -> None:
+        while not self._metric_batch_stop.wait(METRIC_BATCH_INTERVAL):
+            self._flush_metric_batch()
+
+    def _queue_metric(self, device_id: int, latency: float | None, packet_loss: float, now: datetime) -> None:
+        should_flush = False
+        with self._metric_batch_lock:
+            self._metric_batch.append((device_id, latency, packet_loss, now))
+            should_flush = len(self._metric_batch) >= METRIC_BATCH_SIZE
+        logger.debug("ICMP_METRIC_BATCH_QUEUED size=%s", len(self._metric_batch))
+        if should_flush:
+            self._flush_metric_batch()
+
+    def _flush_metric_batch(self) -> None:
+        with self._metric_batch_lock:
+            if not self._metric_batch:
+                return
+            rows = self._metric_batch
+            self._metric_batch = []
+        started = time.perf_counter()
+        try:
+            from backend.database.session import SessionLocal
+            from backend.models import Device, DeviceMetric
+            db = SessionLocal()
+            try:
+                for device_id, latency, packet_loss, timestamp in rows:
+                    db.add(DeviceMetric(device_id=device_id, latency=latency, packet_loss=packet_loss, created_at=timestamp))
+                    device = db.query(Device).filter(Device.id == device_id).first()
+                    if device and packet_loss == 0.0:
+                        device.last_seen = timestamp
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+            logger.info("ICMP_METRIC_BATCH_FLUSHED size=%s duration_ms=%.2f", len(rows), (time.perf_counter() - started) * 1000)
+        except Exception as exc:
+            with self._metric_batch_lock:
+                self._metric_batch = rows + self._metric_batch
+            logger.warning("ICMP_METRIC_BATCH_FAILED size=%s error=%s", len(rows), exc)
+
+    def _cached_device_state(self, device_id: int) -> dict[str, Any] | None:
+        with self._device_cache_lock:
+            item = self._device_cache.get(device_id)
+            if item is None:
+                return None
+            expires, state = item
+            if expires <= time.monotonic():
+                self._device_cache.pop(device_id, None)
+                logger.debug("ICMP_DEVICE_CACHE_INVALIDATED device_id=%s", device_id)
+                return None
+            return dict(state)
+
+    def _cache_device_state(self, state: dict[str, Any]) -> None:
+        with self._device_cache_lock:
+            if len(self._device_cache) >= DEVICE_CACHE_MAX_SIZE and state["id"] not in self._device_cache:
+                oldest = min(self._device_cache, key=lambda key: self._device_cache[key][0])
+                self._device_cache.pop(oldest, None)
+            self._device_cache[state["id"]] = (time.monotonic() + DEVICE_CACHE_TTL, dict(state))
+
+    def _invalidate_device_state(self, device_id: int) -> None:
+        with self._device_cache_lock:
+            self._device_cache.pop(device_id, None)
+        logger.debug("ICMP_DEVICE_CACHE_INVALIDATED device_id=%s", device_id)
 
     def _ping_one(self, ip: str) -> None:
         """Ping a single device and update its status."""
@@ -419,24 +588,49 @@ class MonitorEngine:
 
         db = SessionLocal()
         try:
-            device = db.query(Device).filter(Device.id == dev.device_id).first()
-            if not device:
-                return
-
             now = datetime.utcnow()
-
-            # ---- 1. Persist metric (latency / packet_loss) ----
-            db.add(DeviceMetric(
-                device_id=device.id,
-                latency=rtt,
-                packet_loss=0.0 if reachable else 100.0,
-            ))
+            cached = self._cached_device_state(dev.device_id)
+            if cached is not None:
+                logger.debug("ICMP_DEVICE_CACHE_HIT device_id=%s", dev.device_id)
+                device_id = cached["id"]
+                db_status = cached["status"]
+                hostname = cached["hostname"]
+                ip_address = cached["ip_address"]
+                device = None
+            else:
+                logger.debug("ICMP_DEVICE_CACHE_MISS device_id=%s", dev.device_id)
+                device = db.query(Device).filter(Device.id == dev.device_id).first()
+                if not device:
+                    return
+                device_id = device.id
+                db_status = device.status
+                hostname = device.hostname
+                ip_address = device.ip_address
+                self._cache_device_state({"id": device.id, "status": device.status, "hostname": device.hostname, "ip_address": device.ip_address})
 
             # A newly started monitor begins in memory as ``unknown``. Use the
             # persisted device state as the transition baseline so a restart
             # does not create false ``unknown -> online`` events.
             db_new_status = self._STATUS_MAP.get(dev.status, "unknown")
-            db_old_status = device.status if device.status in {"online", "offline"} else self._STATUS_MAP.get(prev_status, "unknown")
+            db_old_status = db_status if db_status in {"online", "offline"} else self._STATUS_MAP.get(prev_status, "unknown")
+
+            # A cached steady-state hit is safe; a possible transition must
+            # use the current durable row before changing status or alerts.
+            if cached is not None and db_old_status != db_new_status:
+                device = db.query(Device).filter(Device.id == dev.device_id).first()
+                if not device:
+                    self._invalidate_device_state(dev.device_id)
+                    return
+                db_old_status = device.status if device.status in {"online", "offline"} else self._STATUS_MAP.get(prev_status, "unknown")
+                hostname, ip_address = device.hostname, device.ip_address
+
+            if db_new_status == "unknown" or db_old_status != db_new_status:
+                if device is None:
+                    device = db.query(Device).filter(Device.id == dev.device_id).first()
+                if not device:
+                    self._invalidate_device_state(dev.device_id)
+                    return
+                db.add(DeviceMetric(device_id=device.id, latency=rtt, packet_loss=0.0 if reachable else 100.0))
 
             # Keep last_seen current for every successful ping, not only when
             # the device changes state.
@@ -449,6 +643,14 @@ class MonitorEngine:
             if db_new_status == "unknown":
                 db.commit()
                 return
+
+            if db_old_status == db_new_status:
+                db.close()
+                self._queue_metric(device_id, rtt, 0.0 if reachable else 100.0, now)
+                return
+
+            self._flush_metric_batch()
+            logger.info("ICMP_TRANSITION_IMMEDIATE_COMMIT device_id=%s status=%s", device_id, db_new_status)
 
             if db_old_status != db_new_status:
                 # Accumulate time spent in the previous status
@@ -482,6 +684,8 @@ class MonitorEngine:
                 if db_new_status == "offline":
                     from backend.services.alerting import create_offline_alert
                     create_offline_alert(db, device.id, device.hostname, device.ip_address)
+
+                self._cache_device_state({"id": device.id, "status": device.status, "hostname": device.hostname, "ip_address": device.ip_address})
 
             db.commit()
         except Exception as exc:

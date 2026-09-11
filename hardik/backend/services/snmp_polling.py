@@ -11,6 +11,7 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from functools import wraps
@@ -21,6 +22,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.database.session import SessionLocal
@@ -108,6 +110,7 @@ class SNMPPoller:
 
     def __init__(self, db: Session):
         self.db = db
+        self._notification_intents = None
 
     def _get_credentials(self, device_id: int) -> SNMPCredentials | None:
         """Get decrypted SNMP credentials for a device."""
@@ -167,7 +170,33 @@ class SNMPPoller:
         cap_map = cap.to_map()
         return cap_map.get(module_name, False)
 
-    async def poll(self, job: PollJob) -> dict[str, Any]:
+    def _load_latest_interface_statistics(
+        self, device_id: int, relevant_interface_ids: set[int]
+    ) -> list[Any]:
+        """Load at most one deterministic previous sample per interface."""
+        from backend.models.snmp import InterfaceStatistic
+
+        if not relevant_interface_ids:
+            return []
+        ranked_history = self.db.query(
+            InterfaceStatistic.id.label("stat_id"),
+            func.row_number().over(
+                partition_by=InterfaceStatistic.interface_id,
+                order_by=(
+                    InterfaceStatistic.created_at.desc(),
+                    InterfaceStatistic.id.desc(),
+                ),
+            ).label("row_number"),
+        ).filter(
+            InterfaceStatistic.device_id == device_id,
+            InterfaceStatistic.interface_id.in_(relevant_interface_ids),
+        ).subquery()
+        return self.db.query(InterfaceStatistic).join(
+            ranked_history,
+            InterfaceStatistic.id == ranked_history.c.stat_id,
+        ).filter(ranked_history.c.row_number == 1).all()
+
+    async def poll(self, job: PollJob, *, commit: bool = True) -> dict[str, Any]:
         """Execute a single poll for the job."""
         from backend.models import Device
         from backend.services.snmp_poll_guard import poll_guard
@@ -200,7 +229,7 @@ class SNMPPoller:
             # collect_domain is synchronous and performs network I/O. Running it
             # directly here blocks the asyncio scheduler and serializes all jobs.
             # Keep the event loop free so independent devices/modules poll in parallel.
-            service = SNMPService(credentials=credentials)
+            service = SNMPService(credentials=credentials, device_id=job.device_id)
             result = await asyncio.to_thread(service.collect_domain, ip, collector_name)
             duration_ms = round((time.perf_counter() - started) * 1000, 1)
 
@@ -209,13 +238,18 @@ class SNMPPoller:
 
             # Persist latest values and history
             self.db = SessionLocal()
-            await self._persist_results(job, data, supported, duration_ms)
+            self._notification_intents = [] if not commit else None
+            await self._persist_results(
+                job, data, supported, duration_ms, commit=commit
+            )
 
             return {
                 "success": True,
                 "supported": supported,
                 "data": data,
                 "duration_ms": duration_ms,
+                "_persistence_pending": not commit,
+                "_notification_intents": self._notification_intents or [],
             }
 
         except Exception as exc:
@@ -291,10 +325,24 @@ class SNMPPoller:
         except Exception as exc:
             logger.error("Failed to persist results for %s: %s", job.job_id, exc)
             self.db.rollback()
+            raise
 
     def _evaluate_alerts(self, device_id: int, module: str, data: dict) -> None:
         """Turn supported SNMP health values into deduplicated alerts."""
         from backend.services.alerting import create_threshold_alert
+        from backend.models import Alert
+        create_parameters = inspect.signature(create_threshold_alert).parameters.values()
+        supports_deferred_notifications = any(
+            parameter.name == "notification_intents"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in create_parameters
+        )
+
+        def create_alert(*args, **kwargs):
+            if supports_deferred_notifications:
+                kwargs["notification_intents"] = self._notification_intents
+            return create_threshold_alert(*args, **kwargs)
+
         checks: list[tuple[str, float | None, float, str]] = []
         if module == "cpu":
             checks.append(("High CPU", data.get("overall_percent"), 85, "%"))
@@ -303,7 +351,37 @@ class SNMPPoller:
         elif module == "storage":
             checks.append(("High Storage", data.get("utilization_percent"), 80, "%"))
         elif module == "interfaces":
-            for iface in data.get("interfaces", []):
+            interface_payloads = [
+                iface for iface in data.get("interfaces", []) if isinstance(iface, dict)
+            ]
+            interface_names = {
+                str(
+                    iface.get("name")
+                    or iface.get("interface")
+                    or iface.get("interface_name")
+                    or iface.get("description")
+                    or "unknown"
+                )
+                for iface in interface_payloads
+            }
+            interface_rows = self.db.query(Interface).filter(
+                Interface.device_id == device_id,
+            ).all() if interface_names else []
+            interface_by_name = {row.interface_name: row for row in interface_rows}
+            active_alerts = self.db.query(Alert).filter(
+                Alert.device_id == device_id,
+                Alert.title.ilike("Interface Down:%"),
+                Alert.status.in_(("open", "acknowledged")),
+                Alert.deleted_at.is_(None),
+            ).order_by(Alert.created_at.desc()).all()
+            alert_by_interface_id = {}
+            alert_by_title = {}
+            for alert in active_alerts:
+                if alert.interface_id is not None:
+                    alert_by_interface_id.setdefault(alert.interface_id, alert)
+                alert_by_title.setdefault(alert.title, alert)
+
+            for iface in interface_payloads:
                 interface_name = str(
                     iface.get("name")
                     or iface.get("interface")
@@ -311,10 +389,7 @@ class SNMPPoller:
                     or iface.get("description")
                     or "unknown"
                 )
-                interface = self.db.query(Interface).filter(
-                    Interface.device_id == device_id,
-                    Interface.interface_name == interface_name,
-                ).first()
+                interface = interface_by_name.get(interface_name)
                 interface_id = interface.id if interface else None
                 admin_status = str(iface.get("admin_status", "")).lower()
                 oper_status = str(iface.get("oper_status", iface.get("status", ""))).lower()
@@ -323,24 +398,45 @@ class SNMPPoller:
                 # reports its operational link as down.
                 admin_up = admin_status in {"up", "1", "true", "enabled", "on"}
                 if admin_up and oper_status in {"down", "2", "false"}:
-                    create_threshold_alert(
+                    title = f"Interface Down: {interface_name}"
+                    existing = alert_by_title.get(title)
+                    created = create_alert(
                         self.db,
                         device_id,
-                        f"Interface Down: {interface_name}",
+                        title,
                         "SNMP reports interface is down",
                         "critical",
                         interface_id=interface_id,
+                        existing_alert=existing,
                     )
+                    if created is not None:
+                        alert_by_title[title] = created
+                        if interface_id is not None:
+                            alert_by_interface_id[interface_id] = created
                 elif oper_status in {"up", "1", "true"} and interface_id is not None:
                     from backend.services.alerting import resolve_interface_down_alert
-                    resolve_interface_down_alert(self.db, device_id, interface_id, interface_name)
+                    title = f"Interface Down: {interface_name}"
+                    existing = alert_by_interface_id.get(interface_id) or alert_by_title.get(title)
+                    resolved = resolve_interface_down_alert(
+                        self.db,
+                        device_id,
+                        interface_id,
+                        interface_name,
+                        existing_alert=existing,
+                    )
+                    if resolved is not None:
+                        alert_by_interface_id.pop(interface_id, None)
+                        alert_by_title.pop(resolved.title, None)
         elif module == "environment":
             for sensor in data.get("temperatures", []):
                 checks.append((f"High Temperature: {sensor.get('name', 'sensor')}", sensor.get("value"), 70, "°C"))
         for name, value, threshold, unit in checks:
             if value is not None and float(value) >= threshold:
                 severity = "critical" if float(value) >= threshold + 10 else "warning"
-                create_threshold_alert(self.db, device_id, name, f"Value {value}{unit} reached threshold {threshold}{unit}", severity)
+                create_alert(
+                    self.db, device_id, name,
+                    f"Value {value}{unit} reached threshold {threshold}{unit}", severity,
+                )
 
     async def _persist_cpu(self, device_id: int, data: dict, now: datetime) -> None:
         from backend.models.snmp import CPUStatistic, LatestCPU
@@ -405,6 +501,10 @@ class SNMPPoller:
     async def _persist_storage(self, device_id: int, data: dict, now: datetime) -> None:
         from backend.models.snmp import StorageStatistic, LatestStorage
         volumes = data.get("volumes", [])
+        latest_rows = self.db.query(LatestStorage).filter(
+            LatestStorage.device_id == device_id,
+        ).all() if volumes else []
+        latest_by_volume_id = {row.volume_id: row for row in latest_rows}
         for vol in volumes:
             if not isinstance(vol, dict):
                 continue
@@ -416,13 +516,11 @@ class SNMPPoller:
             util = vol.get("utilization_percent")
             type_label = vol.get("type_label") or vol.get("type")
 
-            latest = self.db.query(LatestStorage).filter(
-                LatestStorage.device_id == device_id,
-                LatestStorage.volume_id == vol_id
-            ).first()
+            latest = latest_by_volume_id.get(vol_id)
             if not latest:
                 latest = LatestStorage(device_id=device_id, volume_id=vol_id)
                 self.db.add(latest)
+                latest_by_volume_id[vol_id] = latest
             latest.mount_name = mount
             latest.total_bytes = total
             latest.used_bytes = used
@@ -473,20 +571,20 @@ class SNMPPoller:
 
         if_indexes = {iface.get("ifIndex") for iface in valid_interfaces}
         interface_ids = {row.id for row in interface_by_name.values()}
-        stat_rows = self.db.query(InterfaceStatistic).filter(
-            InterfaceStatistic.device_id == device_id,
-            InterfaceStatistic.interface_id.in_(interface_ids | if_indexes),
-        ).order_by(InterfaceStatistic.id.desc()).all()
+        relevant_history_ids = interface_ids | if_indexes
+        stat_rows = self._load_latest_interface_statistics(
+            device_id, relevant_history_ids
+        )
         previous_by_id = {}
         for row in stat_rows:
-            previous_by_id.setdefault(row.interface_id, {
+            previous_by_id[row.interface_id] = {
                 "rx_octets": row.rx_octets,
                 "tx_octets": row.tx_octets,
                 "rx_packets": getattr(row, "rx_packets", 0) or 0,
                 "tx_packets": getattr(row, "tx_packets", 0) or 0,
                 "errors": row.error_rate,
                 "created_at": row.created_at,
-            })
+            }
 
         latest_rows = self.db.query(LatestInterface).filter(
             LatestInterface.device_id == device_id,
@@ -595,6 +693,11 @@ class SNMPPoller:
                     if isinstance(s, dict):
                         sensors.append(s)
 
+        latest_rows = self.db.query(LatestEnvironment).filter(
+            LatestEnvironment.device_id == device_id,
+        ).all() if sensors else []
+        latest_by_sensor_id = {row.sensor_id: row for row in latest_rows}
+
         for idx, sensor in enumerate(sensors):
             sensor_id = sensor.get("name") or f"sensor-{idx}"
             sensor_type = sensor.get("type") or "other"
@@ -612,13 +715,11 @@ class SNMPPoller:
             else:
                 status = "unknown"
 
-            latest = self.db.query(LatestEnvironment).filter(
-                LatestEnvironment.device_id == device_id,
-                LatestEnvironment.sensor_id == sensor_id,
-            ).first()
+            latest = latest_by_sensor_id.get(sensor_id)
             if not latest:
                 latest = LatestEnvironment(device_id=device_id, sensor_id=sensor_id)
                 self.db.add(latest)
+                latest_by_sensor_id[sensor_id] = latest
             latest.sensor_name = sensor.get("name") or f"Sensor-{idx}"
             latest.sensor_type = sensor_type
             latest.value = float(value) if value is not None else None
@@ -760,7 +861,68 @@ class PollingScheduler:
         db = SessionLocal()
         poller = SNMPPoller(db)
         try:
-            return asyncio.run(poller.poll(job))
+            poll_parameters = inspect.signature(poller.poll).parameters.values()
+            supports_deferred_commit = any(
+                parameter.name == "commit"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in poll_parameters
+            )
+            if supports_deferred_commit:
+                result = asyncio.run(poller.poll(job, commit=False))
+            else:
+                # Compatibility for legacy test doubles/custom pollers.
+                result = asyncio.run(poller.poll(job))
+
+            persistence_pending = result.pop("_persistence_pending", False)
+            if persistence_pending:
+                transaction_db = poller.db
+            else:
+                transaction_db = SessionLocal()
+                poller.db = transaction_db
+
+            config = transaction_db.query(MonitoringConfig).filter(
+                MonitoringConfig.id == job.config_id
+            ).first()
+            reschedule = None
+            if config:
+                config.last_poll_at = now_ist()
+                if result.get("success"):
+                    config.status = MonitoringStatus.RUNNING.value
+                    config.error_message = None
+                elif result.get("not_supported"):
+                    config.status = MonitoringStatus.NOT_SUPPORTED.value
+                else:
+                    config.status = MonitoringStatus.ERROR.value
+                    config.error_message = result.get("error", "Unknown error")
+                config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
+                if config.enabled and config.status != MonitoringStatus.NOT_SUPPORTED.value:
+                    reschedule = {
+                        "device_id": config.device_id,
+                        "module_name": config.module_name,
+                        "interval_seconds": config.interval_seconds,
+                        "config_id": config.id,
+                        "next_poll_at": config.next_poll_at,
+                    }
+
+            transaction_db.commit()
+            result["_reschedule"] = reschedule
+            intents = result.pop("_notification_intents", [])
+            if intents:
+                from backend.services.alerting import deliver_notification_intents
+                delivery_db = SessionLocal()
+                try:
+                    deliver_notification_intents(delivery_db, intents)
+                    delivery_db.commit()
+                except Exception:
+                    delivery_db.rollback()
+                    logger.exception("Post-commit SNMP notification delivery failed")
+                finally:
+                    delivery_db.close()
+            return result
+        except Exception:
+            if poller.db is not None:
+                poller.db.rollback()
+            raise
         finally:
             if poller.db is not db and poller.db is not None:
                 poller.db.close()
@@ -777,46 +939,16 @@ class PollingScheduler:
                 config_id=config_id,
             )
 
-            db = SessionLocal()
             try:
-                started = time.perf_counter()
                 result = await asyncio.to_thread(self._poll_in_worker, job)
-                duration_ms = round((time.perf_counter() - started) * 1000, 1)
-
-                # Update polling history with actual duration
-                hist = db.query(PollingHistory).filter(
-                    PollingHistory.device_id == device_id,
-                    PollingHistory.collector == module_name,
-                ).order_by(PollingHistory.id.desc()).first()
-                if hist:
-                    hist.duration_ms = duration_ms
-
-                # Update config
-                config = db.query(MonitoringConfig).filter(MonitoringConfig.id == config_id).first()
-                if config:
-                    config.last_poll_at = now_ist()
-                    if result.get("success"):
-                        config.status = MonitoringStatus.RUNNING.value
-                        config.error_message = None
-                    else:
-                        if result.get("not_supported"):
-                            config.status = MonitoringStatus.NOT_SUPPORTED.value
-                        else:
-                            config.status = MonitoringStatus.ERROR.value
-                            config.error_message = result.get("error", "Unknown error")
-
-                    # Schedule next poll
-                    config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
-                    db.commit()
-
-                    # A transient poll error must not permanently disable a
-                    # configured monitor. Keep retrying enabled jobs; only a
-                    # device/module capability failure is terminal.
-                    if config.enabled and config.status != MonitoringStatus.NOT_SUPPORTED.value:
-                        await self._schedule_config(config, db)
+                reschedule = result.pop("_reschedule", None)
+                if reschedule:
+                    from types import SimpleNamespace
+                    await self._schedule_config(SimpleNamespace(**reschedule))
 
             except Exception as exc:
                 logger.error("Poll job %s failed: %s", job.job_id, exc)
+                db = SessionLocal()
                 config = db.query(MonitoringConfig).filter(MonitoringConfig.id == config_id).first()
                 if config:
                     config.status = MonitoringStatus.ERROR.value
@@ -824,8 +956,7 @@ class PollingScheduler:
                     config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
                     db.commit()
                     if config.enabled:
-                        await self._schedule_config(config, db)
-            finally:
+                        await self._schedule_config(config)
                 db.close()
 
     @_database_worker

@@ -220,11 +220,6 @@ a:focus-visible {
 
 /* Devanagari needs a native script font and a little more breathing room.
    Keep this locale-only so the established English visual scale is unchanged. */
-html[data-locale="hi"] {
-  --t-text: #ffffff;
-  --t-muted: #f1f5f9;
-}
-
 html[data-locale="hi"] body,
 html[data-locale="hi"] button,
 html[data-locale="hi"] input,
@@ -263,6 +258,228 @@ html[data-locale="hi"] .font-mono {
 
 [data-theme="light"] .recharts-cartesian-grid line {
   stroke: var(--t-border-light, rgba(0, 0, 0, 0.06)) !important;
+}
+
+/* Topology uses SVG labels with legacy dark-palette inline colors. In light
+   mode force those labels to the same high-contrast ink as the rest of the
+   page; node/link geometry keeps its own stroke colors. */
+[data-theme="light"] .topology-page svg text {
+  fill: #111827 !important;
+}
+
+/* Manual topology node labels still carry the legacy dark SVG fills inline. */
+[data-theme="light"] .manual-topology-page svg text {
+  fill: #111827 !important;
+}
+[data-theme="light"] .manual-topology-page svg .topology-port-label {
+  fill: #ffffff !important;
+  stroke: #94a3b8 !important;
+}
+[data-theme="light"] .manual-topology-page svg .topology-port-label-text {
+  fill: #111827 !important;
+}
+[data-theme="light"] .manual-topology-page svg .topology-minimap-bg {
+  fill: #ffffff !important;
+}
+[data-theme="light"] .ip-scan-page svg text {
+  fill: #111827 !important;
+}
+[data-theme="light"] .ip-scan-page .ip-discovery-card {
+  background: #ffffff !important;
+}
+[data-theme="light"] .ip-scan-page .ip-discovery-row {
+  background: #f8fafc !important;
+  border-bottom-color: #dbeafe !important;
+}
+[data-theme="light"] .ip-scan-page .ip-managed-device {
+  background: #ffffff !important;
+  border-color: #bae6fd !important;
+}
+[data-theme="light"] .snmp-devices-page input,
+[data-theme="light"] .snmp-devices-page select {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .snmp-devices-page [style*="rgba(8,25,55"] {
+  background: #f8fafc !important;
+  color: #111827 !important;
+}
+[data-theme="light"] .snmp-devices-page .snmp-inventory-head {
+  background: #e2e8f0 !important;
+  color: #111827 !important;
+}
+[data-theme="light"] .manual-topology-page .topology-connect-banner {
+  background: #ffffff !important;
+  border-color: #c4b5fd !important;
+  color: #111827 !important;
+}
+[data-theme="light"] .manual-topology-page .topology-connect-banner b {
+  color: #6d28d9 !important;
+}
+[data-theme="light"] .topology-detail-key {
+  color: #475569 !important;
+  font-size: .78rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+[data-theme="light"] .topology-detail-value {
+  color: #111827 !important;
+  font-size: .9rem;
+}
+[data-theme="light"] .topology-details-panel [style*="#dbeafe"],
+[data-theme="light"] .topology-details-panel [style*="#94a3b8"] {
+  color: #334155 !important;
+}
+[data-theme="light"] .topology-details-panel [style*="#64748b"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .topology-details-panel input {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .topology-details-panel .topology-connection-address {
+  color: #334155 !important;
+  font-weight: 500;
+}
+[data-theme="light"] .device-port-map-page {
+  background: #f1f5f9 !important;
+  color: #111827 !important;
+}
+[data-theme="light"] .device-port-map-page [class*="bg-[#11161a]"],
+[data-theme="light"] .device-port-map-page [class*="bg-[#0b0f11]"],
+[data-theme="light"] .device-port-map-page [class*="bg-[#0d1113]"] {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+[data-theme="light"] .device-port-map-page [class*="bg-[#17221e]"] {
+  background: #ecfdf5 !important;
+}
+[data-theme="light"] .device-port-map-page [class*="text-[#e5e7e7]"],
+[data-theme="light"] .device-port-map-page [class*="text-[#e7eceb]"] {
+  color: #111827 !important;
+}
+[data-theme="light"] .device-port-map-page [class*="text-[#7f8b88]"],
+[data-theme="light"] .device-port-map-page [class*="text-[#9aa3a0]"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .device-port-map-page .device-front-panel {
+  background: linear-gradient(145deg, #ffffff 0%, #f1f5f9 48%, #e2e8f0 100%) !important;
+  border-color: #94a3b8 !important;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, .14) !important;
+}
+[data-theme="light"] .device-port-map-page .device-front-panel [class*="text-[#d9dfdc]"],
+[data-theme="light"] .device-port-map-page .device-front-panel [class*="text-[#aab5b1]"],
+[data-theme="light"] .device-port-map-page .device-front-panel [class*="text-[#77827f]"] {
+  color: #334155 !important;
+}
+[data-theme="light"] .device-port-map-page .device-front-panel [class*="bg-[#0a0d0e]"],
+[data-theme="light"] .device-port-map-page .device-front-panel [class*="bg-[#151d1c]"] {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .device-port-map-page .device-port-socket {
+  background: #ffffff !important;
+  border-color: #94a3b8 !important;
+  color: #111827 !important;
+}
+[data-theme="light"] .device-port-map-page .device-port-socket [class*="text-[#dce5e2]"],
+[data-theme="light"] .device-port-map-page .device-port-socket [class*="text-[#aab5b1]"] {
+  color: #334155 !important;
+}
+[data-theme="light"] .device-port-map-page .device-sfp-bay {
+  background: #fffbeb !important;
+  border-color: #d4a95c !important;
+}
+[data-theme="light"] .device-port-map-page .device-port-stat {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .06);
+}
+[data-theme="light"] .device-port-map-page .device-port-stat [class*="text-[#7f8b88]"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .device-port-map-page .device-port-table-head {
+  background: #e2e8f0 !important;
+  color: #334155 !important;
+}
+[data-theme="light"] .device-port-map-page input {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .device-port-map-page .device-port-details-panel {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .06);
+}
+[data-theme="light"] .manual-topology-page foreignObject > div {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .22) !important;
+}
+[data-theme="light"] .manual-topology-page foreignObject > div [class*="text-[#7f8b88]"],
+[data-theme="light"] .manual-topology-page foreignObject > div [class*="text-[#8b9693]"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .manual-topology-page foreignObject > div [class*="text-[#b3f2cd]"] {
+  color: #047857 !important;
+}
+
+[data-theme="light"] .topology-details-panel .font-mono,
+[data-theme="light"] .topology-details-panel .font-display {
+  color: #111827 !important;
+}
+
+[data-theme="light"] .manual-topology-page {
+  background: var(--t-bg) !important;
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .manual-topology-page .tool {
+  background: #ffffff;
+  color: #111827;
+  border-color: #cbd5e1;
+}
+[data-theme="light"] .manual-topology-page .tool:hover {
+  color: #111827;
+  background: #f8fafc;
+}
+[data-theme="light"] .manual-topology-page .bg-\[\#111517\],
+[data-theme="light"] .manual-topology-page .bg-\[\#0d1113\],
+[data-theme="light"] .manual-topology-page .bg-\[\#11161a\],
+[data-theme="light"] .manual-topology-page .bg-\[\#0b0e11\],
+[data-theme="light"] .manual-topology-page .bg-\[\#0d1517\],
+[data-theme="light"] .manual-topology-page .bg-\[\#111b1d\],
+[data-theme="light"] .manual-topology-page [class*="bg-[#11161a]"] {
+  background: #ffffff !important;
+}
+[data-theme="light"] .manual-topology-page .bg-\[\#17221e\],
+[data-theme="light"] .manual-topology-page .bg-\[\#29332f\] {
+  background: #f0fdf4 !important;
+  color: #065f46 !important;
+}
+
+[data-theme="light"] .manual-topology-page .hover\:bg-\[\#172522\]:hover {
+  background: #f0fdfa !important;
+}
+[data-theme="light"] .manual-topology-page .text-\[\#e7eceb\],
+[data-theme="light"] .manual-topology-page .text-\[\#e5e7e7\],
+[data-theme="light"] .manual-topology-page .text-\[\#c5cfcc\] {
+  color: #111827 !important;
+}
+[data-theme="light"] .manual-topology-page .text-\[\#9aa3a0\],
+[data-theme="light"] .manual-topology-page .text-\[\#8b9693\],
+[data-theme="light"] .manual-topology-page .text-\[\#6f7975\],
+[data-theme="light"] .manual-topology-page .text-\[\#c5cfcc\],
+[data-theme="light"] .manual-topology-page .text-\[\#dce5e2\],
+[data-theme="light"] .manual-topology-page .text-\[\#7f8b88\] {
+  color: #374151 !important;
+}
+
+[data-theme="light"] .manual-topology-page [class*="border-white"] {
+  border-color: #d1d5db !important;
 }
 
 /* ===================== SHARED ===================== */

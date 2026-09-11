@@ -853,7 +853,7 @@ function MiniMap({
         })
       }}
     >
-      <rect width={CANVAS.width} height={CANVAS.height} fill="#0d1113" />
+      <rect className="topology-minimap-bg" width={CANVAS.width} height={CANVAS.height} fill="#0d1113" />
       {workspace.links.map((link) => {
         const a = workspace.devices.find((d) => d.id === link.from)
         const b = workspace.devices.find((d) => d.id === link.to)
@@ -2454,7 +2454,7 @@ export default function ManualTopology() {
   return (
     <main
       ref={mainRef}
-      className={`min-h-full bg-[#0b0e11] p-3 text-[#e7eceb] md:p-5 ${
+      className={`manual-topology-page min-h-full bg-[var(--t-bg)] p-3 text-[var(--t-text)] md:p-5 ${
         pageFullscreen ? "min-h-screen overflow-auto" : ""
       }`}
       onPointerUp={() => {
@@ -3123,7 +3123,7 @@ export default function ManualTopology() {
             <div className="mt-2 flex justify-between font-mono text-[8px] text-[#7f8b88]"><span>25%</span><span>Ctrl + scroll</span><span>300%</span></div>
           </div>
           {connectMode && (
-            <div className="absolute left-14 right-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-[#9b8afb55] bg-[#181622]/95 px-3 py-2 text-[10px]">
+            <div className="topology-connect-banner absolute left-14 right-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-[#9b8afb55] bg-[#181622]/95 px-3 py-2 text-[10px]">
               <b className="text-[#c7b9ff]">CONNECT DEVICES</b>
               <span className="text-[#a9aaa9]">
                 {!source
@@ -3332,11 +3332,11 @@ export default function ManualTopology() {
                           d={endpoint.point.leader}
                           fill="none" stroke={tone} strokeWidth="1.5" opacity=".9"
                         />
-                        <rect x={endpoint.point.x - 25} y={endpoint.point.y - 9} width="50" height="18" rx="4"
+                        <rect className="topology-port-label" x={endpoint.point.x - 25} y={endpoint.point.y - 9} width="50" height="18" rx="4"
                           fill="#11161a" stroke={tone}
                           strokeWidth={selectedLinkId === link.id || hoveredLinkId === link.id ? 2 : 1}
                         />
-                        <text x={endpoint.point.x} y={endpoint.point.y + 3} textAnchor="middle"
+                        <text className="topology-port-label-text" x={endpoint.point.x} y={endpoint.point.y + 3} textAnchor="middle"
                           fill="#e7eceb" fontSize="9" fontFamily="monospace"
                           textLength={compactPortLabel(endpoint.port).length > 7 ? 44 : undefined}
                           lengthAdjust="spacingAndGlyphs"
@@ -4587,7 +4587,7 @@ export default function ManualTopology() {
     {detailsOpen && selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setDetailsOpen(false)}><section className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/[.14] bg-[#111517] p-5" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between"><div><h2 className="text-lg font-semibold">Device Details</h2><div className="font-mono text-[9px] uppercase text-[#6f7975]">{selected.type}</div></div><button className="tool" onClick={() => setDetailsOpen(false)}>Close</button></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{[["Hostname", selected.name], ["Display Name", selected.name], ["IP Address", selected.ipAddress || selected.subtitle], ["MAC Address", selected.macAddress], ["Vendor", selected.vendor], ["Model", selected.model], ["Serial Number", selected.serialNumber], ["Firmware", selected.firmware], ["SNMP Version", selected.snmpVersion], ["Backend Device ID", selected.backendId], ["Monitoring Enabled", selected.monitoringEnabled], ["Last Seen", selected.lastSeen], ["Status", selected.status], ["Location", selected.location]].map(([label, value]) => <div key={String(label)} className="rounded border border-white/[.08] bg-[#0d1113] p-2"><div className="font-mono text-[8px] uppercase text-[#6f7975]">{label}</div><div className="mt-1 text-xs">{value == null || value === "" ? "N/A" : String(value)}</div></div>)}</div><div className="mt-5 border-t border-white/[.08] pt-4"><div className="font-mono text-[10px] uppercase text-[#9aa3a0]">Interfaces</div><div className="mt-2 space-y-1">{(interfaces[selected.id] ?? []).map((item) => <div key={item.id} className="flex flex-wrap justify-between gap-2 rounded border border-white/[.06] p-2 font-mono text-[9px]"><span>{item.name} · ifIndex {item.if_index}</span><span className={item.status === "UP" ? "text-[#61c98d]" : "text-[#d9646a]"}>{item.admin_status} / {item.status} · {item.speed_display || "N/A"}</span></div>)}{!(interfaces[selected.id]?.length) && <div className="text-xs text-[#6f7975]">Interfaces unavailable</div>}</div></div><div className="mt-4 flex gap-2"><button className="tool" onClick={() => { const name = window.prompt("Hostname", selected.name); if (name?.trim()) { updateWorkspace({ ...workspace, devices: workspace.devices.map((d) => d.id === selected.id ? { ...d, name: name.trim() } : d) }); if (selected.backendId) void updateDevice(selected.backendId, { hostname: name.trim() }) } }}>Edit Device</button><button className="tool" onClick={removeSelected}>Remove From Topology</button></div></section></div>}
     {selectedChange && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4" onClick={() => setSelectedChange(null)}><section className="w-full max-w-lg rounded-lg border border-[#d4a95c66] bg-[#111517] p-5" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between"><div><h2 className="text-lg font-semibold">Difference</h2><div className="font-mono text-[9px] uppercase text-[#d4a95c]">{issueStatus(selectedChange)}</div></div><button className="tool" onClick={() => setSelectedChange(null)}>Close</button></div><div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded border border-white/[.08] bg-[#0d1113] p-3"><div className="font-mono text-[9px] uppercase text-[#9aa3a0]">Manual Connection</div><div className="mt-2 text-xs">{evidenceValue(selectedChange.expected, ["source_device", "from_device", "device"])} : {evidenceValue(selectedChange.expected, ["source_port", "from_port", "port"])}<br />→<br />{evidenceValue(selectedChange.expected, ["target_device", "to_device", "remote_device"])} : {evidenceValue(selectedChange.expected, ["target_port", "to_port", "remote_port"])}</div></div><div className="rounded border border-white/[.08] bg-[#0d1113] p-3"><div className="font-mono text-[9px] uppercase text-[#9aa3a0]">Actual Physical Connection</div><div className="mt-2 text-xs">{evidenceValue(selectedChange.observed, ["source_device", "from_device", "device"])} : {evidenceValue(selectedChange.observed, ["source_port", "from_port", "port"])}<br />→<br />{evidenceValue(selectedChange.observed, ["target_device", "to_device", "remote_device"])} : {evidenceValue(selectedChange.observed, ["target_port", "to_port", "remote_port"])}</div></div></div><div className="mt-3 space-y-1 rounded border border-white/[.08] p-3 font-mono text-[10px]">Status: {issueStatus(selectedChange)}<br />Evidence: {evidenceValue(selectedChange.observed, ["evidenceSource", "evidence_source", "source"])}<br />Confidence: {evidenceValue(selectedChange.observed, ["confidence"])}<br />Last verified: {selectedChange.detected_at || "N/A"}{issueStatus(selectedChange) === "UNKNOWN" && <><br /><span className="text-[#9aa3a0]">Insufficient physical evidence</span></>}</div><div className="mt-4 flex justify-end gap-2"><button className="tool" onClick={() => void resolveChange(selectedChange, "keep_manual")}>Keep Manual</button><button className="tool" onClick={() => void resolveChange(selectedChange, "accept_real_change")}>Accept Real Change</button></div></section></div>}
     <footer className="mt-3 flex min-h-8 flex-wrap items-center gap-5 border-t border-white/[.1] pt-2 font-mono text-[9px] uppercase text-[#6f7975]"><span>Selected: <b className="text-[#e5e7e7]">{selected?.name || (selectedLinkId ? "Link" : "None")}</b></span><span>Devices: {workspace.devices.length}</span><span>Links: {workspace.links.length}</span><span>Last Saved: {saving ? "Saving..." : lastSaved || "Not saved"}</span><span className="ml-auto">Shortcuts: / F L</span></footer>
-    <style>{`.tool{height:32px;border:1px solid rgba(170,190,180,.14);background:#111517;color:#e5e7e7;border-radius:6px;padding:0 10px;font:10px ui-monospace,monospace;text-transform:uppercase}.tool:hover{border-color:#3b82f6;color:#fff}.icon-tool{height:32px;width:32px;border:1px solid transparent;background:transparent;color:#9aa3a0;border-radius:5px;font:16px ui-monospace,monospace}.icon-tool[title="Connect"]{width:88px;font-size:9px}.icon-tool:hover,.icon-tool.active{background:#172522;border-color:#3b82f6;color:#61c98d}`}</style>
+      <style>{`.tool{height:32px;border:1px solid rgba(170,190,180,.14);background:#111517;color:#e5e7e7;border-radius:6px;padding:0 10px;font:10px ui-monospace,monospace;text-transform:uppercase}.tool:hover{border-color:#3b82f6;color:#fff}.icon-tool{height:32px;width:32px;border:1px solid transparent;background:transparent;color:#9aa3a0;border-radius:5px;font:16px ui-monospace,monospace}.icon-tool[title="Connect"]{width:88px;font-size:9px}.icon-tool:hover,.icon-tool.active{background:#172522;border-color:#3b82f6;color:#61c98d}`}</style>
   </main>
   */
 }

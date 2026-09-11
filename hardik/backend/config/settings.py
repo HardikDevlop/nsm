@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     snmp_request_timeout: float = 3.0
     snmp_retries: int = 1
     snmp_operation_timeout: float = 120.0
+    snmp_raw_cache_ttl_seconds: float = 10.0
+    snmp_raw_cache_max_entries: int = 2048
+    snmp_root_concurrency: int = 3
+    # Proposal-only safety switch. No SNMP cleanup job runs while this is 0.
+    snmp_history_retention_days: int = 0
     redis_url: str = "redis://localhost:6379/0"
     redis_cache_ttl_seconds: int = 10
     flow_enabled: bool = False

@@ -1853,19 +1853,19 @@ export default function Topology() {
         onDoubleClick={() => focusNode(node)}
         style={{ cursor: 'pointer' }}
       >
-        <rect x={x} y={y} width={width} height={height} rx="12" fill="#071321" stroke={color} strokeWidth={selected ? 3 : 1.5} />
+        <rect x={x} y={y} width={width} height={height} rx="12" fill="var(--t-card)" stroke={color} strokeWidth={selected ? 3 : 1.5} />
         <circle cx={x + width - 13} cy={y + 13} r="4" fill={node.status === 'online' ? '#34d399' : node.status === 'warning' ? '#fbbf24' : '#fb7185'} />
         <text x={x + 14} y={y + 23} className="font-mono" style={{ fill: color, fontSize: 10, fontWeight: 700 }}>{safeType === 'port-summary' ? 'PORT SUMMARY' : safeType.toUpperCase()}</text>
-        <text x={x + 14} y={y + 43} className="font-mono" style={{ fill: '#e2e8f0', fontSize: 11, fontWeight: 700 }}>{identityLabel}</text>
-        <text x={x + 14} y={y + 59} className="font-mono" style={{ fill: '#8ca0bb', fontSize: 10 }}>{safeIp || (safePort ? `Port ${safePort}` : 'IP UNKNOWN')}</text>
-        <text x={x + 14} y={y + 74} className="font-mono" style={{ fill: '#64748b', fontSize: 8 }}>{detail}</text>
+        <text x={x + 14} y={y + 43} className="font-mono" style={{ fill: 'var(--t-text)', fontSize: 11, fontWeight: 700 }}>{identityLabel}</text>
+        <text x={x + 14} y={y + 59} className="font-mono" style={{ fill: 'var(--t-muted)', fontSize: 10 }}>{safeIp || (safePort ? `Port ${safePort}` : 'IP UNKNOWN')}</text>
+        <text x={x + 14} y={y + 74} className="font-mono" style={{ fill: 'var(--t-muted)', fontSize: 8 }}>{detail}</text>
       </g>
     )
   }
 
   if (layout && layout.nodes.length === 0) {
     return (
-      <div className="p-3 md:p-5 space-y-3 h-full flex flex-col" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(34,211,238,.06), transparent 48%)' }}>
+      <div className="topology-page p-3 md:p-5 space-y-3 h-full flex flex-col" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(34,211,238,.06), transparent 48%)' }}>
         <GlassCard className="p-8 text-center">
           <div className="font-display font-bold text-base" style={{ color: '#8899bb' }}>
             No devices found. Add a device to start monitoring.
@@ -1876,7 +1876,7 @@ export default function Topology() {
   }
 
   return (
-    <div className="p-3 md:p-5 space-y-3 h-full flex flex-col" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(34,211,238,.06), transparent 48%)' }}>
+    <div className="topology-page p-3 md:p-5 space-y-3 h-full flex flex-col" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(34,211,238,.06), transparent 48%)' }}>
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
           <h1 className="font-display font-bold text-xl tracking-widest neon-cyan">{tr.title}</h1>
@@ -1946,22 +1946,22 @@ export default function Topology() {
         </GlassCard>
       )}
 
-      <div ref={graphFullscreenRef} className="flex-1 min-h-[650px] overflow-hidden relative rounded-xl" style={isFullscreen ? { width: '100vw', height: '100vh', background: '#030a14' } : undefined}>
+      <div ref={graphFullscreenRef} className="flex-1 min-h-[650px] overflow-hidden relative rounded-xl" style={isFullscreen ? { width: '100vw', height: '100vh', background: 'var(--t-bg)' } : undefined}>
       <GlassCard className="h-full overflow-hidden relative p-0">
-        <div className="absolute left-3 top-3 z-10 flex gap-1 rounded-lg p-1" style={{ background: 'rgba(3,10,20,.9)', border: '1px solid rgba(34,211,238,.18)' }}>
+        <div className="absolute left-3 top-3 z-10 flex gap-1 rounded-lg p-1" style={{ background: 'var(--t-card-alpha)', border: '1px solid var(--t-border-alpha)' }}>
           <button type="button" onClick={() => zoomAt(zoom + .1)} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }} aria-label={tr.zoomIn}>+</button>
           <button type="button" onClick={() => zoomAt(zoom - .1)} className="px-3 py-1.5 font-mono text-sm" style={{ color: '#22d3ee' }} aria-label={tr.zoomOut}>−</button>
           <button type="button" onClick={fitView} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>{tr.fit}</button>
           <button type="button" onClick={resetView} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#8ca0bb' }}>{tr.reset}</button>
           <button type="button" onClick={() => void toggleFullscreen()} className="px-2 py-1.5 font-mono text-[9px]" style={{ color: '#c084fc' }}>{isFullscreen ? tr.exitFullscreen : tr.fullscreen}</button>
         </div>
-        <div className="absolute right-3 top-3 z-10 font-mono text-[10px] px-2 py-1 rounded" style={{ color: '#8ca0bb', background: 'rgba(3,10,20,.9)', border: '1px solid rgba(34,211,238,.12)' }}>{visible.nodes.length} NODES · {visible.links.length} LINKS</div>
+        <div className="absolute right-3 top-3 z-10 font-mono text-[10px] px-2 py-1 rounded" style={{ color: 'var(--t-muted)', background: 'var(--t-card-alpha)', border: '1px solid var(--t-border-alpha)' }}>{visible.nodes.length} NODES · {visible.links.length} LINKS</div>
         {(selectedNode || selectedLink) && (
           <div
-            className="absolute right-0 top-0 z-20 h-full w-full max-w-[420px] overflow-y-auto"
-            style={{ background: 'linear-gradient(180deg, rgba(3,10,20,.98), rgba(5,18,32,.96))', borderLeft: '1px solid rgba(34,211,238,.12)' }}
+            className="topology-details-panel absolute right-0 top-0 z-20 h-full w-full max-w-[420px] overflow-y-auto"
+            style={{ background: 'var(--t-card)', borderLeft: '1px solid var(--t-border-alpha)' }}
           >
-            <div className="sticky top-0 flex items-center justify-between px-4 py-3" style={{ background: 'rgba(3,10,20,.96)', borderBottom: '1px solid rgba(34,211,238,.1)' }}>
+            <div className="sticky top-0 flex items-center justify-between px-4 py-3" style={{ background: 'var(--t-card)', borderBottom: '1px solid var(--t-border-alpha)' }}>
               <div>
                 <div className="font-display font-bold text-sm tracking-wider" style={{ color: selectedNode ? '#22d3ee' : '#c084fc' }}>
                   {selectedNode ? tr.deviceDetails : tr.linkDetails}
@@ -2119,7 +2119,7 @@ export default function Topology() {
             </svg>
             {!visible.nodes.length && !loading && !refreshing && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="rounded-lg px-5 py-4 font-mono text-sm tracking-wide" style={{ color: '#22d3ee', background: 'rgba(3,10,20,.92)', border: '1px solid rgba(34,211,238,.18)', boxShadow: '0 16px 40px rgba(2,8,23,.35)' }}>
+                <div className="rounded-lg px-5 py-4 font-mono text-sm tracking-wide" style={{ color: '#22d3ee', background: 'var(--t-card)', border: '1px solid var(--t-border-alpha)', boxShadow: '0 16px 40px rgba(15,23,42,.2)' }}>
                   No connected nodes match the current filter.
                 </div>
               </div>
@@ -2131,14 +2131,14 @@ export default function Topology() {
                   left: hoverPreview.x,
                   top: hoverPreview.y,
                   transform: `translate(-50%, ${hoverPreview.above ? 'calc(-100% - 14px)' : '14px'})`,
-                  background: 'rgba(3,10,20,.96)',
-                  border: '1px solid rgba(34,211,238,.18)',
-                  boxShadow: '0 18px 40px rgba(2,8,23,.45)',
+                  background: 'var(--t-card)',
+                  border: '1px solid var(--t-border-alpha)',
+                  boxShadow: '0 18px 40px rgba(15,23,42,.2)',
                 }}
               >
                 <div className="font-display text-xs tracking-wider" style={{ color: '#22d3ee' }}>{hoverPreview.title}</div>
                 {hoverPreview.lines.map((line, index) => (
-                  <div key={`${hoverPreview.title}-${index}`} className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-text, #c8d8ee)' }}>
+                  <div key={`${hoverPreview.title}-${index}`} className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-text)' }}>
                     {line}
                   </div>
                 ))}
@@ -2386,7 +2386,7 @@ function NodeDetails({
               title={`${remote?.hostname || remoteId} | ${remote?.ip || 'IP UNKNOWN'} | ${remote?.mac || 'MAC UNKNOWN'} | ${link.localPort || 'PORT UNKNOWN'} -> ${destinationPortLabel(link.remotePort)}`}
             >
               {remote?.hostname || remote?.ip || remoteId}
-              <span className="block mt-1" style={{ color: '#dbeafe' }}>
+              <span className="topology-connection-address block mt-1" style={{ color: '#dbeafe' }}>
                 {(remote?.ip || 'IP UNKNOWN')} · {(remote?.mac || 'MAC UNKNOWN')}
               </span>
               <span className="block" style={{ color: '#64748b' }}>
@@ -2515,5 +2515,5 @@ function LinkDetails({
 }
 
 function Detail({ label, value }: { label: string; value: string }) {
-  return <div className="py-1.5 border-t border-cyan-400/10"><div style={{ color: '#64748b' }}>{label}</div><div className="mt-1 break-all" style={{ color: '#dbeafe' }}>{value}</div></div>
+  return <div className="topology-detail-row py-1.5 border-t border-cyan-400/10"><div className="topology-detail-key font-semibold" style={{ color: 'var(--t-text)' }}>{label}</div><div className="topology-detail-value mt-1 break-all font-normal" style={{ color: 'var(--t-text)' }}>{value}</div></div>
 }

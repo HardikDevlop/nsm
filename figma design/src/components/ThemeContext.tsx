@@ -55,15 +55,21 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
-function applyCSS(colors: ThemeColors) {
+function applyCSS(colors: ThemeColors, theme: Theme) {
   const s = document.documentElement.style
+  const fallback = theme === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS
+  // Older builds persisted the forced-white typography override. Repair that
+  // value when switching to light mode instead of requiring users to clear
+  // local storage manually.
+  const text = theme === 'light' && (colors.text || '').toLowerCase() === '#ffffff' ? fallback.text : (colors.text || fallback.text)
+  const muted = theme === 'light' && (colors.muted || '').toLowerCase() === '#ffffff' ? fallback.muted : (colors.muted || fallback.muted)
   s.setProperty('--t-bg', colors.bg)
-  // Keep application typography high-contrast across every page. Status and
-  // accent colors remain independently controlled by their own tokens.
-  s.setProperty('--t-text', '#ffffff')
+  // Derive typography from the active palette. Keeping this token tied to the
+  // selected theme prevents light mode from inheriting dark-mode white text.
+  s.setProperty('--t-text', text)
   s.setProperty('--t-accent', colors.accent)
   s.setProperty('--t-card', colors.card)
-  s.setProperty('--t-muted', '#ffffff')
+  s.setProperty('--t-muted', muted)
   s.setProperty('--t-border', colors.border)
   s.setProperty('--t-card-alpha', hexToRgba(colors.card, 0.7))
   s.setProperty('--t-border-alpha', hexToRgba(colors.border, 0.8))
@@ -107,9 +113,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme])
 
   useEffect(() => {
-    applyCSS(colors)
+    applyCSS(colors, theme)
     localStorage.setItem('theme-colors', JSON.stringify(colors))
-  }, [colors])
+  }, [colors, theme])
 
   const toggleTheme = useCallback(() => {
     if (!canToggle) return

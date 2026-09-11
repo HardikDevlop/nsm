@@ -39,6 +39,8 @@ from backend.database.session import Base, SessionLocal, engine
 from backend.observability import install_db_timing, request_timing_middleware
 from backend.seed import seed_rbac, seed_ouis_and_products
 from backend.services.snmp_polling import get_polling_scheduler, shutdown_polling_scheduler
+from backend.snmp.client import shutdown_snmp_workers
+from backend.services.realtime_monitor import get_engine
 from backend.services.ha_scheduler import SchedulerLease
 from backend.cmdb.service import reconcile_cmdb
 from backend.linux_monitoring.scheduler import LinuxMonitoringScheduler
@@ -112,6 +114,8 @@ async def lifespan(app: FastAPI):
         lease_task.cancel()
         await asyncio.gather(lease_task, return_exceptions=True)
     app.state.scheduler_lease.release()
+    await asyncio.to_thread(shutdown_snmp_workers)
+    await asyncio.to_thread(get_engine().shutdown)
 
 async def _renew_scheduler_lease(lease: SchedulerLease):
     while True:

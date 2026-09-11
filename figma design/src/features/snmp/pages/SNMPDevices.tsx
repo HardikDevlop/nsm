@@ -641,7 +641,7 @@ export default function SNMPDevicesPage() {
   }, [devices, selectedId])
 
   return (
-    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+    <div className="snmp-devices-page p-4 md:p-6 space-y-4 md:space-y-5">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
@@ -813,7 +813,7 @@ export default function SNMPDevicesPage() {
                     style={{ borderBottom: "1px solid rgba(0,212,255,0.08)" }}
                   >
                     <th
-                      className="px-4 py-2.5 sticky top-0"
+                      className="snmp-inventory-head px-4 py-2.5 sticky top-0"
                       style={{ background: "rgba(8,25,55,0.95)" }}
                     >
                       <input
@@ -846,7 +846,7 @@ export default function SNMPDevicesPage() {
                       <th
                         key={col.key}
                         onClick={() => handleSort(col.key)}
-                        className="text-left px-4 py-2.5 font-mono text-xs cursor-pointer sticky top-0 select-none"
+                        className="snmp-inventory-head text-left px-4 py-2.5 font-mono text-xs cursor-pointer sticky top-0 select-none"
                         style={{
                           color: "#8899bb",
                           background: "rgba(8,25,55,0.95)",
@@ -875,7 +875,7 @@ export default function SNMPDevicesPage() {
                       </th>
                     ))}
                     <th
-                      className="text-left px-4 py-2.5 font-mono text-xs sticky top-0"
+                      className="snmp-inventory-head text-left px-4 py-2.5 font-mono text-xs sticky top-0"
                       style={{
                         color: "#8899bb",
                         background: "rgba(8,25,55,0.95)",

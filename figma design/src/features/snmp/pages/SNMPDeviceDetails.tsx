@@ -173,7 +173,8 @@ export default function SNMPDeviceDetails() {
     if (startAllProgress || startMonitoring.isPending) return
     const modules = supportedModules.filter(module => {
       const config = monitoringList.find(item => item.module_name === module.id)
-      return !config?.enabled || config.status !== 'running'
+      const active = Boolean(config?.enabled) && config?.status !== 'stopped' && config?.status !== 'not_supported'
+      return !active
     })
     if (!modules.length) return
     setErrorMessage(null)
@@ -535,7 +536,7 @@ export default function SNMPDeviceDetails() {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan">MONITORING CONFIGURATION</div>
               <button onClick={handleStartAll}
-                disabled={!!startAllProgress || startMonitoring.isPending || !modulesWithConfig.some(m => m.supported && (!m.config.enabled || m.config.status !== 'running'))}
+                disabled={!!startAllProgress || startMonitoring.isPending || !modulesWithConfig.some(m => m.supported && (!m.config.enabled || (m.config.status === 'stopped' || m.config.status === 'not_supported')))}
                 className="rounded px-4 py-2 font-mono text-xs disabled:opacity-40"
                 style={{ color: '#00ff88', background: 'rgba(0,255,136,0.1)', border: '1px solid rgba(0,255,136,0.3)' }}>
                 {startAllProgress ? `STARTING ${startAllProgress.done}/${startAllProgress.total}…` : '▶ START ALL'}
@@ -560,7 +561,10 @@ export default function SNMPDeviceDetails() {
                   {modulesWithConfig.map(m => {
                     const status = m.config.status
                     const statusColor = getModuleStatusColor(status)
-                    const isRunning = status === 'running'
+                    // An enabled job remains active even when its most recent
+                    // poll is ERROR or waiting for its first poll. Allow it
+                    // to be stopped instead of offering START again.
+                    const isRunning = m.config.enabled && status !== 'stopped' && status !== 'not_supported'
                     const intervalOptions = [15, 30, 60, 120, 300, 600]
 
                     return (

@@ -227,7 +227,10 @@ export default function SNMPMonitoringConfig() {
               {modulesWithConfig.map(m => {
                 const status = m.config.status
                 const statusColor = getModuleStatusColor(status)
-                const isRunning = status === 'running'
+                // The scheduler keeps a job enabled while its last poll may
+                // be in ERROR/WAITING state. Those states are still active
+                // monitoring and must expose STOP, not START.
+                const isRunning = m.config.enabled && status !== 'stopped' && status !== 'not_supported'
 
                 return (
                   <tr key={m.module.id} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
