@@ -118,17 +118,21 @@ export default function SNMPCPUMonitoring() {
             {currentUsage?.toFixed(1)}%
           </div>
         </div>
-        <SNMPMetricChart
+        {history.length < 2 ? (
+          <div className="cpu-live-summary rounded-lg p-5 flex flex-col md:flex-row items-center gap-6">
+            <div className="cpu-main-gauge" style={{ background: `conic-gradient(#00d4ff ${Math.max(0, Math.min(100, currentUsage ?? 0)) * 3.6}deg, #dbeafe 0deg)` }}>
+              <div><strong>{currentUsage?.toFixed(1) ?? '—'}%</strong><span>CURRENT</span></div>
+            </div>
+            <div className="flex-1 w-full grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[['STATUS', health.toUpperCase()], ['CORES', String(cpuData?.core_count ?? (perCore.length || '—'))], ['AVERAGE', cpuData?.average_percent != null ? `${cpuData.average_percent.toFixed(1)}%` : '—'], ['HISTORY', 'COLLECTING']].map(([label, value]) => (
+                <div key={label} className="cpu-summary-stat"><span>{label}</span><strong>{value}</strong></div>
+              ))}
+            </div>
+          </div>
+        ) : <SNMPMetricChart
           data={history.map(p => ({ timestamp: p.timestamp, value: p.usage }))}
-          height={200}
-          color="#00d4ff"
-          unit="%"
-          label="CPU %"
-          showArea
-          showGrid
-          showAxes
-          noDataMessage="No Historical Data Yet"
-        />
+          height={200} color="#00d4ff" unit="%" label="CPU %" showArea showGrid showAxes noDataMessage="No Historical Data Yet"
+        />}
       </GlassCard>
 
       {/* Per Core */}
@@ -140,23 +144,12 @@ export default function SNMPCPUMonitoring() {
                   const pct = core.percent
                   const coreColor = pct >= 90 ? '#ff3366' : pct >= 70 ? '#ffaa00' : '#00ff88'
                   return (
-                    <div key={core.id} className="text-center">
-                      <svg width="56" height="56" viewBox="0 0 56 56" className="mx-auto">
-                        <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(0,212,255,0.1)" strokeWidth="4" />
-                        <circle
-                          cx="28" cy="28" r="22"
-                          fill="none"
-                          stroke={coreColor}
-                          strokeWidth="4"
-                          strokeDasharray={`${(pct / 100) * 138.2} 138.2`}
-                          strokeLinecap="round"
-                          transform="rotate(-90 28 28)"
-                          style={{ transition: 'stroke-dasharray 0.5s ease' }}
-                        />
-                        <text x="28" y="33" textAnchor="middle" fontSize="11" fontFamily="monospace" fill={coreColor}>
-                          {pct.toFixed(0)}%
-                        </text>
-                      </svg>
+                    <div key={core.id} className="per-core-usage-tile text-center rounded-xl border p-3">
+                      <div className="cpu-core-gauge mx-auto" style={{ background: `conic-gradient(${coreColor} ${Math.max(0, Math.min(100, pct)) * 3.6}deg, #dbeafe 0deg)` }}>
+                        <div className="cpu-core-gauge-inner">
+                          <span style={{ color: coreColor }}>{pct.toFixed(0)}%</span>
+                        </div>
+                      </div>
                       <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
                         Core {core.id}
                       </div>

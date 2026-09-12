@@ -22,7 +22,7 @@ export default function Layout() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [time, setTime] = useState(new Date())
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed] = useState(true)
   const { theme, toggleTheme, colors } = useTheme()
   const { locale, setLocale, t } = useI18n()
   const branding = useBranding()
@@ -182,7 +182,6 @@ export default function Layout() {
       <Sidebar 
         collapsed={sidebarCollapsed} 
         mobileOpen={sidebarOpen}
-        onToggle={() => setSidebarCollapsed(c => !c)}
         onClose={() => setSidebarOpen(false)}
       />
 
@@ -265,7 +264,7 @@ export default function Layout() {
                 </div>
               </button>
 
-              <select aria-label={t.language} value={locale} onChange={event => setLocale(event.target.value as 'en' | 'hi')} className="rounded px-2 py-1.5 font-mono text-xs" style={{ background: 'var(--t-card)', color: 'var(--t-muted)', border: '1px solid var(--t-border-alpha)' }}><option value="en">{t.english}</option><option value="hi">{t.hindi}</option></select>
+              <select aria-label="Language" value={locale} onChange={event => setLocale(event.target.value as 'en' | 'hi')} className="rounded px-2 py-1.5 font-mono text-xs" style={{ background: 'var(--t-card)', color: 'var(--t-muted)', border: '1px solid var(--t-border-alpha)' }}><option value="en">English</option><option value="hi">हिन्दी</option></select>
 
               {/* Notifications */}
               <button onClick={() => setNotifOpen(o => !o)} aria-label="Open notifications"

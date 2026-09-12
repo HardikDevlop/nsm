@@ -968,6 +968,8 @@ export default function ManualTopology() {
     index: number
   } | null>(null)
   const [changes, setChanges] = useState<ManualTopologyChange[]>([])
+  const [topologyPollMinutes, setTopologyPollMinutes] = useState(2)
+  const [discoveryBusy, setDiscoveryBusy] = useState(false)
   const [selectedChange, setSelectedChange] =
     useState<ManualTopologyChange | null>(null)
   const [differenceLoading, setDifferenceLoading] = useState(false)
@@ -1288,12 +1290,15 @@ export default function ManualTopology() {
       void reconcileManualTopology(snapshotId)
         .then((result) => {
           setChanges(result.changes ?? [])
-          setActualWorkspace(normalizeWorkspace(result.live ?? {}))
+          setActualWorkspace(normalizeWorkspace({
+            devices: workspace.devices,
+            links: result.live?.links ?? [],
+          }))
         })
         .catch(() => undefined)
-    }, 120000)
+    }, topologyPollMinutes * 60_000)
     return () => window.clearInterval(timer)
-  }, [snapshotId])
+  }, [snapshotId, topologyPollMinutes])
 
   const point = (event: ReactPointerEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect()
@@ -1551,7 +1556,10 @@ export default function ManualTopology() {
             ),
           }))
           setChanges(result.changes ?? [])
-          setActualWorkspace(normalizeWorkspace(response.live ?? {}))
+          setActualWorkspace(normalizeWorkspace({
+            devices: workspace.devices,
+            links: response.live?.links ?? [],
+          }))
           if (status === "VERIFIED")
             toast.success(
               `Physical connectivity verified${
@@ -1760,6 +1768,52 @@ export default function ManualTopology() {
       toast.success("Connectivity marked as verified.")
     } finally {
       setConfirmingConnectivity(false)
+    }
+  }
+  const runPhysicalDiscovery = async () => {
+    if (!snapshotId || discoveryBusy) return
+    setDiscoveryBusy(true)
+    toast.info("Discovery running — checking physical ports...")
+    try {
+      const result = await reconcileManualTopology(snapshotId)
+      setChanges(result.changes ?? [])
+      // Reconcile records the comparison; fetch the assembled topology as
+      // well so the canvas receives the collector's verified device links.
+      const liveTopology = await getSNMPTopology(undefined, true)
+      const assembled = autoWorkspaceFromTopology(liveTopology)
+      const manualIdByBackendId = new Map(
+        workspace.devices
+          .filter((device) => device.backendId != null)
+          .map((device) => [String(device.backendId), device.id]),
+      )
+      const discoveredLinks = assembled.links.flatMap((link) => {
+        const from = manualIdByBackendId.get(link.from.replace("device-", ""))
+        const to = manualIdByBackendId.get(link.to.replace("device-", ""))
+        return from && to ? [{ ...link, from, to }] : []
+      })
+      const discoveredWorkspace = { devices: workspace.devices, links: discoveredLinks }
+      setActualWorkspace(discoveredWorkspace)
+      if (discoveredLinks.length > 0) {
+        // Discovery is an explicit request to bring the canvas in sync with
+        // the live physical topology, including the discovered port pairs.
+        const nextWorkspace = {
+          ...workspace,
+          links: discoveredLinks,
+        }
+        setWorkspace(nextWorkspace)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextWorkspace))
+        void save(nextWorkspace)
+      }
+      setView("compare")
+      toast.success(
+        result.changes?.length
+          ? `Discovery complete — ${result.changes.length} physical change(s) found.`
+          : "Discovery complete — physical ports are in sync.",
+      )
+    } catch {
+      toast.error("Physical discovery could not be completed.")
+    } finally {
+      setDiscoveryBusy(false)
     }
   }
   const issueStatus = (change: ManualTopologyChange) =>
@@ -2032,7 +2086,10 @@ export default function ManualTopology() {
       const refreshedChanges = response.changes ?? []
       const observation = comparePhysicalConnection(selectedLink!, workspace.devices, response.live?.links ?? [])
       setChanges(refreshedChanges)
-      setActualWorkspace(normalizeWorkspace(response.live ?? {}))
+      setActualWorkspace(normalizeWorkspace({
+        devices: workspace.devices,
+        links: response.live?.links ?? [],
+      }))
       setSelectedChange({
         ...selectedLinkDifference,
         id: -1,
@@ -2542,7 +2599,7 @@ export default function ManualTopology() {
           </form>
         </div>
       )}
-      <header className="mb-3 rounded-xl border border-white/[.1] bg-[#11161a] p-4 shadow-[0_12px_35px_rgba(0,0,0,.22)]">
+      <header className={`mb-3 rounded-xl border border-white/[.1] bg-[#11161a] p-4 shadow-[0_12px_35px_rgba(0,0,0,.22)] ${pageFullscreen ? "hidden" : ""}`}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="font-mono text-[9px] uppercase tracking-[.24em] text-[#8b9693]">
@@ -2745,8 +2802,10 @@ export default function ManualTopology() {
           <button className="ml-3 text-[#61c98d] underline" onClick={() => setResolutionNotice(null)}>DISMISS</button>
         </div>
       )}
-      <section className={`grid min-h-[720px] grid-cols-1 items-start gap-3 ${
-        devicesPanelOpen && sidebarOpen
+      <section className={`grid ${pageFullscreen ? "min-h-screen" : "min-h-[720px]"} grid-cols-1 items-start gap-3 ${
+        pageFullscreen
+          ? "xl:grid-cols-1"
+          : devicesPanelOpen && sidebarOpen
           ? "xl:grid-cols-[300px_minmax(0,1fr)_315px]"
           : devicesPanelOpen
             ? "xl:grid-cols-[300px_minmax(0,1fr)]"
@@ -2754,7 +2813,7 @@ export default function ManualTopology() {
               ? "xl:grid-cols-[minmax(0,1fr)_315px]"
               : "xl:grid-cols-1"
       }`}>
-        {devicesPanelOpen && (
+        {devicesPanelOpen && !pageFullscreen && (
         <aside className="flex h-[max(820px,calc(100dvh-180px))] min-h-0 flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#11161a] p-3">
           <div className="mb-2 flex shrink-0 justify-end">
             <button
@@ -3080,6 +3139,27 @@ export default function ManualTopology() {
                 <option value="unknown">Unknown</option>
               </select>
             </div>
+            <label className="flex items-center gap-1 rounded-lg border border-white/[.1] bg-[#11161a] px-2 py-1 font-mono text-[9px] text-[#9aa3a0]">
+              POLL
+              <select
+                aria-label="Physical connectivity polling interval"
+                value={topologyPollMinutes}
+                onChange={(event) => setTopologyPollMinutes(Number(event.target.value))}
+                className="bg-transparent text-[#61c98d] outline-none"
+              >
+                {Array.from({ length: 10 }, (_, index) => index + 1).map((minutes) => (
+                  <option key={minutes} value={minutes}>{minutes} MIN</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="tool border-[#61c98d66] text-[#61c98d]"
+              onClick={() => void runPhysicalDiscovery()}
+              disabled={discoveryBusy || !snapshotId}
+              title="Discover live physical ports and compare them with this topology"
+            >
+              {discoveryBusy ? "DISCOVERING…" : "DISCOVERY"}
+            </button>
             <button
               className="tool"
               title={pageFullscreen ? "Exit fullscreen" : "View topology fullscreen"}
@@ -3106,7 +3186,7 @@ export default function ManualTopology() {
               ⌘
             </button>
           </div>
-          <div className="absolute bottom-3 left-3 z-20 w-64 max-w-[calc(100%-24px)] rounded-xl border border-white/[.12] bg-[#11161a]/95 p-3 shadow-lg">
+          <div className="absolute right-3 top-3 z-20 w-64 max-w-[calc(100%-24px)] rounded-xl border border-white/[.12] bg-[#11161a]/95 p-3 shadow-lg">
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-[9px] tracking-widest text-[#8b9693]">ZOOM</span>
               <div className="flex items-center gap-1">
@@ -3551,7 +3631,7 @@ export default function ManualTopology() {
           </div>
           </div>
         </div>
-        {sidebarOpen && (
+      {sidebarOpen && !pageFullscreen && (
         <aside className="h-[max(720px,calc(100dvh-220px))] min-h-0 overflow-y-auto overscroll-contain rounded-xl border border-white/[.1] bg-[#11161a] p-3">
           <div className="mb-2 flex justify-end">
             <button className="tool" aria-label="Hide inspector sidebar" onClick={() => setSidebarOpen(false)}>HIDE ›</button>
@@ -4264,7 +4344,7 @@ export default function ManualTopology() {
         </aside>
         )}
       </section>
-      <div className="mt-3 grid gap-3 md:grid-cols-3">
+      <div className="hidden">
         <div className="rounded-xl border border-white/[.1] bg-[#11161a] p-3">
           <div className="font-mono text-[9px] uppercase tracking-[.16em] text-[#8b9693]">
             Connectivity
@@ -4542,7 +4622,7 @@ export default function ManualTopology() {
           </section>
         </div>
       )}
-      <footer className="mt-3 flex min-h-8 flex-wrap items-center gap-5 border-t border-white/[.1] pt-2 font-mono text-[9px] uppercase text-[#6f7975]">
+      <footer className="hidden">
         <span>
           Selected:{" "}
           <b className="text-[#e5e7e7]">

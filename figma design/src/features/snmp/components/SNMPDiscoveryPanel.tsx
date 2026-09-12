@@ -4,7 +4,7 @@
  */
 import { useState } from 'react'
 import GlassCard from '../../../components/GlassCard'
-import { addDiscoveredDevices, discoverDevice, discoverSNMP, type SNMPDiscoveryResponse } from '../../../lib/api'
+import { addDiscoveredDevices, checkStoredDevices, discoverDevice, discoverSNMP, type SNMPDiscoveryResponse } from '../../../lib/api'
 import { toast } from '../../../lib/swal'
 
 // Import buildUrl and ensureAuth for API calls
@@ -259,6 +259,17 @@ export default function SNMPDiscoveryPanel({
       }
       setScanProgress({ scanned: addresses.length, total: addresses.length })
       setResponse({ scanned: addresses.length, count: Object.keys(results).length, results })
+      // Mark devices that are already in inventory before rendering result actions.
+      // This keeps the ADD action limited to genuinely new devices.
+      const discoveredIps = Object.keys(results)
+      if (discoveredIps.length > 0) {
+        try {
+          const stored = await checkStoredDevices(discoveredIps)
+          setStoredIps(new Set(stored.stored_ips))
+        } catch {
+          // Keep the existing empty state if the optional inventory check fails.
+        }
+      }
       toast.success(`${Object.keys(results).length}/${addresses.length} device(s) responded to SNMP`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'SNMP discovery failed')

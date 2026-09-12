@@ -2024,7 +2024,7 @@ export default function Topology() {
         ) : layout ? (
           <div
             ref={graphViewportRef}
-            className="h-full overflow-auto relative"
+            className="topology-graph-viewport h-full overflow-auto relative"
             style={{ background: 'radial-gradient(circle at 50% 20%, rgba(34,211,238,.035), transparent 55%)', cursor: dragging ? 'grabbing' : 'grab', overscrollBehavior: 'contain', touchAction: 'none', userSelect: 'none' }}
             onPointerDown={(event) => {
               if ((event.target as HTMLElement).closest('button, [data-topology-interactive]')) return
@@ -2106,8 +2106,8 @@ export default function Topology() {
                       {!isConfirmedNeighbour && <animate attributeName="stroke-dashoffset" values="0;-28" dur="1s" repeatCount="indefinite" />}
                     </path>
                     <text x={(from.x + to.x) / 2} y={midY - 10} textAnchor="middle" className="font-mono" style={{ fill: color, fontSize: 8, fontWeight: 700 }}>SRC: {link.localPort || 'PORT UNKNOWN'}</text>
-                    <text x={(from.x + to.x) / 2} y={midY + 14} textAnchor="middle" className="font-mono" style={{ fill: '#64748b', fontSize: 8 }}>{link.macCount ? `${link.macCount} MACs` : link.confidence}</text>
-                    <text x={destinationLabelX} y={destinationLabelY - 8} textAnchor="middle" className="font-mono" style={{ fill: '#cbd5e1', fontSize: 8, fontWeight: 700 }}>DST: {destinationPortLabel(link.remotePort)}</text>
+                    <text x={(from.x + to.x) / 2} y={midY + 14} textAnchor="middle" className="font-mono" style={{ fill: 'var(--t-muted)', fontSize: 8 }}>{link.macCount ? `${link.macCount} MACs` : link.confidence}</text>
+                    <text x={destinationLabelX} y={destinationLabelY - 8} textAnchor="middle" className="font-mono" style={{ fill: 'var(--t-text)', fontSize: 8, fontWeight: 700 }}>DST: {destinationPortLabel(link.remotePort)}</text>
                   </g>
                 )
               })}

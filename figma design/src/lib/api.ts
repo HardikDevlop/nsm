@@ -2103,10 +2103,13 @@ export async function getSNMPPollingStatistics(
 
 export async function getSNMPTopology(
   deviceId?: number,
+  refresh = false,
 ): Promise<SNMPTopologyGraph> {
-  const path = deviceId
-    ? `/snmp/topology?device_id=${deviceId}`
-    : "/snmp/topology"
+  const params = new URLSearchParams()
+  if (deviceId) params.set("device_id", String(deviceId))
+  if (refresh) params.set("refresh", "true")
+  const query = params.toString()
+  const path = query ? `/snmp/topology?${query}` : "/snmp/topology"
   return requestJson<SNMPTopologyGraph>(path)
 }
 

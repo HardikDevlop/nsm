@@ -1,14 +1,14 @@
 import { NavLink } from 'react-router'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from './ThemeContext'
 import { useAuth } from './AuthContext'
 import { requestJson, type DashboardSummary } from '../lib/api'
 import { useBranding } from './BrandingContext'
+import { useI18n } from '../i18n/I18nContext'
 
 type Props = { 
   collapsed: boolean
   mobileOpen?: boolean
-  onToggle: () => void
   onClose?: () => void
 }
 
@@ -64,11 +64,23 @@ const nav = [
   { to: '/reports/daily', label: 'Daily Report', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', permission: 'reports:read', admin: true },
 ]
 
-export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Props) {
+const NAV_LABELS: Record<string, string> = {
+  Overview: 'अवलोकन', 'Network Topology': 'नेटवर्क टोपोलॉजी', 'Manual Topology': 'मैनुअल टोपोलॉजी', 'IP Scan': 'आईपी स्कैन', 'SNMP Devices': 'SNMP डिवाइस', 'Device Monitoring': 'डिवाइस मॉनिटरिंग', 'Packet Analysis': 'पैकेट विश्लेषण', 'Server Monitor': 'सर्वर मॉनिटर', 'Linux Server Monitoring': 'लिनक्स सर्वर मॉनिटरिंग', 'Alert Management': 'अलर्ट प्रबंधन', Events: 'इवेंट', 'Syslog Management': 'सिसलॉग प्रबंधन', Notifications: 'सूचनाएं', 'Monitoring Jobs': 'मॉनिटरिंग जॉब', 'Network Interfaces': 'नेटवर्क इंटरफेस', 'Role Management': 'भूमिका प्रबंधन', 'User Management': 'उपयोगकर्ता प्रबंधन', Organizations: 'संगठन', Sites: 'साइट', Vendors: 'विक्रेता', 'Device Types': 'डिवाइस प्रकार', 'Device Credentials': 'डिवाइस क्रेडेंशियल', 'Audit Logs': 'ऑडिट लॉग', 'Report Management': 'रिपोर्ट प्रबंधन', 'Daily Report': 'दैनिक रिपोर्ट',
+}
+
+export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
   const { theme, colors } = useTheme()
+  const { locale } = useI18n()
   const { hasPermission, user, logout } = useAuth()
   const branding = useBranding()
   const isDark = theme === 'dark'
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
+  const [hoverExpanded, setHoverExpanded] = useState(false)
+  const hoverTimer = useRef<number | null>(null)
+  // Desktop uses an icon rail by default and expands while the pointer is over it.
+  // Mobile has no hover state, so keep the navigation fully open when launched.
+  const navCollapsed = !isMobile && collapsed && !hoverExpanded
+  const label = (value: string) => locale === 'hi' ? (NAV_LABELS[value] ?? value) : value
   const [onlineCount, setOnlineCount] = useState(0)
   const [healthScore, setHealthScore] = useState(0)
   const [totalDevices, setTotalDevices] = useState(0)
@@ -157,9 +169,6 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
   // On mobile, use mobileOpen to control visibility
   // On desktop, always show (collapsed or expanded)
   const isVisible = mobileOpen !== undefined ? mobileOpen : true
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
-
-  if (isMobile && !isVisible) return null
 
   // Split nav into main, management, and admin sections
   const mainNav = visibleNav.filter(item => !item.admin && !item.management)
@@ -212,40 +221,44 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
     if (fn) void fn().catch(() => undefined)
   }
 
+  // Keep all hooks above this conditional return. On mobile the sidebar is
+  // mounted/unmounted when the menu button is pressed; returning before the
+  // prefetchers useMemo caused React's "fewer hooks" crash.
+  if (isMobile && !isVisible) return null
+
   return (
-    <aside className={`${isDark ? 'glass' : 'glass-light'} flex flex-col shrink-0 transition-all duration-300 z-30 fixed md:relative h-full`}
+    <aside
+      onMouseEnter={() => {
+        if (isMobile || !collapsed) return
+        if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+        hoverTimer.current = window.setTimeout(() => setHoverExpanded(true), 90)
+      }}
+      onMouseLeave={() => {
+        if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+        hoverTimer.current = window.setTimeout(() => setHoverExpanded(false), 260)
+      }}
+      className={`${isDark ? 'glass' : 'glass-light'} flex flex-col shrink-0 overflow-hidden transition-[width,transform] duration-300 ease-out z-30 fixed md:relative h-full`}
       style={{
-        width: collapsed ? 64 : 224,
+        width: navCollapsed ? 64 : 224,
+        transition: 'width 280ms cubic-bezier(0.22, 1, 0.36, 1), transform 280ms ease-out',
+        willChange: 'width, transform',
         borderRight: '1px solid var(--t-border-alpha)',
         borderTop: 'none', borderBottom: 'none', borderLeft: 'none',
         transform: isMobile && !mobileOpen ? 'translateX(-100%)' : 'translateX(0)',
       }}>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-4 shrink-0"
+      <div className="flex items-center gap-3 px-4 py-4 h-16 shrink-0"
         style={{ borderBottom: '1px solid var(--t-border-light)' }}>
         <div className="shrink-0 w-8 h-8 flex items-center justify-center rounded overflow-hidden"
           style={{ background: 'rgb(239 231 231 / 15%)', border: '1px solid var(--t-accent-border)' }}>
           <img src="/favicon.png" alt="" className="w-6 h-6 object-contain" />
         </div>
-        {!collapsed && (
+        {!navCollapsed && (
           <div className="overflow-hidden">
             {branding.logo_url ? <img src={branding.logo_url} alt={branding.application_name} className="h-6 w-auto object-contain" /> : <div className="font-display font-bold text-sm" style={{ color: 'var(--t-text)' }}>{branding.application_name}</div>}
             <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted)' }}>{branding.application_name}</div>
           </div>
         )}
-        <button onClick={() => {
-          if (window.innerWidth < 768) {
-            if (onClose) onClose()
-          } else {
-            onToggle()
-          }
-        }} aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'} className="ml-auto transition-colors shrink-0" style={{ color: 'var(--t-muted)' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            {collapsed
-              ? <path d="M9 18l6-6-6-6" />
-              : <path d="M15 18l-6-6 6-6" />}
-          </svg>
-        </button>
       </div>
 
       {/* Nav */}
@@ -253,12 +266,12 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
         {/* Main nav */}
         <div className="space-y-0.5">
           {mainNav.map(item => (
-            <NavLink key={item.to} to={item.to} end={item.to === '/'}
+            <NavLink key={item.to} to={item.to} end={item.to === '/'} title={navCollapsed ? label(item.label) : undefined}
               onClick={() => { if (window.innerWidth < 768 && onClose) onClose() }}
               onMouseEnter={() => prefetchRoute(item.to)}
               onFocus={() => prefetchRoute(item.to)}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-2 py-2 rounded transition-all duration-150 group relative ${
+                  `flex items-center gap-3 h-9 px-2 rounded transition-all duration-150 group relative ${
                   isActive ? '' : ''
                 }`
               }
@@ -279,8 +292,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
                     strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
                     <path d={item.icon} />
                   </svg>
-                  {!collapsed && (
-                    <span className="font-display font-medium text-sm tracking-wide truncate">{item.label}</span>
+                  {!navCollapsed && (
+                    <span className="font-display font-medium text-sm tracking-wide truncate">{label(item.label)}</span>
                   )}
                 </>
               )}
@@ -291,23 +304,23 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
         {/* Management section */}
         {managementNav.length > 0 && (
           <>
-            {!collapsed && (
+            {!navCollapsed && (
               <div className="px-2 pt-4 pb-1">
-                <span className="font-mono text-xs uppercase tracking-widest" style={{ color: 'var(--t-muted)' }}>
-                  Management
+                <span className="font-mono text-xs uppercase tracking-widest" style={{ color: 'var(--t-accent)' }}>
+                  {locale === 'hi' ? 'प्रबंधन' : 'Management'}
                 </span>
               </div>
             )}
-            {!collapsed && <div className="mx-2 mb-1" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
-            {collapsed && <div className="my-2 mx-2" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
+            {!navCollapsed && <div className="mx-2 mb-1" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
+            {navCollapsed && <div className="my-2 mx-2" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
             <div className="space-y-0.5">
               {managementNav.map(item => (
-                <NavLink key={item.to} to={item.to}
+                <NavLink key={item.to} to={item.to} title={navCollapsed ? label(item.label) : undefined}
                   onClick={() => { if (window.innerWidth < 768 && onClose) onClose() }}
                   onMouseEnter={() => prefetchRoute(item.to)}
                   onFocus={() => prefetchRoute(item.to)}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 px-2 py-2 rounded transition-all duration-150 group relative ${
+                    `flex items-center gap-3 h-9 px-2 rounded transition-all duration-150 group relative ${
                       isActive ? '' : ''
                     }`
                   }
@@ -328,8 +341,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
                         strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
                         <path d={item.icon} />
                       </svg>
-                      {!collapsed && (
-                        <span className="font-display font-medium text-sm tracking-wide truncate">{item.label}</span>
+                      {!navCollapsed && (
+                        <span className="font-display font-medium text-sm tracking-wide truncate">{label(item.label)}</span>
                       )}
                     </>
                   )}
@@ -342,23 +355,23 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
         {/* Admin section */}
         {adminNav.length > 0 && (
           <>
-            {!collapsed && (
+            {!navCollapsed && (
               <div className="px-2 pt-4 pb-1">
-                <span className="font-mono text-xs uppercase tracking-widest" style={{ color: 'var(--t-muted)' }}>
-                  Administration
+                <span className="font-mono text-xs uppercase tracking-widest" style={{ color: 'var(--t-accent)' }}>
+                  {locale === 'hi' ? 'प्रशासन' : 'Administration'}
                 </span>
               </div>
             )}
-            {!collapsed && <div className="mx-2 mb-1" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
-            {collapsed && <div className="my-2 mx-2" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
+            {!navCollapsed && <div className="mx-2 mb-1" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
+            {navCollapsed && <div className="my-2 mx-2" style={{ borderTop: '1px solid var(--t-border-light)' }} />}
             <div className="space-y-0.5">
               {adminNav.map(item => (
-                <NavLink key={item.to} to={item.to}
+                <NavLink key={item.to} to={item.to} title={navCollapsed ? label(item.label) : undefined}
                   onClick={() => { if (window.innerWidth < 768 && onClose) onClose() }}
                   onMouseEnter={() => prefetchRoute(item.to)}
                   onFocus={() => prefetchRoute(item.to)}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 px-2 py-2 rounded transition-all duration-150 group relative ${
+                    `flex items-center gap-3 h-9 px-2 rounded transition-all duration-150 group relative ${
                       isActive ? '' : ''
                     }`
                   }
@@ -379,8 +392,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
                         strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
                         <path d={item.icon} />
                       </svg>
-                      {!collapsed && (
-                        <span className="font-display font-medium text-sm tracking-wide truncate">{item.label}</span>
+                      {!navCollapsed && (
+                        <span className="font-display font-medium text-sm tracking-wide truncate">{label(item.label)}</span>
                       )}
                     </>
                   )}
@@ -392,7 +405,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }: Pr
       </nav>
 
       {/* Footer */}
-      {!collapsed && (
+      {!navCollapsed && (
         <div className="px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--t-border-light)' }}>
           <div className="flex items-center gap-2 mb-2">
             <span className={`status-dot ${onlineCount > 0 ? 'online' : 'offline'}`} />

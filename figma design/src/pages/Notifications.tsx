@@ -3,6 +3,7 @@ import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
 import TablePagination from '../components/TablePagination'
 import { useTablePagination } from '../hooks/useTablePagination'
+import { useI18n } from '../i18n/I18nContext'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listNotifications, createNotification, updateNotification, deleteNotification, listAlerts,
@@ -33,6 +34,8 @@ const statusColors: Record<string, string> = {
 }
 
 export default function Notifications() {
+  const { locale } = useI18n()
+  const hi = locale === 'hi'
   const [notifications, setNotifications] = useState<NotificationRecord[]>([])
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -141,14 +144,14 @@ export default function Notifications() {
     <div className="p-4 md:p-6 space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="font-display font-bold text-xl md:text-2xl" style={{ color: 'var(--t-text)' }}>Notifications</h1>
-          <p className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted)' }}>{notifications.length} notification{notifications.length !== 1 ? 's' : ''}</p>
+          <h1 className="font-display font-bold text-xl md:text-2xl">{hi ? 'सूचनाएं' : 'Notifications'}</h1>
+          <p className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted)' }}>{notifications.length} {hi ? 'सूचनाएं' : `notification${notifications.length !== 1 ? 's' : ''}`}</p>
         </div>
         <div className="flex gap-2">
           <input
             value={search}
             onChange={e => { setSearch(e.target.value); pagination.setPage(1) }}
-            placeholder="Search…"
+            placeholder={hi ? 'खोजें…' : 'Search…'}
             className="rounded-lg px-3 py-2 font-mono text-xs"
             style={{ ...inputStyle, minWidth: 160 }}
             onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
@@ -160,7 +163,7 @@ export default function Notifications() {
               className="rounded-lg px-4 py-2 font-display font-semibold text-sm flex items-center gap-2 hover:opacity-90 transition-all"
               style={{ background: 'var(--t-accent)', color: '#fff', border: '1px solid var(--t-accent-border)' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
-              New
+              {hi ? 'नया' : 'New'}
             </button>
           </PermissionGuard>
         </div>
@@ -171,7 +174,7 @@ export default function Notifications() {
           <table className="w-full text-left" style={{ minWidth: 640 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--t-border-light)' }}>
-                {['Channel', 'Sent To', 'Alert', 'Status', 'Sent At', 'Actions'].map(h => (
+                {(hi ? ['चैनल', 'किसे भेजा', 'अलर्ट', 'स्थिति', 'भेजा गया', 'कार्रवाई'] : ['Channel', 'Sent To', 'Alert', 'Status', 'Sent At', 'Actions']).map(h => (
                   <th key={h} className="px-4 py-3 font-mono text-xs uppercase tracking-wider" style={{ color: 'var(--t-muted)' }}>{h}</th>
                 ))}
               </tr>
@@ -233,7 +236,7 @@ export default function Notifications() {
         </div>
         {filtered.length === 0 && (
           <div className="py-12 text-center font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-            {search ? 'No notifications match your search.' : 'No notifications yet.'}
+            {search ? (hi ? 'खोज से कोई सूचना नहीं मिली।' : 'No notifications match your search.') : (hi ? 'अभी कोई सूचना नहीं है।' : 'No notifications yet.')}
           </div>
         )}
         {filtered.length > 0 && (

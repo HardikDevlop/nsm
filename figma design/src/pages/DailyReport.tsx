@@ -328,7 +328,7 @@ export default function DailyReport() {
         }
       `}</style>
 
-      <div ref={printRef} className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+      <div ref={printRef} className="p-4 md:p-6 space-y-6 w-full">
 
         {/* ══ REPORT HEADER ══════════════════════════════════════════════ */}
         <div className="no-print flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">

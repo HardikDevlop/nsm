@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Josefin+Sans:wght@200;300;400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Josefin+Sans:wght@200;300;400;500;600;700&family=Lato:wght@400;700&family=Manrope:wght@400;500;600;700&family=Merriweather+Sans:wght@400;600;700&family=Montserrat:wght@400;500;600;700&family=Nunito:wght@400;600;700&family=Open+Sans:wght@400;600;700&family=Outfit:wght@400;500;600;700&family=Playfair+Display:wght@400;600;700&family=Poppins:wght@400;500;600;700&family=Quicksand:wght@400;500;600;700&family=Raleway:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Rubik:wght@400;500;600;700&family=Source+Sans+3:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Ubuntu:wght@400;500;700&family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 
 @theme inline {
@@ -32,11 +32,55 @@ html, body, #root {
   padding: 0;
 }
 
+/* Shared page rhythm for every routed screen. */
+main { background: var(--t-bg); }
+main > * { min-height: 100%; }
+/* Page titles are the primary navigation cue and must follow the selected
+   accent on every route, including legacy management/admin screens. */
+main h1 {
+  color: var(--t-accent) !important;
+  letter-spacing: .03em;
+}
+main h1 + p { color: var(--t-muted); }
+
+/* One page shell for all normal application routes. Individual pages can
+   still control their internal grid, but their outer frame stays aligned. */
+main > div:first-child {
+  width: 100%;
+  padding: 24px !important;
+}
+
+@media (max-width: 767px) {
+  main > div:first-child {
+    padding: 16px !important;
+  }
+}
+
+/* Keep graph editors and topology canvases usable after the shared shell. */
+main > div:first-child:has(.topology-page),
+main > div:first-child:has(.manual-topology-page) {
+  padding: 16px !important;
+}
+
 body {
   background-color: var(--t-bg, #000000);
   color: var(--t-text, #e2e8f5);
-  font-family: 'Josefin Sans', sans-serif;
+  font-family: var(--t-font-family, 'Josefin Sans'), sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Use one consistent typeface across the product. Technical labels and data
+   should keep their sizing/spacing, but no longer switch to a different face. */
+body,
+body button,
+body input,
+body select,
+body textarea,
+body .font-display,
+body .font-body,
+body .font-mono,
+body .font-sans {
+  font-family: var(--t-font-family, 'Josefin Sans'), sans-serif !important;
 }
 
 /* Keep native controls readable when the global theme changes. */
@@ -87,6 +131,282 @@ a:focus-visible {
   color-scheme: dark;
 }
 
+/* Theme contract for legacy utility classes.  A number of older module
+   screens still use Tailwind's fixed text utilities; map those utilities to
+   the active palette so picker changes propagate across every route. */
+.text-white,
+.text-black,
+.text-gray-100,
+.text-gray-200,
+.text-gray-300,
+.text-gray-400,
+.text-gray-500,
+.text-gray-600,
+.text-gray-700,
+.text-gray-800,
+.text-gray-900,
+.text-slate-100,
+.text-slate-200,
+.text-slate-300,
+.text-slate-400,
+.text-slate-500,
+.text-slate-600,
+.text-slate-700,
+.text-slate-800,
+.text-slate-900 {
+  color: var(--t-text) !important;
+}
+
+.bg-black,
+.bg-white,
+.bg-gray-50,
+.bg-gray-100,
+.bg-gray-900,
+.bg-slate-50,
+.bg-slate-900 {
+  background-color: var(--t-card) !important;
+}
+
+.border-gray-200,
+.border-gray-300,
+.border-gray-700,
+.border-gray-800,
+.border-slate-200,
+.border-slate-700,
+.border-white {
+  border-color: var(--t-border) !important;
+}
+
+/* Manual Topology inspector: these legacy utility values were making the
+   discovered/read-only cards dark even when the rest of the page was light. */
+.manual-topology-page [class*="bg-[#18201f]"],
+.manual-topology-page [class*="bg-[#0d1113]"] {
+  background: var(--t-card) !important;
+}
+.manual-topology-page [class*="border-white"] {
+  border-color: var(--t-border) !important;
+}
+.manual-topology-page [class*="text-[#7f8b88]"],
+.manual-topology-page [class*="text-[#9aa3a0]"] {
+  color: var(--t-muted) !important;
+}
+
+/* Manual Topology still uses legacy fixed hex utilities for its header and
+   toolbar. Keep status colors meaningful, but let primary UI accents follow
+   the active theme palette. */
+.manual-topology-page > header h1,
+.manual-topology-page [class*="text-[#61c98d]"],
+.manual-topology-page [class*="text-[#36c2b4]"] {
+  color: var(--t-accent) !important;
+}
+.manual-topology-page [class*="border-[#61c98d"],
+.manual-topology-page [class*="border-[#36c2b4"] {
+  border-color: var(--t-accent-border) !important;
+}
+.manual-topology-page [class*="bg-[#0d1113]"],
+.manual-topology-page [class*="bg-[#11161a]"] {
+  background: var(--t-card) !important;
+}
+.manual-topology-page [class*="bg-[#18201f]"] [class*="text-[#7f8b88]"],
+.manual-topology-page [class*="bg-[#0d1113]"] [class*="text-[#7f8b88]"] {
+  color: var(--t-text) !important;
+}
+
+/* Common fixed light text used on accent buttons in legacy screens. */
+[style*="color: '#fff'"],
+[style*="color: '#ffffff'"],
+[style*="color: \"#fff\""],
+[style*="color: \"#ffffff\""] {
+  color: var(--t-text) !important;
+}
+
+/* Final light-mode override for the Manual Topology edit inspector. Keep
+   this after legacy page overrides so the drawer cannot inherit dark cards. */
+[data-theme="light"] .manual-topology-page [class*="bg-[#18201f]"],
+[data-theme="light"] .manual-topology-page [class*="bg-[#0d1113]"] {
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .manual-topology-page [class*="border-white"] {
+  border-color: var(--t-border) !important;
+}
+[data-theme="light"] .manual-topology-page [class*="text-[#7f8b88]"],
+[data-theme="light"] .manual-topology-page [class*="text-[#9aa3a0]"] {
+  color: var(--t-muted) !important;
+}
+
+/* Network Topology SVG labels must remain readable on the light canvas. */
+[data-theme="light"] .topology-page svg text {
+  fill: var(--t-text) !important;
+}
+[data-theme="light"] .topology-page svg text[style*="var(--t-muted)"] {
+  fill: var(--t-muted) !important;
+}
+[data-theme="light"] .topology-page svg rect {
+  fill: var(--t-card);
+}
+[data-theme="light"] .topology-page svg path:not([stroke="transparent"]) {
+  stroke-opacity: .85 !important;
+}
+[data-theme="light"] .topology-page [style*="radial-gradient"] {
+  background: var(--t-bg) !important;
+}
+
+/* Readability guarantee for the topology graph in light mode. The graph has
+   legacy inline SVG colors and must stay visible even when a user has saved
+   a light palette with white text. */
+[data-theme="light"] .topology-page svg g[data-topology-node] rect {
+  fill: #ffffff !important;
+  stroke: #1f2937 !important;
+}
+[data-theme="light"] .topology-page svg g[data-topology-node] text {
+  fill: #111827 !important;
+}
+[data-theme="light"] .topology-page svg g[data-topology-interactive] > path:not([stroke="transparent"]) {
+  stroke-opacity: .9 !important;
+}
+[data-theme="light"] .topology-page svg g[data-topology-interactive] text {
+  fill: #111827 !important;
+}
+[data-theme="light"] .topology-graph-viewport {
+  background-color: #f8fafc !important;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, .16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, .16) 1px, transparent 1px) !important;
+  background-size: 32px 32px !important;
+}
+[data-theme="light"] .topology-page svg g[data-topology-node] rect {
+  filter: drop-shadow(0 4px 8px rgba(15, 23, 42, .14));
+}
+[data-theme="light"] .topology-page svg g[data-topology-interactive] > path:not([stroke="transparent"]) {
+  stroke-width: 2.4px;
+}
+[data-theme="light"] .topology-page svg g[data-topology-node] text:first-of-type {
+  fill: #0f766e !important;
+}
+
+/* SNMP device detail values were using dark-theme blue-gray literals, which
+   become too faint on the white palette. */
+[data-theme="light"] .snmp-device-details [style*="#c8d8ee"],
+[data-theme="light"] .snmp-device-details [style*="#8899bb"],
+[data-theme="light"] .snmp-device-details [style*="#667799"] {
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .snmp-device-details [style*="rgba(8,25,55"] {
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .snmp-device-details [style*="rgba(8,25,55"] th {
+  color: var(--t-muted) !important;
+}
+
+/* High-contrast capability tiles for the light device-details view. */
+[data-theme="light"] .snmp-device-details [style*="rgba(0,255,136"] {
+  color: #047857 !important;
+}
+[data-theme="light"] .snmp-device-details [style*="rgba(255,51,102"] {
+  color: #dc2626 !important;
+}
+[data-theme="light"] .snmp-device-details [style*="rgba(0,255,136,0.05)"] {
+  background: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+}
+[data-theme="light"] .snmp-device-details [style*="rgba(255,51,102,0.05)"] {
+  background: #fff1f2 !important;
+  border-color: #fecdd3 !important;
+}
+[data-theme="light"] .snmp-device-details [style*="#8899bb"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .snmp-capability-tile {
+  color: #111827 !important;
+}
+[data-theme="light"] .snmp-capability-tile[data-supported="true"] > div:last-child > div:first-child {
+  color: #0f766e !important;
+}
+[data-theme="light"] .snmp-capability-tile[data-supported="false"] > div:last-child > div:first-child {
+  color: #b45309 !important;
+}
+[data-theme="light"] .snmp-capability-tile > div:last-child > div:last-child {
+  color: #111827 !important;
+  font-weight: 600;
+}
+[data-theme="light"] .snmp-capability-tile[data-supported="true"] {
+  background: #f0fdfa !important;
+  border-color: #99f6e4 !important;
+}
+[data-theme="light"] .snmp-capability-tile[data-supported="false"] {
+  background: #fffbeb !important;
+  border-color: #fde68a !important;
+}
+[data-theme="light"] .snmp-capability-tile[data-supported="true"] svg {
+  stroke: #0f766e !important;
+}
+[data-theme="light"] .snmp-capability-tile[data-supported="false"] svg {
+  stroke: #b45309 !important;
+}
+
+/* CPU/metric empty states and chart labels need the same light-surface
+   treatment as the surrounding cards. */
+[data-theme="light"] [style*="rgba(0,0,0,0.15)"] {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] [style*="#556677"],
+[data-theme="light"] [style*="#667799"],
+[data-theme="light"] [style*="#8899bb"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .per-core-usage-tile {
+  background: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, .06);
+}
+[data-theme="light"] .per-core-usage-tile:hover {
+  background: #f0fdfa !important;
+  border-color: #99f6e4 !important;
+  transform: translateY(-1px);
+}
+.cpu-core-gauge {
+  width: 64px;
+  height: 64px;
+  padding: 5px;
+  border-radius: 50%;
+  transition: transform .2s ease;
+}
+.per-core-usage-tile:hover .cpu-core-gauge { transform: scale(1.05); }
+.cpu-core-gauge-inner {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--t-card);
+  font: 600 11px 'JetBrains Mono', monospace;
+}
+[data-theme="light"] .cpu-core-gauge-inner { background: #ffffff; }
+.cpu-live-summary {
+  min-height: 200px;
+  background: linear-gradient(135deg, rgba(0, 212, 255, .08), rgba(0, 255, 136, .04));
+  border: 1px solid rgba(0, 212, 255, .18);
+}
+.cpu-main-gauge {
+  width: 132px;
+  height: 132px;
+  padding: 9px;
+  border-radius: 50%;
+}
+.cpu-main-gauge > div {
+  width: 100%; height: 100%; border-radius: 50%; background: var(--t-card);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.cpu-main-gauge strong { font: 700 24px 'JetBrains Mono', monospace; color: var(--t-accent); }
+.cpu-main-gauge span, .cpu-summary-stat span { font: 9px 'JetBrains Mono', monospace; color: var(--t-muted); letter-spacing: .12em; }
+.cpu-summary-stat { padding: 14px 12px; border-radius: 8px; background: var(--t-card-alpha); border: 1px solid var(--t-border-alpha); }
+.cpu-summary-stat strong { display: block; margin-top: 7px; font: 600 13px 'JetBrains Mono', monospace; color: var(--t-text); }
+[data-theme="light"] .cpu-live-summary { background: linear-gradient(135deg, #f0fdfa, #f8fafc); border-color: #bae6fd; }
+[data-theme="light"] .cpu-main-gauge > div { background: #ffffff; }
+
 ::selection {
   color: var(--t-text, #e2e8f5);
   background: var(--t-accent-alpha, rgba(255, 0, 21, .2));
@@ -114,6 +434,7 @@ a:focus-visible {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--t-border-alpha, rgba(30, 30, 30, 0.8));
+  border-radius: 12px;
 }
 
 .glass-bright {
@@ -121,6 +442,7 @@ a:focus-visible {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--t-border-alpha, rgba(50, 50, 50, 0.5));
+  border-radius: 12px;
 }
 
 .glass-light {
@@ -128,6 +450,7 @@ a:focus-visible {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--t-border-light, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
 }
 
 /* ===================== NEON / TEXT EFFECTS ===================== */
@@ -414,6 +737,12 @@ html[data-locale="hi"] .font-mono {
   border: 1px solid #cbd5e1 !important;
   box-shadow: 0 2px 8px rgba(15, 23, 42, .06);
 }
+[data-theme="light"] .device-port-map-page .device-port-detail-row {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 6px;
+  padding: .55rem .65rem !important;
+  background: #f8fafc;
+}
 [data-theme="light"] .manual-topology-page foreignObject > div {
   background: #ffffff !important;
   color: #111827 !important;
@@ -484,11 +813,77 @@ html[data-locale="hi"] .font-mono {
 
 /* ===================== SHARED ===================== */
 .font-display {
-  font-family: 'Josefin Sans', sans-serif;
+  font-family: var(--t-font-family, 'Josefin Sans'), sans-serif;
 }
 
 .font-mono {
   font-family: 'JetBrains Mono', monospace;
+}
+
+/* Theme-picker compatibility for legacy utility classes. These screens were
+   originally built with fixed cyan/blue/purple accents, so their hover states
+   and controls did not react to the selected accent color. */
+[class*="text-cyan-"],
+[class*="text-blue-"],
+[class*="text-sky-"],
+[class*="text-indigo-"],
+[class*="text-purple-"],
+[class*="text-violet-"] {
+  color: var(--t-accent) !important;
+}
+
+[class*="bg-cyan-"],
+[class*="bg-blue-"],
+[class*="bg-sky-"],
+[class*="bg-indigo-"],
+[class*="bg-purple-"],
+[class*="bg-violet-"] {
+  background-color: var(--t-accent-alpha) !important;
+}
+
+[class*="border-cyan-"],
+[class*="border-blue-"],
+[class*="border-sky-"],
+[class*="border-indigo-"],
+[class*="border-purple-"],
+[class*="border-violet-"] {
+  border-color: var(--t-accent-border) !important;
+}
+
+[class*="hover\\:text-cyan-"]:hover,
+[class*="hover\\:text-blue-"]:hover,
+[class*="hover\\:text-sky-"]:hover,
+[class*="hover\\:text-indigo-"]:hover,
+[class*="hover\\:text-purple-"]:hover,
+[class*="hover\\:text-violet-"]:hover {
+  color: var(--t-accent) !important;
+}
+
+[class*="hover\\:border-cyan-"]:hover,
+[class*="hover\\:border-blue-"]:hover,
+[class*="hover\\:border-sky-"]:hover,
+[class*="hover\\:border-indigo-"]:hover,
+[class*="hover\\:border-purple-"]:hover,
+[class*="hover\\:border-violet-"]:hover {
+  border-color: var(--t-accent-border) !important;
+}
+
+/* Inline accent colors used by older screens must follow the active palette. */
+[style*="#00d4ff"],
+[style*="#00D4FF"],
+[style*="rgb(0, 212, 255)"] {
+  color: var(--t-accent) !important;
+  border-color: var(--t-accent-border) !important;
+}
+
+[style*="background: '#00d4ff'"],
+[style*="background: \"#00d4ff\""],
+[style*="backgroundColor: '#00d4ff'"],
+[style*="background-color: #00d4ff"],
+[style*="background: rgb(0, 212, 255)"],
+[style*="background-color: rgb(0, 212, 255)"] {
+  background: var(--t-accent) !important;
+  color: var(--t-bg) !important;
 }
 
 .scan-line::after {

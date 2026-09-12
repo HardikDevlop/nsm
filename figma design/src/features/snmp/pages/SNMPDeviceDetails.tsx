@@ -310,7 +310,7 @@ export default function SNMPDeviceDetails() {
   }).filter(m => m.module)
 
   return (
-    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+    <div className="snmp-device-details p-4 md:p-6 space-y-4 md:space-y-5">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 font-mono text-xs" style={{ color: '#667799' }}>
         <button onClick={() => navigate('/snmp/devices')} className="hover:text-cyan-400 transition-colors">DEVICES</button>
@@ -454,7 +454,7 @@ export default function SNMPDeviceDetails() {
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan">SNMP CAPABILITIES</div>
               <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                Green = available, red = unavailable. Click a green tile to open the module.
+                Teal = available, amber = unavailable. Click an available tile to open the module.
               </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
@@ -468,7 +468,8 @@ export default function SNMPDeviceDetails() {
                     key={moduleConfig.id}
                     type={canOpen ? 'button' : undefined}
                     onClick={canOpen ? () => navigate(`/snmp/devices/${id}/${moduleConfig.route}`) : undefined}
-                    className="flex items-center gap-2 p-2 rounded text-left transition-all"
+                    className="snmp-capability-tile flex items-center gap-2 p-2 rounded text-left transition-all"
+                    data-supported={supported ? 'true' : 'false'}
                     style={{
                       background: supported ? 'rgba(0,255,136,0.05)' : 'rgba(255,51,102,0.05)',
                       border: `1px solid ${supported ? 'rgba(0,255,136,0.15)' : 'rgba(255,51,102,0.15)'}`,

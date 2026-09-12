@@ -2,6 +2,8 @@ import { useTheme, type ThemeColors } from './ThemeContext'
 
 type Props = { open: boolean; onClose: () => void }
 
+const FONT_OPTIONS = ['Josefin Sans', 'Inter', 'Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Poppins', 'Nunito', 'Raleway', 'Ubuntu', 'Source Sans 3', 'DM Sans', 'Manrope', 'Outfit', 'Quicksand', 'Merriweather Sans', 'Playfair Display', 'Space Grotesk', 'Rubik', 'Work Sans']
+
 const LABELS: Record<keyof ThemeColors, string> = {
   bg: 'Background',
   text: 'Text',
@@ -61,7 +63,7 @@ function ColorRow({ label, value, onChange, shades }: {
 }
 
 export default function ThemePicker({ open, onClose }: Props) {
-  const { colors, setColor, resetColors, defaults } = useTheme()
+  const { colors, setColor, resetColors, defaults, fontScale, setFontScale, fontFamily, setFontFamily } = useTheme()
 
   if (!open) return null
 
@@ -98,6 +100,60 @@ export default function ThemePicker({ open, onClose }: Props) {
 
         {/* Color controls */}
         <div className="flex-1 overflow-y-auto p-5">
+          <div className="mb-5">
+            <div className="mb-5">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="font-display font-semibold text-xs tracking-wider" style={{ color: 'var(--t-muted)' }}>Font Style</span>
+                <span className="font-mono text-[10px]" style={{ color: 'var(--t-accent)' }}>{fontFamily}</span>
+              </div>
+              <select value={fontFamily} onChange={event => setFontFamily(event.target.value)} className="w-full rounded px-3 py-2 font-display text-sm" style={{ background: 'var(--t-bg)', color: 'var(--t-text)', border: '1px solid var(--t-border-alpha)' }}>
+                {FONT_OPTIONS.map(font => <option key={font} value={font} style={{ fontFamily: `'${font}', sans-serif` }}>{font}</option>)}
+              </select>
+            </div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="font-display font-semibold text-xs tracking-wider" style={{ color: 'var(--t-muted)' }}>Font Size</span>
+              <span className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{Math.round(fontScale * 100)}%</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'Small', value: 0.9 },
+                { label: 'Medium', value: 1 },
+                { label: 'Large', value: 1.1 },
+              ].map(option => (
+                <button
+                  key={option.label}
+                  onClick={() => setFontScale(option.value)}
+                  className="rounded py-2 font-display text-xs transition-all"
+                  style={{
+                    color: fontScale === option.value ? 'var(--t-accent)' : 'var(--t-muted)',
+                    background: fontScale === option.value ? 'var(--t-accent-alpha)' : 'transparent',
+                    border: `1px solid ${fontScale === option.value ? 'var(--t-accent-border)' : 'var(--t-border-alpha)'}`,
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'var(--t-border-alpha)', background: 'var(--t-bg)' }}>
+              <div className="mb-2 flex items-center justify-between font-mono text-[10px]" style={{ color: 'var(--t-muted)' }}>
+                <span>Custom size</span>
+                <span style={{ color: 'var(--t-accent)' }}>{Math.round(fontScale * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="200"
+                step="1"
+                value={Math.round(fontScale * 100)}
+                onChange={event => setFontScale(Number(event.target.value) / 100)}
+                className="w-full accent-[var(--t-accent)]"
+                aria-label="Custom font size"
+              />
+              <div className="mt-1 flex justify-between font-mono text-[9px]" style={{ color: 'var(--t-muted)' }}>
+                <span>1%</span><span>150%</span>
+              </div>
+            </div>
+          </div>
           {(Object.keys(LABELS) as (keyof ThemeColors)[]).map(key => (
             <ColorRow
               key={key}
@@ -122,11 +178,11 @@ export default function ThemePicker({ open, onClose }: Props) {
           >
             RESET TO DEFAULT
           </button>
-          <div className="flex items-center justify-center gap-4 mt-3">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 mt-3 min-w-0">
             {(Object.keys(defaults) as (keyof ThemeColors)[]).map(key => (
-              <div key={key} className="flex items-center gap-1">
+              <div key={key} className="flex min-w-0 items-center gap-1">
                 <div className="w-3 h-3 rounded-full" style={{ background: defaults[key], border: '1px solid var(--t-border)' }} />
-                <span className="font-mono text-xs" style={{ color: 'var(--t-muted)', fontSize: 9 }}>{defaults[key]}</span>
+                <span className="min-w-0 truncate font-mono text-xs" style={{ color: 'var(--t-muted)', fontSize: 9 }}>{defaults[key]}</span>
               </div>
             ))}
           </div>

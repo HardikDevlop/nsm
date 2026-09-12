@@ -13,21 +13,21 @@ export interface ThemeColors {
 }
 
 const DARK_DEFAULTS: ThemeColors = {
-  bg: '#000000',
-  text: '#e2e8f5',
-  accent: '#FF0015',
-  card: '#0f0f0f',
-  muted: '#888888',
-  border: '#1e1e1e',
+  bg: '#0b1220',
+  text: '#e6edf7',
+  accent: '#3b82f6',
+  card: '#111c2e',
+  muted: '#94a3b8',
+  border: '#263750',
 }
 
 const LIGHT_DEFAULTS: ThemeColors = {
-  bg: '#f0f2f5',
-  text: '#1a1a2e',
-  accent: '#FF0015',
+  bg: '#f5f7fb',
+  text: '#1e293b',
+  accent: '#3b82f6',
   card: '#ffffff',
-  muted: '#666666',
-  border: '#e0e0e0',
+  muted: '#64748b',
+  border: '#dbe3ee',
 }
 
 interface ThemeContextType {
@@ -37,7 +37,13 @@ interface ThemeContextType {
   setColor: (key: keyof ThemeColors, value: string) => void
   resetColors: () => void
   defaults: ThemeColors
+  fontScale: number
+  setFontScale: (value: number) => void
+  fontFamily: string
+  setFontFamily: (value: string) => void
 }
+
+type ThemePalettes = Record<Theme, ThemeColors>
 
 const ThemeContext = createContext<ThemeContextType>({
   theme: 'light',
@@ -46,6 +52,10 @@ const ThemeContext = createContext<ThemeContextType>({
   setColor: () => {},
   resetColors: () => {},
   defaults: LIGHT_DEFAULTS,
+  fontScale: 1,
+  setFontScale: () => {},
+  fontFamily: 'Josefin Sans',
+  setFontFamily: () => {},
 })
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -77,6 +87,21 @@ function applyCSS(colors: ThemeColors, theme: Theme) {
   s.setProperty('--t-accent-alpha', hexToRgba(colors.accent, 0.15))
   s.setProperty('--t-accent-border', hexToRgba(colors.accent, 0.4))
   s.setProperty('--t-muted-dim', hexToRgba(colors.muted, 0.6))
+  s.setProperty('--t-surface', colors.card)
+  s.setProperty('--t-surface-hover', hexToRgba(colors.accent, 0.08))
+  s.setProperty('--t-surface-active', hexToRgba(colors.accent, 0.15))
+  s.setProperty('--t-input-bg', colors.card)
+  s.setProperty('--t-input-border', colors.border)
+  s.setProperty('--t-sidebar-bg', colors.card)
+  s.setProperty('--t-header-bg', colors.card)
+  s.setProperty('--t-overlay', 'rgba(0, 0, 0, 0.4)')
+  s.setProperty('--t-divider', colors.border)
+  s.setProperty('--t-accent-hover', colors.accent)
+  s.setProperty('--t-accent-soft', hexToRgba(colors.accent, 0.15))
+  s.setProperty('--t-success', '#00ff88')
+  s.setProperty('--t-warning', '#ffb000')
+  s.setProperty('--t-danger', '#ff0015')
+  s.setProperty('--t-info', '#00d4ff')
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -87,21 +112,51 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return 'light'
   })
 
-  const [colors, setColors] = useState<ThemeColors>(() => {
+  const [palettes, setPalettes] = useState<ThemePalettes>(() => {
     try {
-      const saved = localStorage.getItem('theme-colors')
+      // Versioned key ensures old hard-coded cyan/red palettes cannot
+      // override the current accessible defaults.
+      const saved = localStorage.getItem('theme-colors-v2')
       if (saved) {
-        const parsed = JSON.parse(saved) as ThemeColors
-        // Migrate old accent colors to new agnigate red
-        if (parsed.accent === '#ff6432' || parsed.accent === '#ff3366' || parsed.accent === '#d72323') parsed.accent = '#FF0015'
-        return parsed
+        const parsed = JSON.parse(saved) as ThemeColors | Partial<ThemePalettes>
+        const migrate = (value: ThemeColors, fallback: ThemeColors): ThemeColors => {
+          const next = { ...fallback, ...value }
+          if (['#ff6432', '#ff3366', '#d72323'].includes(next.accent.toLowerCase())) next.accent = '#FF0015'
+          return next
+        }
+        if ('dark' in parsed || 'light' in parsed) {
+          return {
+            dark: migrate((parsed as Partial<ThemePalettes>).dark ?? DARK_DEFAULTS, DARK_DEFAULTS),
+            light: migrate((parsed as Partial<ThemePalettes>).light ?? LIGHT_DEFAULTS, LIGHT_DEFAULTS),
+          }
+        }
+        // Legacy flat palettes belonged to the previously persisted mode.
+        const mode = localStorage.getItem('theme-mode') === 'dark' ? 'dark' : 'light'
+        return { dark: mode === 'dark' ? migrate(parsed as ThemeColors, DARK_DEFAULTS) : DARK_DEFAULTS,
+          light: mode === 'light' ? migrate(parsed as ThemeColors, LIGHT_DEFAULTS) : LIGHT_DEFAULTS }
       }
     } catch { /* ignore */ }
-    return LIGHT_DEFAULTS
+    return { dark: DARK_DEFAULTS, light: LIGHT_DEFAULTS }
   })
+  const [fontScale, setFontScale] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('font-scale'))
+    return saved >= 0.01 && saved <= 1.5 ? saved : 1
+  })
+  const [fontFamily, setFontFamily] = useState(() => localStorage.getItem('font-family') || 'Josefin Sans')
 
   const defaults = theme === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS
+  const colors = palettes[theme]
   const canToggle = allowed_themes.length > 1
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${fontScale * 100}%`
+    localStorage.setItem('font-scale', String(fontScale))
+  }, [fontScale])
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--t-font-family', `'${fontFamily}', sans-serif`)
+    localStorage.setItem('font-family', fontFamily)
+  }, [fontFamily])
 
   useEffect(() => {
     if (!allowed_themes.includes(theme)) setTheme(allowed_themes[0] ?? 'light')
@@ -114,36 +169,28 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     applyCSS(colors, theme)
-    localStorage.setItem('theme-colors', JSON.stringify(colors))
-  }, [colors, theme])
+    localStorage.setItem('theme-colors-v2', JSON.stringify(palettes))
+  }, [colors, palettes, theme])
 
   const toggleTheme = useCallback(() => {
     if (!canToggle) return
     setTheme(t => {
       const next = t === 'dark' ? 'light' : 'dark'
-      const nextDefaults = next === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS
-      setColors(prev => {
-        // If current colors are the other theme's defaults, switch to new defaults
-        const curDefaults = t === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS
-        const isDefault = (Object.keys(curDefaults) as (keyof ThemeColors)[]).every(
-          k => prev[k] === curDefaults[k]
-        )
-        return isDefault ? nextDefaults : prev
-      })
       return next
     })
   }, [canToggle])
 
   const setColor = useCallback((key: keyof ThemeColors, value: string) => {
-    setColors(prev => ({ ...prev, [key]: value }))
-  }, [])
+    setPalettes(prev => ({ ...prev, [theme]: { ...prev[theme], [key]: value } }))
+  }, [theme])
 
   const resetColors = useCallback(() => {
-    setColors(theme === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS)
+    setPalettes(prev => ({ ...prev, [theme]: theme === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS }))
+    setFontScale(1)
   }, [theme])
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme, colors, setColor, resetColors, defaults }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, colors, setColor, resetColors, defaults, fontScale, setFontScale, fontFamily, setFontFamily }}>
       {children}
     </ThemeContext.Provider>
   )

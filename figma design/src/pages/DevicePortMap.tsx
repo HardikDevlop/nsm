@@ -795,7 +795,7 @@ export default function DevicePortMap() {
               ].map(([label, value]) => (
                 <div
                   key={label}
-                  className="flex justify-between border-b border-white/[.06] py-2"
+                  className="device-port-detail-row flex justify-between border-b border-white/[.06] py-2"
                 >
                   <span className="text-[#7f8b88]">{label}</span>
                   <span>{value}</span>
