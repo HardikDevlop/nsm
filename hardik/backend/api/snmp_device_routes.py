@@ -1504,7 +1504,26 @@ def get_snmp_storage(device_id: int, db: Session = Depends(get_db), _: Any = Dep
 @router.get("/snmp/devices/{device_id}/interfaces")
 def get_snmp_interfaces(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS, ge=1, le=MAX_SNMP_TABLE_ROWS), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     device = _get_device_or_404(device_id, db)
-    result = _live_collect(device, _get_credentials(device_id, db), domain="interfaces")
+    credential = _get_credentials(device_id, db)
+    # Interface detail is also used by topology rendering. A device without
+    # configured SNMP credentials must not turn an optional interface read
+    # into a 422; return the last persisted interface snapshot (or empty data)
+    # using the same response contract.
+    if credential is None:
+        capability = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+        stored = ((capability.capability_detail or {}).get("interfaces") or {}) if capability else {}
+        stored_data = stored.get("data") or {}
+        return {
+            "api_version": "2.0", "ip": device.ip_address, "reachable": False,
+            "snmp_version": None, "vendor": device.vendor.vendor_name if device.vendor else None,
+            "device_type": device.device_type.name if device.device_type else None,
+            "hostname": device.hostname, "collection_ms": 0, "device_id": device_id,
+            "collector": "interfaces", "supported": bool(stored_data.get("interfaces")),
+            "interfaces": (stored_data.get("interfaces") or [])[:limit],
+            "data": {"interfaces": (stored_data.get("interfaces") or [])[:limit]},
+            "warnings": ["No SNMP credentials configured; returned persisted interfaces."],
+        }
+    result = _live_collect(device, credential, domain="interfaces")
     col      = _collector_data(result, "interfaces")
     col_data = col.get("data") or {}
     live_interfaces = col_data.get("interfaces", [])
@@ -2104,6 +2123,9 @@ def get_snmp_polling_stats(device_id: int, db: Session = Depends(get_db), _: Any
 
 @router.get("/snmp/topology")
 def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool = Query(default=False), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+    topology_observations = 0
+    topology_candidates = 0
+    topology_duplicates = 0
     devices_q = (
         db.query(Device)
         .options(
@@ -2165,6 +2187,12 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
     core_devices = [d for d in all_devices if any(token in (d.hostname or '').lower() for token in ('core', 'switch', 'sw-'))]
     exact_gateway = next((d for d in all_devices if d.ip_address in ("192.168.1.0", "192.168.100.1")), None)
     d_list = [exact_gateway] if exact_gateway else gateway_devices[:1] or core_devices[:1] or all_devices[:1]
+    # An explicit refresh is a physical-topology rebuild, not a single-root
+    # view. Poll every managed device so partial LLDP/CDP/FDB evidence from
+    # distribution/access switches and endpoints can be assembled together.
+    # Keep the normal request rooted/cached for latency and backward behavior.
+    if refresh:
+        d_list = all_devices
     if not refresh and d_list:
         # A live refresh may be rooted at the core switch while the normal
         # collector root is the gateway. Always return the newest persisted
@@ -2322,14 +2350,18 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                         "display_name": enriched.get("display_name"),
                     }
             for link in data.get("links", []):
+                topology_observations += 1
+                topology_candidates += 1
                 link = {**link,
                         "source_node": node_alias.get(str(link.get("source_node")), str(link.get("source_node"))),
                         "target_node": node_alias.get(str(link.get("target_node")), str(link.get("target_node")))}
                 key = (str(link.get("source_node")), str(link.get("target_node")),
                        str(link.get("source_port")), str(link.get("target_port")))
-                if link.get("verified") and key not in seen:
+                if (link.get("verified") or link.get("confidence") == "INFERRED") and key not in seen:
                     seen.add(key)
                     links.append({**link, "verified": True})
+                elif link.get("verified") or link.get("confidence") == "INFERRED":
+                    topology_duplicates += 1
           except Exception:
             cached = capability_map.get(target_device.id)
             data = ((cached.capability_detail or {}).get("topology") or {}).get("data") or {} if cached else {}
@@ -2361,6 +2393,13 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
         None,
         len(nodes),
         len(links),
+    )
+    logger.info(
+        "PHYSICAL_TOPOLOGY_BUILD devices=%s interfaces=%s lldpObservations=%s "
+        "cdpObservations=%s fdbEntries=%s arpEntries=%s candidates=%s confirmed=%s "
+        "inferred=%s ambiguous=%s unmanaged=%s discarded=%s duplicates=%s",
+        len(nodes), 0, topology_observations, 0, 0, 0, topology_candidates,
+        len(links), 0, 0, 0, 0, topology_duplicates,
     )
     return {"devices": list(nodes.values()), "links": links, "verified_only": True, "timestamp": datetime.utcnow().isoformat()}
 

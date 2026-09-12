@@ -72,9 +72,11 @@ function normalizePort(
     oper: String(
       raw.status ?? raw.oper_status ?? raw.operStatus ?? "UNKNOWN",
     ).toUpperCase(),
-    speed: String(raw.speed_display ?? raw.speed ?? "N/A"),
+    speed: String(raw.speed_display ?? raw.speed_label ?? raw.speed ?? (raw.speed_bps != null ? `${Number(raw.speed_bps) >= 1_000_000_000 ? (Number(raw.speed_bps) / 1_000_000_000).toFixed(1) + " Gbps" : Number(raw.speed_bps) >= 1_000_000 ? (Number(raw.speed_bps) / 1_000_000).toFixed(0) + " Mbps" : raw.speed_bps + " bps"}` : "N/A")),
     mac: String(raw.mac_address ?? raw.mac ?? ""),
-    ip: String(raw.ip_address ?? raw.ip ?? ""),
+    ip: Array.isArray(raw.ip_addresses ?? raw.addresses)
+      ? ((raw.ip_addresses ?? raw.addresses) as unknown[]).map(String).join(", ")
+      : String(raw.ip_address ?? raw.ip ?? raw.primary_ip ?? ""),
     description: String(raw.description ?? ""),
     source,
     ifType: String(raw.if_type ?? raw.ifType ?? raw.type ?? ""),

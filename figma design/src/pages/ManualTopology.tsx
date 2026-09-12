@@ -67,6 +67,10 @@ type Link = {
   toPortSource?: string
   routingPoints?: Array<{ x: number y: number }>
   status?: string
+  origin?: "manual" | "discovered_physical"
+  discoverySource?: string
+  confidence?: "HIGH" | "MEDIUM" | "LOW"
+  evidence?: string[]
 }
 type Workspace = { devices: Device[] links: Link[] }
 type ViewMode = "manual" | "actual" | "compare"
@@ -487,7 +491,7 @@ function normalizeWorkspace(raw: unknown): Workspace {
           tone: String(d.tone ?? toneFor(type, index, name, vendor, model)),
           x: Number(d.x ?? 180 + (index % 4) * 260),
           y: Number(d.y ?? 170 + Math.floor(index / 4) * 220),
-          backendId: typeof d.backendId === "number" ? d.backendId : undefined,
+          backendId: Number(d.backendId ?? d.backend_id ?? d.backendDeviceId ?? d.backend_device_id ?? d.resourceId ?? d.resource_id ?? metadata.backendDeviceId ?? metadata.backend_device_id ?? metadata.resourceId) || undefined,
           ports: Array.isArray(d.ports) ? d.ports.map(String) : [],
           portSources:
             d.portSources && typeof d.portSources === "object"
@@ -503,12 +507,16 @@ function normalizeWorkspace(raw: unknown): Workspace {
               ? d.ipAddress
               : typeof d.ip_address === "string"
                 ? d.ip_address
+                : typeof d.ip === "string"
+                  ? d.ip
                 : undefined,
           macAddress:
             typeof d.macAddress === "string"
               ? d.macAddress
               : typeof d.mac_address === "string"
                 ? d.mac_address
+                : typeof d.mac === "string"
+                  ? d.mac
                 : undefined,
           location:
             typeof d.location === "string"
@@ -575,6 +583,10 @@ function normalizeWorkspace(raw: unknown): Workspace {
               )
             : undefined,
           status: typeof l.status === "string" ? l.status : undefined,
+          origin: l.origin === "discovered_physical" ? "discovered_physical" : "manual",
+          discoverySource: typeof l.discoverySource === "string" ? l.discoverySource : undefined,
+          confidence: l.confidence === "HIGH" || l.confidence === "MEDIUM" || l.confidence === "LOW" ? l.confidence : undefined,
+          evidence: Array.isArray(l.evidence) ? l.evidence.map(String) : undefined,
         },
       ]
     }),
@@ -693,6 +705,99 @@ function statusColor(status?: string) {
 
 function portsFor(device: Device) {
   return device.ports?.length ? device.ports : ["Manual Port 1"]
+}
+
+const valueOf = (item: Record<string, unknown>, ...keys: string[]) => {
+  for (const key of keys) if (item[key] != null && String(item[key]).trim()) return item[key]
+  return undefined
+}
+const normId = (value: unknown) => value == null ? "" : String(value).trim().toLowerCase()
+const normIp = (value: unknown) => normId(value).replace(/^\[|\]$/g, "")
+const normMac = (value: unknown) => normId(value).replace(/[.:\-\s]/g, "")
+const normalizeBackendDeviceId = (value: unknown) => {
+  const text = normId(value)
+  return /^device-\d+$/.test(text) ? text.slice(7) : text
+}
+function extractTopologyEndpoint(value: unknown) {
+  const object = value && typeof value === "object" ? value as Record<string, unknown> : {}
+  const data = object.data && typeof object.data === "object" ? object.data as Record<string, unknown> : {}
+  const merged = { ...data, ...object }
+  const rawId = typeof value === "object" ? valueOf(merged, "topologyNodeId", "nodeId", "node_id", "id") : value
+  return {
+    topologyNodeId: rawId == null ? "" : String(rawId),
+    backendDeviceId: normalizeBackendDeviceId(valueOf(merged, "backendDeviceId", "backend_device_id", "deviceId", "device_id", "resourceId", "resource_id", "device_id")),
+    ip: normIp(valueOf(merged, "ip", "ipAddress", "ip_address", "managementIp", "management_ip")),
+    mac: normMac(valueOf(merged, "mac", "macAddress", "mac_address", "chassisMac", "chassis_mac")),
+    hostname: normId(valueOf(merged, "hostname", "name", "label", "sysName", "sys_name", "system_name")),
+    originalNode: value,
+  }
+}
+const normPort = (value: unknown) => normId(value).replace(/\\s+/g, "")
+
+function physicalLinkKey(link: Pick<Link, "from" | "to" | "fromPort" | "toPort">) {
+  const a = `${link.from}|${normPort(link.fromPort)}`
+  const b = `${link.to}|${normPort(link.toPort)}`
+  return a < b ? `${a}::${b}` : `${b}::${a}`
+}
+
+function discoverPhysicalLinks(raw: unknown, canvasDevices: Device[]) {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {}
+  const rawDevices = Array.isArray(value.devices) ? value.devices : []
+  const rawLinks = Array.isArray(value.links) ? value.links : []
+  const byBackend = new Map<string, Device>()
+  const byCanvasId = new Map<string, Device>(canvasDevices.map((device) => [normId(device.id), device]))
+  const byIp = new Map<string, Device>()
+  const byMac = new Map<string, Device>()
+  const byName = new Map<string, Device[]>()
+  for (const device of canvasDevices) {
+    if (device.backendId != null) byBackend.set(normalizeBackendDeviceId(device.backendId), device)
+    if (device.ipAddress) byIp.set(normIp(device.ipAddress), device)
+    if (device.macAddress) byMac.set(normMac(device.macAddress), device)
+    const name = normId(device.name); if (name) byName.set(name, [...(byName.get(name) ?? []), device])
+  }
+  const resolve = (item: Record<string, unknown>) => {
+    const backend = valueOf(item, "backendDeviceId", "backend_device_id", "resourceId", "id", "device_id", "source_device_id", "target_device_id")
+    const directCanvas = backend != null ? byCanvasId.get(normId(backend)) || byCanvasId.get(`device-${normalizeBackendDeviceId(backend)}`) : undefined
+    const ip = valueOf(item, "ip_address", "ip", "source_ip", "target_ip")
+    const mac = valueOf(item, "mac_address", "mac", "chassis_id", "chassis_mac", "source_mac", "target_mac", "source_chassis_id", "target_chassis_id")
+    const hostname = normId(valueOf(item, "hostname", "name", "source_hostname", "target_hostname"))
+    return directCanvas || (backend != null && byBackend.get(normalizeBackendDeviceId(backend))) ||
+      (ip != null && byIp.get(normIp(ip))) || (mac != null && byMac.get(normMac(mac))) ||
+      ((byName.get(hostname) ?? []).length === 1 ? byName.get(hostname)![0] : undefined)
+  }
+  const deviceById = new Map(rawDevices.flatMap((d) => {
+    if (!d || typeof d !== "object") return []
+    const x = d as Record<string, unknown>; const id = valueOf(x, "id", "device_id")
+    return id == null ? [] : [[normId(id), x] as const]
+  }))
+  const out: Link[] = []; const unresolved: Record<string, unknown>[] = []; const seen = new Set<string>(); let discarded = 0
+  for (const candidate of rawLinks) {
+    if (!candidate || typeof candidate !== "object") { discarded++; continue }
+    const l = candidate as Record<string, unknown>
+    const sourceEndpoint = extractTopologyEndpoint(valueOf(l, "source_device_id", "source", "from", "source_node", "source_id"))
+    const targetEndpoint = extractTopologyEndpoint(valueOf(l, "target_device_id", "target", "to", "target_node", "target_id"))
+    const sid = sourceEndpoint.topologyNodeId
+    const tid = targetEndpoint.topologyNodeId
+    const sourceRaw = deviceById.get(normId(sid)) ?? {}
+    const targetRaw = deviceById.get(normId(tid)) ?? {}
+    const from = resolve({ ...sourceRaw, backendDeviceId: sourceEndpoint.backendDeviceId, source_device_id: sourceEndpoint.backendDeviceId || sid, source_ip: sourceEndpoint.ip || valueOf(l, "source_ip", "source_management_ip", "local_ip"), source_hostname: sourceEndpoint.hostname || valueOf(l, "source_hostname", "source_device_name"), source_mac: sourceEndpoint.mac || valueOf(l, "source_mac", "source_chassis_id") })
+    const to = resolve({ ...targetRaw, backendDeviceId: targetEndpoint.backendDeviceId, target_device_id: targetEndpoint.backendDeviceId || tid, target_ip: targetEndpoint.ip || valueOf(l, "target_ip", "target_management_ip", "remote_ip", "remote_management_ip"), target_hostname: targetEndpoint.hostname || valueOf(l, "target_hostname", "target_device_name", "remote_hostname", "remote_system_name"), target_mac: targetEndpoint.mac || valueOf(l, "target_mac", "target_chassis_id", "remote_mac", "remote_chassis_id") })
+    const sourceMatch = from ? (from.backendId != null ? "id" : from.ipAddress ? "ip" : from.macAddress ? "mac" : "hostname") : "none"
+    const targetMatch = to ? (to.backendId != null ? "id" : to.ipAddress ? "ip" : to.macAddress ? "mac" : "hostname") : "unmanaged"
+    console.debug("DISCOVERY_LINK_TRACE", { raw: { source: sid, target: tid }, sourceResolution: { matchedBy: sourceMatch, deviceId: from?.backendId ?? null, canvasNode: from?.id ?? null }, targetResolution: { matchedBy: targetMatch, deviceId: to?.backendId ?? null, canvasNode: to?.id ?? null }, result: from && to ? "CREATED" : "DISCARDED", reason: from && to ? null : !to ? "UNMANAGED_OR_UNRESOLVED_DEVICE" : "source device not found" })
+    if (!from || !to || from.id === to.id) { discarded++; if (!to) unresolved.push(l); console.debug("DISCOVERY_LINK_DISCARDED", { reason: !from ? "UNMANAGED_OR_UNRESOLVED_SOURCE" : !to ? "UNMANAGED_OR_UNRESOLVED_TARGET" : "SELF_LINK" }); continue }
+    const fromPort = valueOf(l, "source_port", "local_port", "fromPort", "localPort")
+    const toPort = valueOf(l, "target_port", "remote_port", "toPort", "remotePort")
+    const discoverySource = String(valueOf(l, "discovery_source", "evidence_source", "link_type", "protocol") ?? "physical")
+    const evidence = Array.isArray(l.evidence) ? l.evidence.map(String) : [discoverySource]
+    const rawConfidence = String(valueOf(l, "confidence", "evidence_confidence") ?? (/lldp|cdp/i.test(discoverySource) ? "HIGH" : "MEDIUM")).toUpperCase()
+    const confidence = rawConfidence === "HIGH" || rawConfidence === "LOW" ? rawConfidence : "MEDIUM"
+    const normalized: Link = { id: `discovered-${physicalLinkKey({ from: from.id, to: to.id, fromPort: fromPort ? String(fromPort) : undefined, toPort: toPort ? String(toPort) : undefined })}`, from: from.id, to: to.id, fromPort: fromPort ? String(fromPort) : undefined, toPort: toPort ? String(toPort) : undefined, fromIfIndex: Number(valueOf(l, "source_ifIndex", "source_if_index", "local_ifIndex")) || null, toIfIndex: Number(valueOf(l, "target_ifIndex", "target_if_index", "remote_ifIndex")) || null, label: `${fromPort ? String(fromPort) : "N/A"} ↔ ${toPort ? String(toPort) : "N/A"}`, status: String(valueOf(l, "status") ?? "VERIFIED").toUpperCase(), origin: "discovered_physical", discoverySource, confidence, evidence }
+    console.debug("PHYSICAL_LINK_CONFIRMED", { from: from.id, to: to.id, confidence, evidence })
+    const key = physicalLinkKey(normalized); if (!seen.has(key)) { seen.add(key); out.push(normalized) } else console.debug("DISCOVERY_LINK_DISCARDED", { reason: "duplicate physical link" })
+  }
+  console.debug("DISCOVERY_RAW_TOPOLOGY", { devices: rawDevices.length, links: rawLinks.length })
+  return { links: out, discarded, unresolved }
 }
 
 type NormalizedPort = {
@@ -1773,45 +1878,78 @@ export default function ManualTopology() {
   const runPhysicalDiscovery = async () => {
     if (!snapshotId || discoveryBusy) return
     setDiscoveryBusy(true)
-    toast.info("Discovery running — checking physical ports...")
+    toast.info("Discovery running — collecting fresh physical topology...")
     try {
+      // Reuse the same finalized/cached physical graph consumed by Network
+      // Topology. Manual Discovery must not run a second, divergent refresh
+      // assembly path.
+      let liveTopology = await getSNMPTopology(undefined, false)
+      try {
+        const cachedText = localStorage.getItem("topology-layout-cache-v2") || sessionStorage.getItem("topology-layout-cache-v2")
+        const cached = JSON.parse(cachedText || "null") as Record<string, unknown> | null
+        if (Array.isArray(cached?.nodes) && Array.isArray(cached?.links) && cached.links.length > 0) {
+          liveTopology = {
+            devices: cached.nodes.map((node: Record<string, unknown>) => ({
+              id: valueOf(node, "id"),
+              backendDeviceId: valueOf(node, "backendDeviceId", "deviceId", "device_id", "resourceId"),
+              hostname: valueOf(node, "hostname", "name", "sysName", "sys_name"),
+              ip_address: valueOf(node, "ip", "ip_address", "managementIp", "management_ip"),
+              mac_address: valueOf(node, "mac", "mac_address"),
+              type: valueOf(node, "type", "device_type"),
+              topologyNodeId: valueOf(node, "id"),
+            })),
+            links: cached.links,
+          } as typeof liveTopology
+          console.debug("MANUAL_DISCOVERY_USING_FINAL_NETWORK_GRAPH", { links: cached.links.length, nodes: cached.nodes.length })
+        }
+      } catch { /* optional cache unavailable; retain backend response */ }
+      let canvasDevices = [...workspace.devices]
+      const topologyValue = liveTopology as unknown as Record<string, unknown>
+      const topologyDevices = Array.isArray(topologyValue.devices) ? topologyValue.devices as Record<string, unknown>[] : []
+      const identity = (item: Record<string, unknown>) => ({ id: normId(valueOf(item, "backendDeviceId", "backend_device_id", "deviceId", "id", "device_id")), ip: normIp(valueOf(item, "ip_address", "ip", "management_ip")), mac: normMac(valueOf(item, "mac_address", "mac")), name: normId(valueOf(item, "hostname", "name", "sys_name", "system_name")) })
+      const matches = (raw: Record<string, unknown>, side: "source" | "target") => {
+        const id = normId(valueOf(raw, `${side}_device_id`, side === "source" ? "source" : "target"))
+        const ip = normIp(valueOf(raw, `${side}_ip`, `${side}_management_ip`, side === "source" ? "local_ip" : "remote_ip"))
+        const mac = normMac(valueOf(raw, `${side}_mac`, `${side}_chassis_id`, side === "source" ? "source_chassis_id" : "remote_chassis_id"))
+        const name = normId(valueOf(raw, `${side}_hostname`, `${side}_device_name`, `${side}_system_name`, side === "target" ? "remote_hostname" : "source_hostname"))
+        const candidates = [...(realDevices as unknown as Record<string, unknown>[]), ...topologyDevices]
+        return candidates.find((d) => {
+          const item = identity(d)
+          return (id && item.id === id) || (ip && item.ip === ip) || (mac && item.mac === mac) || (name && item.name === name)
+        })
+      }
+      const initial = discoverPhysicalLinks(liveTopology, canvasDevices)
+      for (const raw of initial.unresolved) {
+        const item = matches(raw, "target")
+        if (!item || canvasDevices.some((d) => normId(d.backendId) === normId(valueOf(item, "id", "device_id")))) continue
+        const backendId = Number(valueOf(item, "id", "device_id"))
+        if (!Number.isFinite(backendId)) continue
+        const type = String(valueOf(item, "device_type", "type") ?? "Network Device")
+        const name = String(valueOf(item, "hostname", "name", "sys_name", "system_name") ?? `Device ${backendId}`)
+        const ip = String(valueOf(item, "ip_address", "ip", "management_ip") ?? "")
+        canvasDevices.push({ id: `device-${backendId}`, backendId, name, subtitle: ip, ipAddress: ip || undefined, macAddress: String(valueOf(item, "mac_address", "mac") ?? "") || undefined, type, tone: toneFor(type, canvasDevices.length), status: String(valueOf(item, "status") ?? "unknown"), model: String(valueOf(item, "model") ?? "") || undefined, x: 220 + (canvasDevices.length % 4) * 260, y: 180 + Math.floor(canvasDevices.length / 4) * 190, ports: [] })
+      }
+      const discovered = discoverPhysicalLinks(liveTopology, canvasDevices)
+      console.debug("MANUAL_DISCOVERY_FROM_NETWORK_TOPOLOGY", {
+        networkTopologyLinks: Array.isArray((liveTopology as unknown as Record<string, unknown>).links) ? ((liveTopology as unknown as Record<string, unknown>).links as unknown[]).length : 0,
+        mappedLinks: discovered.links.length,
+        createdLinks: discovered.links.length,
+        skippedLinks: discovered.discarded,
+      })
+      const manualLinks = workspace.links.filter((link) => link.origin !== "discovered_physical")
+      const nextWorkspace = { devices: canvasDevices, links: [...manualLinks, ...discovered.links] }
       const result = await reconcileManualTopology(snapshotId)
       setChanges(result.changes ?? [])
-      // Reconcile records the comparison; fetch the assembled topology as
-      // well so the canvas receives the collector's verified device links.
-      const liveTopology = await getSNMPTopology(undefined, true)
-      const assembled = autoWorkspaceFromTopology(liveTopology)
-      const manualIdByBackendId = new Map(
-        workspace.devices
-          .filter((device) => device.backendId != null)
-          .map((device) => [String(device.backendId), device.id]),
-      )
-      const discoveredLinks = assembled.links.flatMap((link) => {
-        const from = manualIdByBackendId.get(link.from.replace("device-", ""))
-        const to = manualIdByBackendId.get(link.to.replace("device-", ""))
-        return from && to ? [{ ...link, from, to }] : []
-      })
-      const discoveredWorkspace = { devices: workspace.devices, links: discoveredLinks }
-      setActualWorkspace(discoveredWorkspace)
-      if (discoveredLinks.length > 0) {
-        // Discovery is an explicit request to bring the canvas in sync with
-        // the live physical topology, including the discovered port pairs.
-        const nextWorkspace = {
-          ...workspace,
-          links: discoveredLinks,
-        }
-        setWorkspace(nextWorkspace)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextWorkspace))
-        void save(nextWorkspace)
-      }
-      setView("compare")
-      toast.success(
-        result.changes?.length
-          ? `Discovery complete — ${result.changes.length} physical change(s) found.`
-          : "Discovery complete — physical ports are in sync.",
-      )
+      setWorkspace(nextWorkspace)
+      commit(nextWorkspace)
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextWorkspace))
+      const saved = await save(nextWorkspace)
+      if (!saved) throw new Error("workspace save failed")
+      setActualWorkspace({ devices: canvasDevices, links: discovered.links })
+      setView("actual")
+      toast.success(`Discovery complete — ${canvasDevices.length} devices, ${discovered.links.length} physical links synchronized${discovered.discarded ? `; ${discovered.discarded} could not be mapped` : ""}.`)
     } catch {
-      toast.error("Physical discovery could not be completed.")
+      toast.error("Physical discovery could not be completed or saved.")
     } finally {
       setDiscoveryBusy(false)
     }
@@ -2802,10 +2940,8 @@ export default function ManualTopology() {
           <button className="ml-3 text-[#61c98d] underline" onClick={() => setResolutionNotice(null)}>DISMISS</button>
         </div>
       )}
-      <section className={`grid ${pageFullscreen ? "min-h-screen" : "min-h-[720px]"} grid-cols-1 items-start gap-3 ${
-        pageFullscreen
-          ? "xl:grid-cols-1"
-          : devicesPanelOpen && sidebarOpen
+      <section className={`grid ${pageFullscreen ? "h-[calc(100dvh-2.5rem)]" : "h-[calc(100dvh-220px)] min-h-[720px]"} min-h-0 grid-cols-1 items-stretch gap-3 ${
+        devicesPanelOpen && sidebarOpen
           ? "xl:grid-cols-[300px_minmax(0,1fr)_315px]"
           : devicesPanelOpen
             ? "xl:grid-cols-[300px_minmax(0,1fr)]"
@@ -2813,8 +2949,8 @@ export default function ManualTopology() {
               ? "xl:grid-cols-[minmax(0,1fr)_315px]"
               : "xl:grid-cols-1"
       }`}>
-        {devicesPanelOpen && !pageFullscreen && (
-        <aside className="flex h-[max(820px,calc(100dvh-180px))] min-h-0 flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#11161a] p-3">
+        {devicesPanelOpen && (
+        <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#11161a] p-3">
           <div className="mb-2 flex shrink-0 justify-end">
             <button
               className="tool"
@@ -3089,7 +3225,7 @@ export default function ManualTopology() {
         </aside>
         )}
         <div
-          className={`relative flex min-h-[720px] flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#0d1113] ${
+          className={`relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#0d1113] ${
             canvasFullscreen
               ? "fixed inset-0 z-[70] min-h-0 rounded-none border-0"
               : ""
@@ -3152,14 +3288,6 @@ export default function ManualTopology() {
                 ))}
               </select>
             </label>
-            <button
-              className="tool border-[#61c98d66] text-[#61c98d]"
-              onClick={() => void runPhysicalDiscovery()}
-              disabled={discoveryBusy || !snapshotId}
-              title="Discover live physical ports and compare them with this topology"
-            >
-              {discoveryBusy ? "DISCOVERING…" : "DISCOVERY"}
-            </button>
             <button
               className="tool"
               title={pageFullscreen ? "Exit fullscreen" : "View topology fullscreen"}
@@ -3230,7 +3358,7 @@ export default function ManualTopology() {
           <svg
             ref={svgRef}
             viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`}
-            className={`h-full w-full ${canvasFullscreen ? "min-h-0" : "min-h-[720px]"}`}
+            className={`h-full w-full ${pageFullscreen || canvasFullscreen ? "min-h-0" : "min-h-[720px]"}`}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
               event.preventDefault()
@@ -3631,8 +3759,8 @@ export default function ManualTopology() {
           </div>
           </div>
         </div>
-      {sidebarOpen && !pageFullscreen && (
-        <aside className="h-[max(720px,calc(100dvh-220px))] min-h-0 overflow-y-auto overscroll-contain rounded-xl border border-white/[.1] bg-[#11161a] p-3">
+      {sidebarOpen && (
+        <aside className="h-full min-h-0 overflow-y-auto overscroll-contain rounded-xl border border-white/[.1] bg-[#11161a] p-3">
           <div className="mb-2 flex justify-end">
             <button className="tool" aria-label="Hide inspector sidebar" onClick={() => setSidebarOpen(false)}>HIDE ›</button>
           </div>

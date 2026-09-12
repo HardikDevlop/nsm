@@ -45,6 +45,13 @@ export default function SNMPMetricChart({
   className = '',
 }: SNMPMetricChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // Poll APIs are not required to return samples in display order. Normalize
+  // here so every chart has a truthful chronological x-axis and never plots
+  // null/NaN values as zero.
+  const plottedData = (data || [])
+    .filter(d => Number.isFinite(d.value) && (!Number.isFinite(d.value2) || d.value2 !== undefined))
+    .slice()
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -61,14 +68,14 @@ export default function SNMPMetricChart({
 
     ctx.clearRect(0, 0, w, h)
 
-    if (!data || data.length < 2) return
+    if (plottedData.length < 2) return
 
     const padLeft = showAxes ? 40 : 8
     const padRight = 8
     const padTop = 8
     const padBottom = showAxes ? 24 : 8
 
-    const allValues = data.flatMap(d => [d.value, ...(d.value2 !== undefined ? [d.value2] : [])])
+    const allValues = plottedData.flatMap(d => [d.value, ...(d.value2 !== undefined && Number.isFinite(d.value2) ? [d.value2] : [])])
     const maxVal = Math.max(...allValues, 1)
     const minVal = Math.min(...allValues, 0)
     const range = maxVal - minVal || 1
@@ -76,7 +83,7 @@ export default function SNMPMetricChart({
     const chartW = w - padLeft - padRight
     const chartH = h - padTop - padBottom
 
-    const toX = (i: number) => padLeft + (i / (data.length - 1)) * chartW
+    const toX = (i: number) => padLeft + (i / (plottedData.length - 1)) * chartW
     const toY = (v: number) => padTop + chartH - ((v - minVal) / range) * chartH
 
     // Grid lines
@@ -107,9 +114,9 @@ export default function SNMPMetricChart({
     }
 
     const drawLine = (field: 'value' | 'value2', lineColor: string) => {
-      if (field === 'value2' && !data.some(d => d.value2 !== undefined)) return
+      if (field === 'value2' && !plottedData.some(d => d.value2 !== undefined && Number.isFinite(d.value2))) return
 
-      const getValue = (d: DataPoint) => field === 'value' ? d.value : (d.value2 ?? 0)
+      const getValue = (d: DataPoint) => field === 'value' ? d.value : d.value2 as number
 
       // Area fill
       if (showArea) {
@@ -118,8 +125,8 @@ export default function SNMPMetricChart({
         gradient.addColorStop(1, `${lineColor}00`)
         ctx.beginPath()
         ctx.moveTo(toX(0), padTop + chartH)
-        data.forEach((d, i) => ctx.lineTo(toX(i), toY(getValue(d))))
-        ctx.lineTo(toX(data.length - 1), padTop + chartH)
+        plottedData.forEach((d, i) => ctx.lineTo(toX(i), toY(getValue(d))))
+        ctx.lineTo(toX(plottedData.length - 1), padTop + chartH)
         ctx.closePath()
         ctx.fillStyle = gradient
         ctx.fill()
@@ -130,7 +137,7 @@ export default function SNMPMetricChart({
       ctx.strokeStyle = lineColor
       ctx.lineWidth = 1.5
       ctx.lineJoin = 'round'
-      data.forEach((d, i) => {
+      plottedData.forEach((d, i) => {
         const x = toX(i)
         const y = toY(getValue(d))
         i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
@@ -142,21 +149,21 @@ export default function SNMPMetricChart({
     drawLine('value2', color2)
 
     // X-axis time labels
-    if (showAxes && data.length >= 2) {
+    if (showAxes && plottedData.length >= 2) {
       ctx.fillStyle = '#556677'
       ctx.font = '9px monospace'
       ctx.textAlign = 'center'
-      const labelCount = Math.min(4, data.length)
+      const labelCount = Math.min(4, plottedData.length)
       for (let i = 0; i < labelCount; i++) {
-        const idx = Math.round((i / (labelCount - 1)) * (data.length - 1))
+        const idx = Math.round((i / (labelCount - 1)) * (plottedData.length - 1))
         const x = toX(idx)
         const y = h - padBottom + 12
-        ctx.fillText(formatTime(data[idx].timestamp), x, y)
+        ctx.fillText(formatTime(plottedData[idx].timestamp), x, y)
       }
     }
-  }, [data, color, color2, showArea, showGrid, showAxes, unit])
+  }, [plottedData, color, color2, showArea, showGrid, showAxes, unit])
 
-  if (!data || data.length < 2) {
+  if (plottedData.length < 2) {
     return (
       <div
         className={`flex items-center justify-center ${className}`}
@@ -177,7 +184,7 @@ export default function SNMPMetricChart({
               <span className="font-mono text-[9px]" style={{ color: '#8899bb' }}>{label}</span>
             </div>
           )}
-          {label2 && data.some(d => d.value2 !== undefined) && (
+          {label2 && plottedData.some(d => d.value2 !== undefined && Number.isFinite(d.value2)) && (
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-0.5 rounded" style={{ background: color2 }} />
               <span className="font-mono text-[9px]" style={{ color: '#8899bb' }}>{label2}</span>

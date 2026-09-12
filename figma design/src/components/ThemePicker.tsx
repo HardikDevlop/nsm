@@ -141,8 +141,8 @@ export default function ThemePicker({ open, onClose }: Props) {
               </div>
               <input
                 type="range"
-                min="1"
-                max="200"
+                min="50"
+                max="170"
                 step="1"
                 value={Math.round(fontScale * 100)}
                 onChange={event => setFontScale(Number(event.target.value) / 100)}
@@ -150,7 +150,7 @@ export default function ThemePicker({ open, onClose }: Props) {
                 aria-label="Custom font size"
               />
               <div className="mt-1 flex justify-between font-mono text-[9px]" style={{ color: 'var(--t-muted)' }}>
-                <span>1%</span><span>150%</span>
+                <span>50%</span><span>170%</span>
               </div>
             </div>
           </div>

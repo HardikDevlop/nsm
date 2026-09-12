@@ -153,7 +153,7 @@ class TopologyCollector(BaseCollector):
         # ---------------------------------------------------------------
         # 2. CDP neighbors  (Cisco only)
         # ---------------------------------------------------------------
-        cdp_neighbors = []
+        cdp_neighbors = self._unique_cdp(self._extract_cdp(raw_flat, device.vendor))
         if cdp_neighbors:
             sources_used.append("cdp")
             for nb in cdp_neighbors:
@@ -221,6 +221,14 @@ class TopologyCollector(BaseCollector):
                 str(nb.get("local_port_desc") or nb.get("local_port_num") or "").strip().lower()
                 for nb in lldp_neighbors
             }
+            # A single learned MAC on a non-neighbour port is a safe
+            # endpoint candidate only when ARP supplies its IP. Multi-MAC
+            # ports remain ambiguous and are never emitted as links here.
+            macs_by_port: dict[str, set[str]] = {}
+            for entry in mac_entries:
+                port = str(entry.get("port_name") or entry.get("if_index") or entry.get("port") or "").strip().lower()
+                if entry.get("mac") and entry.get("status") != "self":
+                    macs_by_port.setdefault(port, set()).add(entry.get("mac", ""))
             for entry in mac_entries:
                 entry_port = str(entry.get("port_name") or entry.get("if_index") or entry.get("port") or "").strip().lower()
                 # LLDP/CDP owns a confirmed device-to-device port. MAC table
@@ -229,6 +237,8 @@ class TopologyCollector(BaseCollector):
                     continue
                 mac = entry.get("mac", "")
                 if not mac or entry.get("status") == "self":
+                    continue
+                if len(macs_by_port.get(entry_port, set())) != 1 or not arp_by_mac.get(mac):
                     continue
                 nb_id = mac
                 if nb_id not in nodes:
@@ -282,7 +292,9 @@ class TopologyCollector(BaseCollector):
         seen_links: set[str] = set()
         unique_links: list[dict[str, Any]] = []
         for lnk in links:
-            lkey = f"{lnk['source_node']}>>{lnk['target_node']}:{lnk['protocol']}"
+            endpoints = sorted((str(lnk['source_node']), str(lnk['target_node'])))
+            ports = sorted((str(lnk.get('source_port') or ''), str(lnk.get('target_port') or '')))
+            lkey = f"{endpoints[0]}::{ports[0]}|{endpoints[1]}::{ports[1]}"
             if lkey not in seen_links:
                 seen_links.add(lkey)
                 unique_links.append(lnk)
@@ -307,6 +319,17 @@ class TopologyCollector(BaseCollector):
     # ------------------------------------------------------------------
     # Extraction helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _unique_cdp(neighbors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[tuple[str, str]] = set()
+        result: list[dict[str, Any]] = []
+        for neighbor in neighbors:
+            key = (str(neighbor.get("device_id") or "").strip().lower(), str(neighbor.get("local_port_index") or "").strip().lower())
+            if key not in seen and key[0]:
+                seen.add(key)
+                result.append(neighbor)
+        return result
 
     def _extract_lldp(self, raw: dict[str, Any]) -> list[dict[str, Any]]:
         """Quick-parse LLDP neighbor sysName from lldpRemTable."""

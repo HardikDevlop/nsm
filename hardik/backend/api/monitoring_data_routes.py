@@ -229,27 +229,13 @@ def get_monitoring_data(
             ]
     
     if "interfaces" in request.modules:
-        # Load sample data for detailed interface info
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        
         interfaces = db.query(LatestInterface).filter(
             LatestInterface.device_id == request.device_id
         ).all()
         
         interface_data = None
         
-        # Use sample data if available (for detailed interface info with health)
-        if "interfaces" in device_samples:
-            interface_data = device_samples["interfaces"]
-        elif interfaces:
+        if interfaces:
             interface_data = {
                 "interfaces": [
                     {
@@ -302,141 +288,57 @@ def get_monitoring_data(
     
     # Add VLAN module
     if "vlan" in request.modules:
-        # Load sample data
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        vlan_data = device_samples.get("vlan") if "vlan" in device_samples else None
-        
         result["modules"]["vlan"] = {
             "supported": result["capabilities"].get("vlan", False),
-            "data": vlan_data,
+            "data": None,
             "history": [],
         }
     
     # Add LLDP module
     if "lldp" in request.modules:
-        # Load sample data
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        lldp_data = device_samples.get("lldp") if "lldp" in device_samples else None
-        
         result["modules"]["lldp"] = {
             "supported": result["capabilities"].get("lldp", False),
-            "data": lldp_data,
+            "data": None,
             "history": [],
         }
     
     # Add Routing module
     if "routing" in request.modules:
-        # Load sample data
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        routing_data = device_samples.get("routing") if "routing" in device_samples else None
-        
         result["modules"]["routing"] = {
             "supported": result["capabilities"].get("routing", False),
-            "data": routing_data,
+            "data": None,
             "history": [],
         }
     
     # Add ARP module
     if "arp" in request.modules:
-        # Load sample data
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        arp_data = device_samples.get("arp") if "arp" in device_samples else None
-        
         result["modules"]["arp"] = {
             "supported": result["capabilities"].get("arp", False),
-            "data": arp_data,
+            "data": None,
             "history": [],
         }
     
     # Add MAC Table module
     if "mac_table" in request.modules:
-        # Load sample data
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        mac_data = device_samples.get("mac_table") if "mac_table" in device_samples else None
-        
         result["modules"]["mac_table"] = {
             "supported": result["capabilities"].get("mac_table", False),
-            "data": mac_data,
+            "data": None,
             "history": [],
         }
     
     # Add Inventory module
     if "inventory" in request.modules:
-        # Load sample data
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        inventory_data = device_samples.get("inventory") if "inventory" in device_samples else None
-        
         result["modules"]["inventory"] = {
             "supported": result["capabilities"].get("inventory", False),
-            "data": inventory_data,
+            "data": None,
             "history": [],
         }
     
     # Add Topology module
     if "topology" in request.modules:
-        # Load sample data
-        sample_data = {}
-        try:
-            import json
-            with open('/tmp/snmp_sample_data.json', 'r') as f:
-                sample_data = json.load(f)
-        except:
-            pass
-        
-        device_samples = sample_data.get(str(request.device_id), {})
-        topology_data = device_samples.get("topology") if "topology" in device_samples else None
-        
         result["modules"]["topology"] = {
             "supported": result["capabilities"].get("topology", False),
-            "data": topology_data,
+            "data": None,
             "history": [],
         }
     

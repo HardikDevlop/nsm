@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useAuth } from '../components/AuthContext'
 import { useBranding } from '../components/BrandingContext'
+import defaultLogo from '../../header-logo.png'
 
 export default function Login() {
   const { login } = useAuth()
@@ -34,11 +35,19 @@ export default function Login() {
       <div className="relative z-10 w-full max-w-sm">
         {/* Logo area */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
-            style={{ background: 'rgb(239 231 231 / 15%)', border: '1px solid var(--t-accent-border)' }}>
-            {branding.logo_url && <img src={branding.logo_url} alt={branding.application_name} className="w-10 h-10 object-contain" />}
+          <div className="w-100 rounded-2xl flex items-center justify-center mb-4">
+            <img
+              src={branding.logo_url || defaultLogo}
+              alt={branding.application_name}
+              className="max-w-200 max-h-10 w-auto h-auto object-contain"
+              onError={event => {
+                // A missing/invalid runtime branding URL must not leave the
+                // login mark blank when the bundled logo is available.
+                if (event.currentTarget.src !== defaultLogo) event.currentTarget.src = defaultLogo
+              }}
+            />
           </div>
-          <div className="font-display font-bold text-xl mb-2" style={{ color: 'var(--t-text)' }}>{branding.application_name}</div>
+          <div className="font-display font-bold text-xl mb-2" style={{ color: 'var(--t-text)' }}>{}</div>
           <p className="font-mono text-xs tracking-widest" style={{ color: 'var(--t-muted)' }}>
             NETWORK MANAGEMENT SYSTEM
           </p>

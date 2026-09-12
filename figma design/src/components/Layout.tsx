@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router'
 import Sidebar from './Sidebar'
 import { useTheme } from './ThemeContext'
-import { listAlerts, recordPageView, type AlertRecord } from '../lib/api'
+import { clearAllAlerts, listAlerts, recordPageView, type AlertRecord } from '../lib/api'
 import { useI18n } from '../i18n/I18nContext'
 import { useBranding } from './BrandingContext'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
@@ -47,7 +47,7 @@ export default function Layout() {
 
   const persistHiddenAlertIds = (nextIds: number[]) => {
     try {
-      window.sessionStorage.setItem(ALERT_HIDDEN_KEY, JSON.stringify({ ids: nextIds }))
+      window.localStorage.setItem(ALERT_HIDDEN_KEY, JSON.stringify({ ids: nextIds }))
     } catch {
       // optional cache only
     }
@@ -66,7 +66,7 @@ export default function Layout() {
 
   useEffect(() => {
     try {
-      const cached = window.sessionStorage.getItem(ALERT_HIDDEN_KEY)
+      const cached = window.localStorage.getItem(ALERT_HIDDEN_KEY)
       if (!cached) return
       const parsed = JSON.parse(cached) as { ids?: number[] }
       if (Array.isArray(parsed.ids)) setHiddenAlertIds(parsed.ids.filter(id => Number.isFinite(id)))
@@ -142,13 +142,20 @@ export default function Layout() {
     })
   }
 
-  const handleClearAllAlerts = () => {
-    const nextIds = visiblePanelSource.map(alert => alert.id)
-    setHiddenAlertIds(current => {
-      const merged = [...new Set([...current, ...nextIds])]
-      persistHiddenAlertIds(merged)
-      return merged
-    })
+  const handleClearAllAlerts = async () => {
+    if (!visiblePanelSource.length) return
+    try {
+      await clearAllAlerts()
+      setAlerts(current => current.filter(alert => !visiblePanelSource.some(item => item.id === alert.id)))
+      setHiddenAlertIds(current => {
+        const merged = [...new Set([...current, ...visiblePanelSource.map(alert => alert.id)])]
+        persistHiddenAlertIds(merged)
+        return merged
+      })
+      persistAlerts([])
+    } catch {
+      // Keep the alerts visible when the server could not clear them.
+    }
   }
 
   const handleClearCache = async () => {
