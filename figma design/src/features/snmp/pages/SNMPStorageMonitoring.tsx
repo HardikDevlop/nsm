@@ -87,7 +87,7 @@ export default function SNMPStorageMonitoring() {
         <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
         {(storageData?.polled_at) && (
           <span className="font-mono text-xs" style={{ color: '#667799' }}>
-            Last Poll: {new Date(storageData?.polled_at).toLocaleString()}
+            Last Poll: {new Date(storageData?.polled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
           </span>
         )}
         {monitoringData && (

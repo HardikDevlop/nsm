@@ -5,55 +5,11 @@ import { agnigateLabel, isAgnigateMac } from '../lib/deviceIdentity'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '../lib/queryProvider'
 import { useI18n } from '../i18n/I18nContext'
-
-type DeviceType = 'gateway' | 'router' | 'firewall' | 'switch' | 'access-point' | 'server' | 'endpoint' | 'cpu' | 'port-summary' | 'unknown'
-type DeviceStatus = 'online' | 'warning' | 'offline' | 'unknown'
-
-type GraphNode = {
-  id: string
-  hostname: string
-  ip: string
-  mac: string
-  type: DeviceType
-  status: DeviceStatus
-  vendor?: string
-  model?: string
-  port?: string
-  macCount?: number
-  macs?: string[]
-  ips?: string[]
-  vlans?: Array<string | number>
-  topology_metadata?: { port?: string; vlans?: Array<string | number>; ips?: string[] }
-}
-
-type GraphLink = {
-  id: string
-  from: string
-  to: string
-  localPort?: string
-  remotePort?: string
-  vlan?: string | number
-  speed?: string | number
-  status?: string
-  source: 'LLDP/CDP' | 'MAC/ARP' | 'ROUTING'
-  confidence: 'CONFIRMED' | 'INFERRED'
-  macCount?: number
-  wireless?: boolean
-  gatewayPath?: boolean
-}
+import { formatIST } from '../time'
+import { applyFdbArpEndpointNode, buildLogicalTopologyGraph, classifyDevice, correlateLldpCdpNeighbors, correlatePersistedVerifiedLinks, createLogicalGraphAccumulator, findByIdentity, inventoryMatch, makeNode, normalizeLldp, prepareFdbArpCorrelation, remoteFor, resolveFdbArpEndpoint, seedPersistedTopologyNodes, statusOf, type DeviceCollection, type DeviceStatus, type DeviceType, type GraphLink, type GraphNode, cleanMac, displayMac, isMac, lower, portKey, str, unique } from '../lib/topologyGraphBuilder'
 
 const linkRenderKey = (link: GraphLink, index: number, scope: string) =>
   `${scope}:${link.id}:${link.from}:${link.to}:${link.localPort || ''}:${link.remotePort || ''}:${index}`
-
-type DeviceCollection = {
-  device: GraphNode
-  macEntries: any[]
-  portGroups: any[]
-  arpEntries: any[]
-  lldpNeighbors: any[]
-  routes: any[]
-  interfaces: any[]
-}
 
 type Layout = {
   nodes: GraphNode[]
@@ -149,7 +105,7 @@ const str = (...values: any[]) => {
 const lower = (...values: any[]) => str(...values).toLowerCase()
 const destinationPortLabel = (value: any) => {
   const port = str(value)
-  return !port || lower(port).includes('unknown') ? '1' : port
+  return !port || lower(port).includes('unknown') ? 'PORT UNKNOWN' : port
 }
 const cleanMac = (...values: any[]) => lower(values.find(value => value !== undefined && value !== null)).replace(/[^a-f0-9]/g, '')
 const isMac = (value: any) => cleanMac(value).length === 12
@@ -204,53 +160,6 @@ function findCoreNode(nodes: GraphNode[], links: GraphLink[]): GraphNode | undef
   )[0]
 }
 
-function classifyDevice(raw: any, fallback: DeviceType = 'unknown'): DeviceType {
-  const explicit = lower(raw?.device_type || raw?.type || raw?.category)
-  const value = `${explicit} ${lower(raw?.vendor || raw?.manufacturer)} ${lower(raw?.hostname || raw?.name)}`
-  if (explicit.includes('firewall') || value.includes('firewall') || value.includes('fortigate')) return 'firewall'
-  if (explicit.includes('gateway') || value.includes('gateway') || value.includes('agnigate')) return 'gateway'
-  if (explicit.includes('router') || value.includes('router')) return 'router'
-  if (explicit.includes('access') || explicit.includes('wireless') || value.includes('access point') || value.includes('wireless')) return 'access-point'
-  if (explicit.includes('switch') || value.includes('switch') || value.includes('cisco catalyst')) return 'switch'
-  if (value.includes('nvr') || value.includes('camera') || value.includes('cctv')) return 'endpoint'
-  if (explicit.includes('server') || value.includes('server') || value.includes('linux')) return 'server'
-  if (explicit.includes('endpoint') || explicit.includes('host')) return 'endpoint'
-  return fallback
-}
-
-function statusOf(raw: any): DeviceStatus {
-  const value = lower(raw?.status || raw?.oper_status || raw?.admin_status)
-  if (value.includes('offline') || value.includes('down') || value.includes('fail')) return 'offline'
-  if (value.includes('warn') || value.includes('degrad')) return 'warning'
-  if (value.includes('unknown')) return 'unknown'
-  return 'online'
-}
-
-function makeNode(raw: any, fallbackId: string, forcedType?: DeviceType): GraphNode {
-  const metadata = raw?.topology_metadata || {}
-  const ip = str(raw?.ip_address, raw?.ip, raw?.management_ip, raw?.managementIp)
-  const mac = displayMac(str(raw?.mac_address, raw?.mac, raw?.chassis_mac, raw?.chassisMac))
-  const hostname = isAgnigateMac(mac)
-    ? agnigateLabel(str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, raw?.display_name, ip, mac, 'UNKNOWN'))
-    : str(raw?.hostname, raw?.sys_name, raw?.sysName, raw?.name, raw?.device_name, raw?.display_name, ip, mac, 'UNKNOWN')
-  return {
-    id: str(raw?.id, raw?.device_id, raw?.node_id, fallbackId),
-    hostname,
-    ip,
-    mac,
-    type: forcedType || classifyDevice(raw),
-    status: statusOf(raw),
-    vendor: str(raw?.vendor, raw?.manufacturer),
-    model: str(raw?.model, raw?.device_model),
-    port: str(raw?.port, raw?.interface_name, raw?.if_name, metadata.port),
-    macCount: raw?.macCount,
-    macs: raw?.macs,
-    ips: raw?.ips || metadata.ips,
-    vlans: raw?.vlans || metadata.vlans,
-    topology_metadata: metadata,
-  }
-}
-
 function normalizeGraphNode(raw: any, fallbackId: string): GraphNode {
   const explicitType = str(raw?.device_type, raw?.type, raw?.category)
   const node = makeNode(raw || {}, fallbackId, explicitType ? undefined : 'unknown')
@@ -303,19 +212,6 @@ function unwrapRows(payload: any, keys: string[]): any[] {
   return []
 }
 
-function inventoryMatch(raw: any, inventory: DeviceRecord[]): DeviceRecord | undefined {
-  const id = str(raw?.id, raw?.device_id, raw?.node_id)
-  const ip = str(raw?.ip, raw?.ip_address, raw?.management_ip)
-  const mac = cleanMac(raw?.mac, raw?.mac_address, raw?.chassis_mac)
-  const hostname = lower(raw?.hostname, raw?.sys_name, raw?.name)
-  return inventory.find(device =>
-    (id && String(device.id) === id) ||
-    (ip && device.ip_address === ip) ||
-    (mac && mac === cleanMac(device.mac_address)) ||
-    (hostname && hostname === lower(device.hostname))
-  )
-}
-
 async function collectModule(deviceId: number, module: string, fresh = false): Promise<any> {
   const endpoint = module === 'mac' ? 'mac-table' : module
   return requestJson<any>(`/snmp/devices/${deviceId}/${endpoint}`, fresh ? { cache: 'no-store' } : undefined)
@@ -366,79 +262,9 @@ async function collectStoredDevice(device: GraphNode): Promise<DeviceCollection>
   }
 }
 
-function findByIdentity(nodes: GraphNode[], raw: any): GraphNode | undefined {
-  const id = str(raw?.id, raw?.device_id, raw?.node_id, raw)
-  const ip = str(raw?.ip, raw?.ip_address, raw?.management_ip)
-  const mac = cleanMac(raw?.mac, raw?.mac_address, raw?.chassis_mac)
-  const hostname = lower(raw?.hostname, raw?.remote_sys_name, raw?.sys_name, raw?.name, raw)
-  return nodes.find(node =>
-    (id && node.id === id) ||
-    (ip && node.ip === ip) ||
-    (mac && mac === cleanMac(node.mac)) ||
-    (hostname && hostname === lower(node.hostname))
-  )
-}
-
-function normalizeLldp(row: any) {
-  return {
-    localPort: str(row?.local_port, row?.local_port_desc, row?.local_port_num),
-    remotePort: str(row?.remote_port, row?.remote_port_id, row?.remote_port_desc),
-    remoteHostname: str(row?.remote_device, row?.remote_sys_name, row?.remote_hostname),
-    remoteIp: str(row?.remote_mgmt_ip, row?.mgmt_address, row?.remote_ip),
-    remoteMac: str(row?.remote_mac, row?.remote_chassis_id),
-  }
-}
-
 function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], topologyNodes: any[], topologyLinks: any[]): { nodes: GraphNode[]; links: GraphLink[] } {
-  const nodes: GraphNode[] = []
-  const byId = new Map<string, GraphNode>()
-  const byIdentity = (candidate: any) => findByIdentity(nodes, candidate)
-  const addNode = (node: GraphNode) => {
-    const existing = byIdentity(node)
-    if (existing) {
-      // Persisted snapshots can contain the same port aggregate with an old
-      // first-MAC label. The current MAC/ARP collection is authoritative for
-      // aggregate identity and must refresh its label and member lists.
-      if (String(node.id).startsWith('port-') && existing.id === node.id) {
-        existing.hostname = node.hostname
-        existing.ip = node.ip
-        existing.mac = node.mac
-        existing.port = node.port
-        existing.macCount = node.macCount
-        existing.macs = node.macs
-        existing.ips = node.ips
-        existing.vlans = node.vlans
-      }
-      existing.ip ||= node.ip
-      existing.mac ||= node.mac
-      existing.vendor ||= node.vendor
-      existing.model ||= node.model
-      if (existing.type === 'unknown' && node.type !== 'unknown') existing.type = node.type
-      byId.set(existing.id, existing)
-      return existing
-    }
-    nodes.push(node)
-    byId.set(node.id, node)
-    return node
-  }
-  const addSyntheticNode = (node: GraphNode) => {
-    const existing = nodes.find(candidate =>
-      candidate.id === node.id ||
-      (node.type === 'cpu' && candidate.type === 'cpu' && cleanMac(candidate.mac) === cleanMac(node.mac))
-    )
-    if (existing) {
-      existing.ip ||= node.ip
-      existing.mac ||= node.mac
-      existing.macCount = Math.max(existing.macCount || 0, node.macCount || 0)
-      existing.macs = unique([...(existing.macs || []), ...(node.macs || [])])
-      existing.ips = unique([...(existing.ips || []), ...(node.ips || [])])
-      existing.vlans = unique([...(existing.vlans || []), ...(node.vlans || [])])
-      return existing
-    }
-    nodes.push(node)
-    byId.set(node.id, node)
-    return node
-  }
+  const graph = createLogicalGraphAccumulator()
+  const { nodes, byId, addNode, addLink } = graph
 
   collections.forEach(item => addNode(item.device))
   // Keep every managed DB device visible even when the cached SNMP snapshot
@@ -448,185 +274,21 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
   inventory
     .map((device, index) => makeNode(device, `inventory-${index}`))
     .forEach(addNode)
-  topologyNodes
-    // Port aggregates are rebuilt from the current MAC/ARP collections below.
-    // Never seed them from an older persisted snapshot, otherwise the first
-    // MAC label can survive even after the primary managed device changes.
-    .filter((raw: any) => !String(raw?.id || '').startsWith('port-'))
-    .map((raw: any, index: number) => {
-      const inventoryDevice = inventoryMatch(raw, inventory)
-      return inventoryDevice
-        // The DB inventory is authoritative for a managed device identity.
-        // A persisted topology node may carry a learned port MAC instead of
-        // the device chassis MAC and must not overwrite the DB MAC by IP.
-        ? makeNode(inventoryDevice, `managed-${index}`)
-        : makeNode(raw, `topology-${index}`)
-    })
-    .forEach(addNode)
+  seedPersistedTopologyNodes({ graph, topologyNodes, inventory })
 
-  const links: GraphLink[] = []
-  const linkPairs = new Map<string, number>()
-  const addLink = (link: GraphLink) => {
-    if (!link.from || !link.to || link.from === link.to) return
-    // LLDP/CDP and MAC/ARP can describe the same device pair. They must not
-    // become two visual lines just because their source/port metadata differs.
-    const key = [String(link.from), String(link.to)].sort().join('|')
-    const existingIndex = linkPairs.get(key)
-    if (existingIndex !== undefined) {
-      const existing = links[existingIndex]
-      if (existing.source === 'MAC/ARP' && link.source === 'LLDP/CDP') {
-        links[existingIndex] = {
-          ...link,
-          localPort: link.localPort || existing.localPort,
-          macCount: existing.macCount || link.macCount,
-        }
-        return
-      }
-      if (link.source === 'MAC/ARP' && link.localPort) {
-        // Port Summary is authoritative for the monitored switch-side port.
-        // Keep that port even when LLDP supplied a neighbor-side eth0 link
-        // for the same device pair.
-        links[existingIndex] = {
-          ...existing,
-          localPort: link.localPort,
-          macCount: link.macCount || existing.macCount,
-        }
-        return
-      }
-      if (existing.confidence !== 'CONFIRMED' && link.confidence === 'CONFIRMED') {
-        links[existingIndex] = {
-          ...link,
-          localPort: existing.localPort || link.localPort,
-          macCount: existing.macCount || link.macCount,
-        }
-      }
-      return
-    }
-    linkPairs.set(key, links.length)
-    links.push(link)
-  }
+  correlateLldpCdpNeighbors({ graph, collections, inventory, topologyNodes })
+  correlatePersistedVerifiedLinks({ graph, topologyLinks })
 
-  const managedFor = (item: DeviceCollection) => byId.get(item.device.id) || addNode(item.device)
-  const remoteFor = (lldp: ReturnType<typeof normalizeLldp>, fallbackIndex: number): GraphNode | undefined => {
-    const inventoryDevice = inventory.find(device =>
-      (lldp.remoteIp && device.ip_address === lldp.remoteIp) ||
-      (lldp.remoteMac && cleanMac(device.mac_address) === cleanMac(lldp.remoteMac)) ||
-      (lldp.remoteHostname && lower(device.hostname) === lower(lldp.remoteHostname))
-    )
-    if (inventoryDevice) return addNode(makeNode(inventoryDevice, `managed-${inventoryDevice.id}`))
-    const topologyRaw = topologyNodes.find((raw: any) =>
-      (lldp.remoteIp && str(raw.ip, raw.ip_address) === lldp.remoteIp) ||
-      (lldp.remoteMac && cleanMac(raw.mac, raw.mac_address) === cleanMac(lldp.remoteMac)) ||
-      (lldp.remoteHostname && lower(str(raw.hostname, raw.sys_name)) === lower(lldp.remoteHostname))
-    )
-    if (topologyRaw) return addNode(makeNode(topologyRaw, `neighbor-${fallbackIndex}`, classifyDevice(topologyRaw, 'unknown')))
-    if (!lldp.remoteHostname && !lldp.remoteIp && !lldp.remoteMac) return undefined
-    return addNode(makeNode({
-      id: `neighbor-${cleanMac(lldp.remoteMac) || lldp.remoteIp || lower(lldp.remoteHostname)}`,
-      hostname: isAgnigateMac(lldp.remoteMac)
-        ? agnigateLabel(lldp.remoteHostname || lldp.remoteIp || displayMac(lldp.remoteMac))
-        : lldp.remoteHostname || lldp.remoteIp || displayMac(lldp.remoteMac),
-      ip: lldp.remoteIp,
-      mac: lldp.remoteMac,
-      device_type: classifyDevice({ hostname: lldp.remoteHostname }, 'unknown'),
-    }, `neighbor-${fallbackIndex}`, 'switch'))
-  }
-
-  // LLDP/CDP is the only source used for confirmed infrastructure links.
-  collections.forEach((item, itemIndex) => {
-    const local = managedFor(item)
-    item.lldpNeighbors.map(normalizeLldp).forEach((lldp, index) => {
-      const sameIp = Boolean(lldp.remoteIp && local.ip && lldp.remoteIp === local.ip)
-      const sameMac = Boolean(lldp.remoteMac && local.mac && cleanMac(lldp.remoteMac) === cleanMac(local.mac))
-      const sameHostname = Boolean(lldp.remoteHostname && local.hostname && lower(lldp.remoteHostname) === lower(local.hostname))
-      // Some NVR/endpoint LLDP agents report their own eth0 as the remote
-      // neighbor. Never turn that self-advertisement into a switch link.
-      if (sameIp || sameMac || sameHostname) return
-      const remote = remoteFor(lldp, itemIndex * 100 + index)
-      if (!remote) return
-      const iface = item.interfaces.find((row: any) => {
-        const candidate = str(row.ifIndex, row.if_index, row.name, row.if_name, row.interface_name)
-        return portKey(candidate) === portKey(lldp.localPort)
-      }) || {}
-      addLink({
-        id: `lldp-${local.id}-${remote.id}-${lldp.localPort}`,
-        from: local.id,
-        to: remote.id,
-        localPort: lldp.localPort,
-        remotePort: lldp.remotePort,
-        speed: iface.speed_bps || iface.speed,
-        status: iface.oper_status || iface.status || 'up',
-        source: 'LLDP/CDP',
-        confidence: 'CONFIRMED',
-        wireless: local.type === 'access-point' || remote.type === 'access-point',
-      })
-    })
-  })
-
-  // Use verified links returned by the topology endpoint only as a fallback
-  // when the direct LLDP response did not expose the same row.
-  topologyLinks.filter((link: any) => {
-    const normalizedSource = link?.from || link?.to ? link?.source : undefined
-    const evidence = lower(link?.evidence_source, link?.protocol, link?.link_type, link?.discovery_source, normalizedSource)
-    return link?.verified === true && (evidence.includes('lldp') || evidence.includes('cdp'))
-  }).forEach((link: any, index: number) => {
-    const source = byIdentity({ id: str(link.source_node, link.source) })
-    const target = byIdentity({ id: str(link.target_node, link.target), ip: link.target_ip })
-    if (!source || !target) return
-    addLink({
-      id: `verified-${index}-${source.id}-${target.id}`,
-      from: source.id,
-      to: target.id,
-      localPort: str(link.source_port, link.local_port),
-      remotePort: str(link.target_port, link.remote_port),
-      vlan: link.vlan_id,
-      speed: link.interface?.speed_bps || link.speed,
-      status: link.interface?.status || link.status || 'up',
-      source: 'LLDP/CDP',
-      confidence: 'CONFIRMED',
-    })
-  })
-
-  const arpByMac = new Map<string, any>()
-  collections.forEach(item => item.arpEntries.forEach(entry => {
-    const mac = cleanMac(entry.mac, entry.mac_address)
-    if (mac) arpByMac.set(mac, entry)
-  }))
+  const { arpByMac, groupsByPort: preparedGroupsByPort } = prepareFdbArpCorrelation(collections)
 
   // One node per physical port. A port with many MACs remains expandable via
   // the details panel instead of creating dozens of fake physical links.
   collections.forEach(item => {
-    const parent = managedFor(item)
+    const parent = (byId.get(item.device.id) || addNode(item.device))
     // Some persisted collectors update entries and port_groups separately.
     // Merge both DB-backed shapes so a newly learned port cannot disappear
     // just because the grouped projection is one poll behind.
-    const groupsByPort = new Map<string, any>()
-    const selfMacs = new Set(
-      item.macEntries
-        .filter((entry: any) => lower(entry?.status) === 'self')
-        .map((entry: any) => cleanMac(entry?.mac, entry?.mac_address))
-        .filter(Boolean),
-    )
-    ;[
-      ...item.portGroups,
-      ...groupMacEntries(item.macEntries.filter((entry: any) => lower(entry?.status) !== 'self')),
-    ].forEach((candidate: any) => {
-      const learnedMacs = (candidate.macs || []).filter((mac: any) => !selfMacs.has(cleanMac(mac)))
-      if (!learnedMacs.length) return
-      const candidatePort = str(candidate.port, candidate.if_index, candidate.ifIndex, candidate.interface)
-      const key = portKey(candidatePort)
-      if (!key) return
-      const existing = groupsByPort.get(key)
-      if (!existing) {
-        groupsByPort.set(key, { ...candidate, macs: [...learnedMacs], ip_addresses: [...(candidate.ip_addresses || candidate.ips || [])], vlans: [...(candidate.vlans || [])] })
-        return
-      }
-      existing.macs = unique([...(existing.macs || []), ...learnedMacs])
-      existing.ip_addresses = unique([...(existing.ip_addresses || []), ...(candidate.ip_addresses || candidate.ips || [])])
-      existing.vlans = unique([...(existing.vlans || []), ...(candidate.vlans || [])])
-      existing.classification ||= candidate.classification
-    })
-    const groups = [...groupsByPort.values()]
+    const groups = preparedGroupsByPort[collections.indexOf(item)] || []
     groups.forEach((group: any) => {
       const port = str(group.port, group.if_index, group.ifIndex, group.interface)
       const classification = lower(group.classification, group.class, group.port_type)
@@ -665,51 +327,11 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
       // than the inventory type because APs are often stored as unknown or
       // generic network devices. The remaining learned hosts stay in the
       // port details.
-      const correlatedEndpoint = nodes
-        .filter(node => node.id !== parent.id)
-        .map(node => {
-          const exactMac = groupMacs.some(mac => cleanMac(mac) === cleanMac(node.mac))
-          const exactIp = ips.some(ip => ip === node.ip || (node.ips || []).includes(ip))
-          return { node, score: exactMac ? 100 : exactIp ? 80 : 0, exactMac, exactIp }
-        })
-        .filter(candidate => candidate.score > 0)
-        .sort((left, right) => right.score - left.score || Number(left.node.id) - Number(right.node.id))[0]
-      const parentMac = cleanMac(parent.mac)
-      const isSelfMac = Boolean(parentMac) && groupMacs.some(mac => cleanMac(mac) === parentMac)
+      const { correlatedEndpoint, isSelfMac, endpointCandidate } = resolveFdbArpEndpoint({ nodes, parent, groupMacs, ips, port, group })
       // The switch's own FDB entry is not a connected endpoint. Do not render
       // it as a fake CPU/device node or create a self-link.
       if (isSelfMac) return
-      const endpointCandidate: GraphNode = {
-              id: `port-${parent.id}-${portKey(port)}`,
-        hostname: groupMacs.length > 1 ? `Port ${port} (${groupMacs.length} MACs)` : (groupMacs[0] || resolvedIp || 'MAC UNKNOWN'),
-        ip: groupMacs.length === 1 ? resolvedIp : '',
-        mac: groupMacs.length === 1 ? groupMacs[0] : '',
-              type: 'endpoint',
-              status: statusOf(group),
-              port,
-              macCount: groupMacs.length,
-              macs: groupMacs,
-              ips,
-              vlans,
-            }
-      const endpoint = correlatedEndpoint ? correlatedEndpoint.node : addNode(endpointCandidate)
-      if (correlatedEndpoint) {
-        const primaryMac = correlatedEndpoint.exactMac
-          ? groupMacs.find(mac => cleanMac(mac) === cleanMac(correlatedEndpoint.node.mac))
-          : correlatedEndpoint.node.mac || groupMacs[0]
-        const primaryIp = correlatedEndpoint.exactIp
-          ? ips.find(ip => ip === correlatedEndpoint.node.ip || (correlatedEndpoint.node.ips || []).includes(ip))
-          : correlatedEndpoint.node.ip || resolvedIp
-        correlatedEndpoint.node.type = correlatedEndpoint.node.type === 'unknown' ? 'endpoint' : correlatedEndpoint.node.type
-        correlatedEndpoint.node.hostname = primaryMac || primaryIp || correlatedEndpoint.node.hostname
-        correlatedEndpoint.node.ip = primaryIp || ''
-        correlatedEndpoint.node.mac = primaryMac || ''
-        correlatedEndpoint.node.port = port
-        correlatedEndpoint.node.macCount = groupMacs.length
-        correlatedEndpoint.node.macs = groupMacs
-        correlatedEndpoint.node.ips = ips
-        correlatedEndpoint.node.vlans = vlans
-      }
+      const endpoint = applyFdbArpEndpointNode({ graph, resolution: { correlatedEndpoint, isSelfMac, endpointCandidate }, groupMacs, ips, port })
       const iface = item.interfaces.find((row: any) => portKey(str(row.ifIndex, row.if_index, row.name, row.if_name, row.interface_name)) === portKey(port)) || {}
       addLink({
         id: `port-${parent.id}-${port}`,
@@ -726,27 +348,7 @@ function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], 
     })
   })
 
-  return { nodes, links }
-}
-
-function groupMacEntries(entries: any[]): any[] {
-  const groups = new Map<string, any>()
-  entries.forEach(entry => {
-    const port = str(entry.port, entry.if_index, entry.ifIndex)
-    if (!port) return
-    const group = groups.get(port) || { port, macs: [], vlans: [], ip_addresses: [] }
-    const mac = str(entry.mac, entry.mac_address)
-    if (isMac(mac)) group.macs.push(displayMac(mac))
-    if (entry.vlan_id !== undefined && entry.vlan_id !== null) group.vlans.push(entry.vlan_id)
-    if (entry.ip_address || entry.ip) group.ip_addresses.push(entry.ip_address || entry.ip)
-    groups.set(port, group)
-  })
-  return [...groups.values()].map(group => ({
-    ...group,
-    macs: unique(group.macs),
-    vlans: unique(group.vlans),
-    ip_addresses: unique(group.ip_addresses),
-  }))
+  return { nodes: graph.getNodes(), links: graph.getLinks() }
 }
 
 function layoutGraph(nodes: GraphNode[], links: GraphLink[]): Layout {
@@ -1300,7 +902,7 @@ export default function Topology() {
       // refresh. Use the fresh collection as the source of truth instead of
       // allowing older stored module snapshots to repopulate stale links.
       const allCollections = forceRefresh && liveTopologyEvidence ? liveCollections : currentStoredCollections
-      const result = buildGraph(allCollections, inventory, topologyNodes, topologyLinks)
+      const result = buildLogicalTopologyGraph(buildGraph(allCollections, inventory, topologyNodes, topologyLinks))
       const mergedGraph = result
       const nextLayout = layoutGraph(mergedGraph.nodes, mergedGraph.links)
       if (forceRefresh && liveTopologyEvidence && root && Number.isFinite(Number(root.id))) {
@@ -1473,6 +1075,26 @@ export default function Topology() {
       cancelled = true
       closeStream?.()
     }
+  }, [loadTopology])
+
+  // SSE is the fast path, but a device can go offline/online while the
+  // browser connection is interrupted. Revalidate the persisted inventory
+  // periodically so the graph recovers without requiring a manual reload.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadTopology(false, true)
+    }, 10_000)
+    return () => window.clearInterval(timer)
+  }, [loadTopology])
+
+  // Rebuild the live SNMP graph periodically as well. The normal revalidation
+  // above only refreshes persisted inventory; this catches link/node changes
+  // after a device restart without requiring the user to click the button.
+  useEffect(() => {
+    const liveRebuildTimer = window.setInterval(() => {
+      void loadTopology(true)
+    }, 60_000)
+    return () => window.clearInterval(liveRebuildTimer)
   }, [loadTopology])
 
   useEffect(() => {
@@ -1854,7 +1476,7 @@ export default function Topology() {
         style={{ cursor: 'pointer' }}
       >
         <rect x={x} y={y} width={width} height={height} rx="12" fill="var(--t-card)" stroke={color} strokeWidth={selected ? 3 : 1.5} />
-        <circle cx={x + width - 13} cy={y + 13} r="4" fill={node.status === 'online' ? '#34d399' : node.status === 'warning' ? '#fbbf24' : '#fb7185'} />
+        <circle cx={x + width - 13} cy={y + 13} r="4" fill={node.status === 'online' ? '#34d399' : node.status === 'offline' ? '#fb7185' : node.status === 'unknown' ? '#94a3b8' : '#fbbf24'} />
         <text x={x + 14} y={y + 23} className="font-mono" style={{ fill: color, fontSize: 10, fontWeight: 700 }}>{safeType === 'port-summary' ? 'PORT SUMMARY' : safeType.toUpperCase()}</text>
         <text x={x + 14} y={y + 43} className="font-mono" style={{ fill: 'var(--t-text)', fontSize: 11, fontWeight: 700 }}>{identityLabel}</text>
         <text x={x + 14} y={y + 59} className="font-mono" style={{ fill: 'var(--t-muted)', fontSize: 10 }}>{safeIp || (safePort ? `Port ${safePort}` : 'IP UNKNOWN')}</text>
@@ -1893,7 +1515,7 @@ export default function Topology() {
           >
             ← {tr.back}
           </button>
-          <span className="font-mono text-[10px]" style={{ color: '#64748b' }}>{lastUpdated ? `${tr.updated} ${lastUpdated.toLocaleString()}` : tr.notLoaded}</span>
+          <span className="font-mono text-[10px]" style={{ color: '#64748b' }}>{lastUpdated ? `${tr.updated} ${formatIST(lastUpdated)}` : tr.notLoaded}</span>
           <input value={search} onChange={event => setSearch(event.target.value)} placeholder={tr.search} className="glass-bright rounded px-3 py-2 text-xs font-mono outline-none" style={{ color: 'var(--t-text, #c8d8ee)', border: '1px solid rgba(34,211,238,.2)' }} />
           <button type="button" onClick={() => void refreshTopology()} className="glass-bright rounded px-3 py-2 text-xs font-mono" style={{ color: '#22d3ee' }}>{refreshing ? tr.rebuilding : tr.rebuild}</button>
         </div>
@@ -2168,7 +1790,7 @@ export default function Topology() {
   )
 }
 
-function Metric({ label, value, color = '#e2e8f0' }: { label: string; value: number; color?: string }) {
+function Metric({ label, value, color = 'var(--t-text, #0f172a)' }: { label: string; value: number; color?: string }) {
   return <div><div className="font-mono text-[9px]" style={{ color: '#64748b' }}>{label}</div><div className="font-display text-lg" style={{ color }}>{value}</div></div>
 }
 
@@ -2347,7 +1969,7 @@ function NodeDetails({
               <Detail label="DB IP" value={details.device.ip_address || node.ip || 'UNKNOWN'} />
               <Detail label="DB MAC" value={details.device.mac_address || node.mac || 'UNKNOWN'} />
               <Detail label="SERIAL / FIRMWARE" value={[details.device.serial_number, details.device.firmware].filter(Boolean).join(' · ') || 'UNKNOWN'} />
-              <Detail label="SNMP / LAST SEEN" value={[details.snmp?.version || 'N/A', details.device.last_seen ? new Date(details.device.last_seen).toLocaleString() : 'N/A'].join(' · ')} />
+              <Detail label="SNMP / LAST SEEN" value={[details.snmp?.version || 'N/A', details.device.last_seen ? formatIST(details.device.last_seen) : 'N/A'].join(' · ')} />
               <Detail label="CAPABILITIES" value={capabilities.length ? capabilities.join(', ') : 'N/A'} />
               <Detail label="MONITORING MODULES" value={runningModules.length ? runningModules.join(', ') : 'N/A'} />
             </div>
@@ -2408,7 +2030,7 @@ function NodeDetails({
                 SNMP: {remoteDetails?.snmp?.version || 'N/A'} · {remoteDetails?.snmp?.status || 'N/A'}
               </span>
               <span className="block" style={{ color: '#94a3b8' }}>
-                Last Seen: {remoteDetails?.device?.last_seen ? new Date(remoteDetails.device.last_seen).toLocaleString() : 'N/A'}
+                  Last Seen: {remoteDetails?.device?.last_seen ? formatIST(remoteDetails.device.last_seen) : 'N/A'}
               </span>
               <span className="block" style={{ color: '#94a3b8' }}>
                 Capabilities: {remoteCapabilities.length ? remoteCapabilities.join(', ') : 'N/A'}

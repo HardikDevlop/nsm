@@ -531,6 +531,186 @@ a:focus-visible {
   background-image: none;
 }
 
+/* Dashboard presentation layer. The data widgets intentionally keep their
+   semantic status colours, while the surfaces adapt to the selected palette. */
+.dashboard-page {
+  max-width: 1920px;
+  margin: 0 auto;
+  min-height: 100%;
+}
+
+.dashboard-page .glass {
+  background: color-mix(in srgb, var(--t-card) 92%, transparent);
+  border-color: color-mix(in srgb, var(--t-accent) 28%, var(--t-border));
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .06), inset 0 1px 0 rgba(255,255,255,.42);
+}
+
+.dashboard-page .glass:hover {
+  box-shadow: 0 14px 36px rgba(15, 23, 42, .1), 0 0 0 1px color-mix(in srgb, var(--t-accent) 20%, transparent);
+}
+
+.dashboard-page h1 {
+  font-size: clamp(1.65rem, 3vw, 2.35rem);
+  letter-spacing: .08em;
+  line-height: 1;
+}
+
+.dashboard-page h2 {
+  letter-spacing: .1em;
+  color: var(--t-accent);
+}
+
+.dashboard-page table tbody tr {
+  border-color: color-mix(in srgb, var(--t-border) 70%, transparent) !important;
+  background: transparent !important;
+}
+
+.dashboard-page table thead tr,
+.dashboard-page table tbody tr:nth-child(even),
+.dashboard-page table tbody tr:hover {
+  background: transparent !important;
+}
+
+.dashboard-page .recharts-wrapper,
+.dashboard-page .recharts-surface {
+  overflow: visible;
+}
+
+.dashboard-page .recharts-sector,
+.dashboard-page .recharts-bar-rectangle,
+.dashboard-page .recharts-line,
+.dashboard-page .recharts-area-area {
+  transition: opacity .28s ease, filter .28s ease, transform .28s ease;
+}
+
+.dashboard-page .recharts-sector:hover,
+.dashboard-page .recharts-bar-rectangle:hover {
+  filter: brightness(1.12) drop-shadow(0 0 8px currentColor);
+  opacity: .92;
+}
+
+.dashboard-page .recharts-tooltip-wrapper {
+  transition: transform .16s ease-out, opacity .16s ease-out;
+  z-index: 20;
+}
+
+.dashboard-page .recharts-default-tooltip {
+  border-radius: 12px !important;
+}
+
+.dashboard-page .device-type-fill,
+.dashboard-page .traffic-fill {
+  transform-origin: left center;
+  animation: dashboardBarIn .9s cubic-bezier(.22,1,.36,1) both;
+  transition: width .8s cubic-bezier(.22,1,.36,1), filter .25s ease;
+}
+
+.dashboard-page .traffic-metric {
+  min-height: 245px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform .3s ease, box-shadow .3s ease, border-color .3s ease;
+}
+
+.dashboard-page .traffic-metric:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 26px rgba(30, 64, 175, .1);
+}
+
+.dashboard-page .traffic-metric .h-8 {
+  height: 92px;
+}
+
+.dashboard-page .device-type-row:hover .device-type-fill,
+.dashboard-page .traffic-fill:hover {
+  filter: brightness(1.18);
+}
+
+@keyframes dashboardBarIn {
+  from { transform: scaleX(0); opacity: .35; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+@media (max-width: 767px) {
+  .dashboard-page { padding: 1rem !important; }
+  .dashboard-page .glass { border-radius: 16px; }
+  .dashboard-page h1 { letter-spacing: .05em; }
+}
+
+[data-theme="light"] .dashboard-page {
+  background:
+    radial-gradient(circle at 92% 0%, rgba(59,130,246,.1), transparent 30%),
+    linear-gradient(180deg, #f8fbff 0%, #f4f7fb 100%) !important;
+}
+
+[data-theme="light"] .dashboard-page .glass {
+  background: rgba(255,255,255,.82);
+  border-color: #b8d2ff;
+  box-shadow: 0 8px 24px rgba(30, 64, 175, .06), inset 0 1px 0 #fff;
+}
+
+[data-theme="light"] .dashboard-page .glass:hover {
+  border-color: #7eb0ff;
+  box-shadow: 0 12px 28px rgba(30, 64, 175, .1);
+}
+
+[data-theme="light"] .dashboard-page p,
+[data-theme="light"] .dashboard-page .font-mono,
+[data-theme="light"] .dashboard-page th,
+[data-theme="light"] .dashboard-page td {
+  color: #475569;
+}
+
+[data-theme="light"] .dashboard-page h2,
+[data-theme="light"] .dashboard-page h1 {
+  color: #3478e5 !important;
+}
+
+[data-theme="light"] .dashboard-page .font-display {
+  font-weight: 600;
+}
+
+[data-theme="light"] .dashboard-page table thead tr {
+  background: rgba(248, 250, 252, 0.55);
+  border-bottom: 1px solid #dbe7f5;
+}
+
+[data-theme="light"] .dashboard-page table tbody tr {
+  background: rgba(255, 255, 255, 0.35) !important;
+  border-top: 1px solid rgba(226, 232, 240, 0.65) !important;
+}
+
+[data-theme="light"] .dashboard-page table tbody tr:nth-child(even) {
+  background: rgba(248, 251, 255, 0.5) !important;
+}
+
+[data-theme="light"] .dashboard-page table tbody tr:hover {
+  background: rgba(239, 246, 255, 0.72) !important;
+}
+
+[data-theme="light"] .dashboard-page table td {
+  color: #334155 !important;
+}
+
+/* Keep the port-map action impossible to miss in the narrow topology drawer. */
+.manual-topology-page .port-map-action {
+  flex-basis: 100%;
+  border-color: color-mix(in srgb, var(--t-accent) 55%, #61c98d);
+  color: var(--t-accent);
+}
+
+.manual-topology-page .port-map-action:hover {
+  border-color: #61c98d;
+  color: #61c98d;
+  box-shadow: 0 0 12px rgba(97, 201, 141, .2);
+}
+
+[data-theme="light"] .dashboard-page [style*="rgba(255,255,255"] {
+  /* Existing chart primitives use white alpha values for dark mode. */
+  --dashboard-chart-muted: rgba(30, 64, 120, .14);
+}
+
 [data-theme="light"] .status-dot.online {
   background: #059669;
   box-shadow: 0 0 6px rgba(5, 150, 105, 0.5);
@@ -956,3 +1136,39 @@ html[data-locale="hi"] .font-mono {
 .recharts-cartesian-grid line {
   stroke: var(--t-border-light, rgba(30, 30, 30, 0.3)) !important;
 }
+[data-theme="light"] .system-vitals-panel {
+  background: #f8fafc !important;
+  border-color: #d9e3f0 !important;
+  box-shadow: 0 10px 28px rgba(30, 64, 110, .08) !important;
+}
+[data-theme="light"] .system-vitals-grid > div {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #e1e8f2;
+  border-radius: 14px;
+  min-height: 270px;
+  padding: 22px 12px 16px;
+  box-shadow: 0 5px 14px rgba(41, 74, 120, .06);
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+[data-theme="light"] .system-vitals-grid { gap: 18px !important; padding-top: 10px; padding-bottom: 6px; }
+[data-theme="light"] .system-vitals-panel { padding: 22px 24px !important; }
+[data-theme="light"] .system-vitals-grid > div::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 18%;
+  right: 18%;
+  height: 2px;
+  border-radius: 0 0 4px 4px;
+  background: #dbe7f7;
+}
+[data-theme="light"] .system-vitals-grid > div:hover {
+  transform: translateY(-2px);
+  border-color: #c5d5ea;
+  box-shadow: 0 9px 20px rgba(41, 74, 120, .11);
+}
+[data-theme="light"] .system-vitals-panel .gauge-track { stroke: #d9e3f2 !important; }
+[data-theme="light"] .system-vitals-panel .gauge-tick { stroke: #b7c5db !important; }
+[data-theme="light"] .system-vitals-panel .gauge-center { fill: #243b63 !important; }
+[data-theme="light"] .system-vitals-panel .font-mono { color: #526684 !important; }

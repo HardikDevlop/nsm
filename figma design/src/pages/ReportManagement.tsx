@@ -233,7 +233,7 @@ export default function ReportManagement() {
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Stat label="Availability" value={`${activeSummary.availability_pct.toFixed(2)}%`} accent={pickColor(activeSummary.availability_pct >= 99 ? 'met' : 'breached')} />
-            <Stat label="Downtime Seconds" value={activeSummary.downtime_seconds.toLocaleString()} accent="#ff6644" />
+            <Stat label="Downtime Seconds" value={activeSummary.downtime_seconds.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} accent="#ff6644" />
             <Stat label="SNMP Health" value={activeSummary.avg_snmp_health?.toFixed(2) ?? 'N/A'} accent={pickColor(activeSummary.avg_snmp_health && activeSummary.avg_snmp_health >= 85 ? 'healthy' : activeSummary.avg_snmp_health && activeSummary.avg_snmp_health >= 60 ? 'degraded' : 'critical')} />
             <Stat label="SLA Met %" value={`${activeSummary.sla_met_pct.toFixed(2)}%`} accent={pickColor(activeSummary.sla_met_pct >= 99 ? 'met' : 'critical')} />
           </div>
@@ -271,7 +271,7 @@ export default function ReportManagement() {
                       <td className="px-4 py-3">{row.device_type_name ?? 'N/A'}</td>
                       <td className="px-4 py-3">{row.protocol}</td>
                       <td className="px-4 py-3" style={{ color: pickColor(row.availability_pct >= 99 ? 'met' : 'critical') }}>{row.availability_pct.toFixed(2)}%</td>
-                      <td className="px-4 py-3">{row.downtime_seconds.toLocaleString()}s</td>
+                      <td className="px-4 py-3">{row.downtime_seconds.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}s</td>
                       <td className="px-4 py-3" style={{ color: pickColor(row.snmp_health) }}>{row.snmp_health}{row.snmp_success_rate != null ? ` (${row.snmp_success_rate.toFixed(1)}%)` : ''}</td>
                       <td className="px-4 py-3">{row.performance_score != null ? row.performance_score.toFixed(2) : 'N/A'}</td>
                       <td className="px-4 py-3">{row.interface_count ?? 0}{row.interface_down_count ? ` / down ${row.interface_down_count}` : ''}</td>

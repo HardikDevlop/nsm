@@ -256,8 +256,8 @@ export default function PacketAnalysis() {
           { l: 'Total Traffic', v: formatBytes(totalBytes), c: '#00d4ff' },
           { l: 'Traffic In', v: formatBytes(totalTrafficIn), c: '#00ff88' },
           { l: 'Traffic Out', v: formatBytes(totalTrafficOut), c: '#7c3aed' },
-          { l: 'Packet Errors', v: totalErrors.toLocaleString(), c: totalErrors > 0 ? '#ff3366' : '#00ff88' },
-          { l: 'Monitored Pings', v: totalPacketsMonitored.toLocaleString(), c: '#ffaa00' },
+          { l: 'Packet Errors', v: totalErrors.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }), c: totalErrors > 0 ? '#ff3366' : '#00ff88' },
+          { l: 'Monitored Pings', v: totalPacketsMonitored.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }), c: '#ffaa00' },
         ].map(s => (
           <GlassCard key={s.l} className="p-4 text-center">
             <div className="font-display font-bold text-2xl" style={{ color: s.c }}>{s.v}</div>

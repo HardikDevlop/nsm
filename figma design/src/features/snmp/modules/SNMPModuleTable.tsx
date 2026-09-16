@@ -138,7 +138,7 @@ function SNMPModuleTable<T>({
         return <span className="font-mono text-xs font-semibold" style={{ color }}>{pct.toFixed(1)}%</span>;
       }
       case 'timestamp':
-        return <span className="font-mono text-[10px]" style={{ color: '#8899bb' }}>{value ? new Date(value).toLocaleString() : '—'}</span>;
+        return <span className="font-mono text-[10px]" style={{ color: '#8899bb' }}>{value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}</span>;
       case 'number':
         return <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{value !== null && value !== undefined ? String(value) : '—'}</span>;
       case 'custom':

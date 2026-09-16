@@ -296,24 +296,28 @@ export default function DevicePortMap() {
     setInterfacesLoading(!hasExistingData)
     setRefreshing(hasExistingData)
     setError(null)
-    void Promise.allSettled([
-      getSNMPInterfaces(current.backendId),
-      getLatestInterfaces(current.backendId),
-    ]).then((results) => {
+    const withTimeout = <T,>(request: Promise<T>, fallback: T, ms = 8000) =>
+      Promise.race([
+        request,
+        new Promise<T>((resolve) => window.setTimeout(() => resolve(fallback), ms)),
+      ])
+
+    void Promise.all([
+      withTimeout(getSNMPInterfaces(current.backendId), []),
+      withTimeout(getLatestInterfaces(current.backendId), []),
+    ]).then(([snmp, latest]) => {
       if (!active) return
-      const snmp = results[0].status === "fulfilled" ? results[0].value : []
-      const latest = results[1].status === "fulfilled" ? results[1].value : []
       const rows = (snmp.length ? snmp : latest).map((item, index) =>
         normalizePort(item, index, snmp.length ? "snmp" : "latest"),
       )
-      if (rows.length || results.some((result) => result.status === "fulfilled")) {
+      if (rows.length) {
         setPorts(
-          (rows.length ? rows : [fallbackPort(current)]).sort(naturalPortSort),
+          rows.sort(naturalPortSort),
         )
         setError(null)
       } else {
         setPorts([fallbackPort(current)])
-        setError("UNABLE TO LOAD PORTS")
+        setError("No live interface data returned. Showing a fallback port; use Retry to check again.")
       }
       setInterfacesLoading(false)
       setRefreshing(false)

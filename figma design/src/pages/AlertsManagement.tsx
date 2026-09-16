@@ -279,7 +279,7 @@ export default function AlertsManagement() {
                       </span>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-                      {new Date(alert.created_at).toLocaleString()}
+                      {new Date(alert.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">

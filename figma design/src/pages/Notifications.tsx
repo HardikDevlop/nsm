@@ -202,7 +202,7 @@ export default function Notifications() {
                       </span>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-                      {notification.sent_at ? new Date(notification.sent_at).toLocaleString() : '—'}
+                      {notification.sent_at ? new Date(notification.sent_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">

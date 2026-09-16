@@ -16,7 +16,7 @@ const PAGE_SIZE = 50
 const alertSeverities = ['critical', 'high', 'medium', 'warning', 'low']
 
 function value(value: unknown) { return value === null || value === undefined || value === '' ? 'N/A' : String(value) }
-function date(valueToFormat: string | null | undefined) { return valueToFormat ? new Date(valueToFormat).toLocaleString() : 'N/A' }
+function date(valueToFormat: string | null | undefined) { return valueToFormat ? new Date(valueToFormat).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : 'N/A' }
 function severityLabel(severity: number | null) { return severity == null ? 'N/A' : SYSLOG_SEVERITY_LABELS[severity] ?? 'N/A' }
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="block"><span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--t-muted)' }}>{label}</span><span className="mt-1 block">{children}</span></label>

@@ -973,7 +973,7 @@ export default function SNMPDevicesPage() {
                         style={{ color: "#8899bb" }}
                       >
                         {device.last_seen
-                          ? new Date(device.last_seen).toLocaleString()
+                          ? new Date(device.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
                           : "—"}
                       </td>
                       <td
@@ -981,7 +981,7 @@ export default function SNMPDevicesPage() {
                         style={{ color: "#8899bb" }}
                       >
                         {device.last_poll_at
-                          ? new Date(device.last_poll_at).toLocaleString()
+                          ? new Date(device.last_poll_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
                           : "—"}
                       </td>
                       <td className="px-4 py-2">

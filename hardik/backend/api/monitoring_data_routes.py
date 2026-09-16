@@ -5,7 +5,7 @@ This API reads from latest_* tables that are populated by the background polling
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Body
@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.database.session import get_db
+from backend.services.device_health import derive_device_health
 from backend.models import Device
 from backend.models.snmp import (
     LatestCPU, LatestMemory, LatestStorage, LatestInterface, LatestEnvironment,
@@ -76,7 +77,8 @@ def get_monitoring_data(
         "ip_address": device.ip_address,
         "hostname": device.hostname,
         "status": device.status,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "health": derive_device_health(db, device),
         "modules": {},
         "monitoring_configs": {},
         "capabilities": {},

@@ -157,7 +157,7 @@ export default function SNMPDashboard() {
                 </div>
                 {currentDevice.last_seen && (
                   <div className="font-mono text-[10px]" style={{ color: '#667799' }}>
-                    Last: {new Date(currentDevice.last_seen).toLocaleString()}
+                    Last: {new Date(currentDevice.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                   </div>
                 )}
               </div>

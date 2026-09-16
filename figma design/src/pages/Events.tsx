@@ -186,7 +186,7 @@ export default function Events() {
                       {event.description || '—'}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-                      {new Date(event.timestamp).toLocaleString()}
+                      {new Date(event.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">

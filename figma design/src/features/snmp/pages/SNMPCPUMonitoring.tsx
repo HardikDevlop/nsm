@@ -95,7 +95,7 @@ export default function SNMPCPUMonitoring() {
         <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
         {cpuData?.polled_at && (
           <span className="font-mono text-xs" style={{ color: '#667799' }}>
-            Last Poll: {new Date(cpuData.polled_at).toLocaleString()}
+            Last Poll: {new Date(cpuData.polled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
           </span>
         )}
         {cpuData?.display && (
@@ -185,7 +185,7 @@ export default function SNMPCPUMonitoring() {
                   return (
                     <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
                       <td className="px-4 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>
-                        {new Date(row.timestamp).toLocaleString()}
+                        {new Date(row.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: '#00d4ff' }}>
                         {row.usage.toFixed(1)}%

@@ -120,7 +120,7 @@ export default function SNMPInterfaceMonitoring() {
             <span style={{ color: isLoading ? '#ffaa00' : error ? '#ff3366' : '#00ff88' }}>
               {isLoading ? 'Loading latest poll...' : error ? 'Latest poll unavailable' : 'Latest poll snapshot'}
             </span>
-            {updatedAt && <span style={{ color: '#8899bb' }}>Updated {new Date(updatedAt).toLocaleString()}</span>}
+            {updatedAt && <span style={{ color: '#8899bb' }}>Updated {new Date(updatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</span>}
             {livePayload?.collection_ms != null && <span style={{ color: '#8899bb' }}>{livePayload.collection_ms} ms</span>}
             {error && <span className="truncate" style={{ color: '#ff6688' }}>{error.message}</span>}
             {!error && livePayload?.reason && <span className="truncate" style={{ color: '#ffaa00' }}>{livePayload.reason}</span>}

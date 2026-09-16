@@ -16,6 +16,7 @@ import {
   type DeviceMetricRecord,
   type DeviceRecord,
 } from '../lib/api'
+import { formatISTTime } from '../time'
 
 const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--t-text, #c8d8ee)' }
 
@@ -254,7 +255,7 @@ export default function DeviceMonitoring() {
 
     return displayBuckets.map(([key, { latencies, losses }]) => {
       const d = new Date(key)
-      const timeStr = d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true, hour: 'numeric', minute: '2-digit' })
+      const timeStr = formatISTTime(d, true)
       const dateStr = d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' })
       const avgLat = latencies.length > 0 ? latencies.reduce((s, v) => s + v, 0) / latencies.length : null
       const avgLoss = losses.length > 0 ? losses.reduce((s, v) => s + v, 0) / losses.length : null

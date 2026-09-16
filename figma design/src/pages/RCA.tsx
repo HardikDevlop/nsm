@@ -22,7 +22,7 @@ function currentState(alerts: RCAAlert[]) {
   return "UNKNOWN"
 }
 function confidenceBand(confidence: number) { const percent = confidence * 100; return percent < 40 ? "Low" : percent < 70 ? "Moderate" : percent < 90 ? "High" : "Very High" }
-function formatTimestamp(value?: string) { return value ? new Date(value).toLocaleString() : "Unavailable" }
+function formatTimestamp(value?: string) { return value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : "Unavailable" }
 function contextValue(alert: RCAAlert | undefined, evidence: RCAEvidence | undefined, keys: string[]) {
   const alertData = alert as AlertContext | undefined
   for (const key of keys) {

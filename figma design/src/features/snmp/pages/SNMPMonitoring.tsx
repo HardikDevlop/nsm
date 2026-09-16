@@ -136,7 +136,7 @@ export default function SNMPMonitoring() {
       setDevices(devs); setAlerts(alts); setIfaces(ifs)
       setMetrics(mets); setLive(mon.devices)
       if (devs.length > 0 && !selectedId) setSelected(devs[0].id)
-      setLastUpdate(new Date().toLocaleTimeString())
+      setLastUpdate(new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }))
       setError(null)
     } catch (e) {
       if ((e as Error).name !== 'AbortError')

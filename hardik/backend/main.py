@@ -94,12 +94,16 @@ async def lifespan(app: FastAPI):
 
     # Start centralized SNMP polling scheduler
     app.state.scheduler_lease = SchedulerLease()
-    scheduler = await get_polling_scheduler() if app.state.scheduler_lease.acquire() else None
+    app.state.scheduler_lease_owned = app.state.scheduler_lease.acquire()
+    scheduler = await get_polling_scheduler() if app.state.scheduler_lease_owned else None
     app.state.snmp_polling = scheduler
     lease_task = asyncio.create_task(_renew_scheduler_lease(app.state.scheduler_lease)) if scheduler is not None else None
     linux_scheduler = LinuxMonitoringScheduler()
     app.state.linux_monitoring_scheduler = linux_scheduler
     await linux_scheduler.restore_enabled_servers()
+    # Restore the singleton ICMP registry from persisted device intent. The
+    # engine's start_all() is idempotent and prevents duplicate loops/devices.
+    await asyncio.to_thread(get_engine().restore_enabled_devices)
     yield
     if flow_receiver is not None:
         await flow_receiver.stop()

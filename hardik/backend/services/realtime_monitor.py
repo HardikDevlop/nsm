@@ -361,6 +361,17 @@ class MonitorEngine:
             "loop_running": self._thread is not None and self._thread.is_alive(),
         }
 
+    def restore_enabled_devices(self) -> int:
+        """Restore persisted ICMP-enabled devices once at application startup."""
+        from backend.database.session import SessionLocal
+        from backend.models import Device
+        db = SessionLocal()
+        try:
+            devices = db.query(Device).filter(Device.deleted_at.is_(None), Device.monitoring_status.is_(True)).all()
+            return self.start_all([{"device_id": d.id, "ip_address": d.ip_address, "hostname": d.hostname, "site_id": d.site_id} for d in devices])
+        finally:
+            db.close()
+
     # -- Background loop ----------------------------------------------------
 
     def _ensure_loop(self) -> None:

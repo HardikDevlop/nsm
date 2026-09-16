@@ -157,7 +157,7 @@ export default function Organizations() {
                   </td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{org.description || '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-                    {new Date(org.created_at).toLocaleDateString()}
+                    {new Date(org.created_at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">

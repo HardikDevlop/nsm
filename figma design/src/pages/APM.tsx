@@ -4,7 +4,7 @@ import GlassCard from '../components/GlassCard'
 import { useAuth } from '../components/AuthContext'
 import { getAPMDependencies, getAPMOverview, getAPMServiceMetrics, listAPMApplications, listAPMServices, listDeviceOptions, listSites, type APMFilters, type APMOverviewItem, type APMServiceMetric, type SiteRecord } from '../lib/api'
 
-const number = (value: number) => value.toLocaleString()
+const number = (value: number) => value.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
 const percent = (value: number) => `${value.toFixed(2)}%`
 const milliseconds = (value: number) => `${value.toFixed(1)} ms`
 
@@ -15,7 +15,7 @@ function MetricCard({ label, value, tone = 'var(--t-text)' }: { label: string; v
 function ResponseTrend({ samples }: { samples: APMServiceMetric[] }) {
   if (!samples.length) return <div className="h-36 flex items-center justify-center font-mono text-xs" style={{ color: 'var(--t-muted)' }}>No stored service metrics for this time window.</div>
   const max = Math.max(...samples.map(sample => sample.response_time_ms), 1)
-  return <div className="h-36 flex items-end gap-1 px-4 pb-4 pt-5">{samples.slice().reverse().map(sample => <div key={sample.observed_at} title={`${new Date(sample.observed_at).toLocaleString()}: ${milliseconds(sample.response_time_ms)}`} className="flex-1 rounded-t bg-cyan-400/60" style={{ height: `${Math.max(4, sample.response_time_ms / max * 100)}%` }} />)}</div>
+  return <div className="h-36 flex items-end gap-1 px-4 pb-4 pt-5">{samples.slice().reverse().map(sample => <div key={sample.observed_at} title={`${new Date(sample.observed_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}: ${milliseconds(sample.response_time_ms)}`} className="flex-1 rounded-t bg-cyan-400/60" style={{ height: `${Math.max(4, sample.response_time_ms / max * 100)}%` }} />)}</div>
 }
 
 function OverviewTable({ items }: { items: APMOverviewItem[] }) {

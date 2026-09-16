@@ -59,4 +59,3 @@ class ICMPMonitor:
             for future in as_completed(futures):
                 samples.append(future.result())
         return sorted(samples, key=lambda item: item["ip"])
-

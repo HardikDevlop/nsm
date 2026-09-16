@@ -15,9 +15,8 @@ import inspect
 import logging
 import time
 from functools import wraps
-from zoneinfo import ZoneInfo
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -32,14 +31,11 @@ from backend.models.identity import DeviceCapabilities
 from backend.snmp.collector import SNMPService
 from backend.snmp.credentials import SNMPCredentials
 from backend.utils.crypto import decrypt_secret
+from backend.utils.time import utc_now, iso_utc
 
 logger = logging.getLogger(__name__)
-IST = ZoneInfo("Asia/Kolkata")
-
-
-def now_ist() -> datetime:
-    """Return a naive IST timestamp for PostgreSQL TIMESTAMP columns."""
-    return datetime.now(IST).replace(tzinfo=None)
+def now_utc() -> datetime:
+    return utc_now()
 
 # Module name to collector name mapping
 MODULE_COLLECTOR_MAP = {
@@ -278,7 +274,7 @@ class SNMPPoller:
         """
         module = job.module_name
         device_id = job.device_id
-        now = now_ist()
+        now = now_utc()
 
         try:
             if self.db is None:
@@ -773,6 +769,12 @@ class PollingScheduler:
         self.worker_count = worker_count
         self._worker_semaphore: asyncio.Semaphore | None = None
         self._running = False
+        self.last_job_started_at: datetime | None = None
+        self.last_job_finished_at: datetime | None = None
+        self.last_job_success_at: datetime | None = None
+        self.last_job_failure_at: datetime | None = None
+        self.recent_failure_count = 0
+        self.active_jobs = 0
 
     async def start(self) -> None:
         """Start the scheduler and initialize jobs from DB."""
@@ -832,9 +834,11 @@ class PollingScheduler:
                 return
 
         # Calculate next poll time
-        next_poll = config.next_poll_at or now_ist()
-        if next_poll < now_ist():
-            next_poll = now_ist() + timedelta(seconds=5)
+        next_poll = config.next_poll_at or now_utc()
+        if next_poll.tzinfo is None:
+            next_poll = next_poll.replace(tzinfo=timezone.utc)
+        if next_poll < now_utc():
+            next_poll = now_utc() + timedelta(seconds=5)
 
         config.next_poll_at = next_poll
         if db:
@@ -847,6 +851,8 @@ class PollingScheduler:
             args=[config.device_id, config.module_name, config.interval_seconds, config.id],
             id=job_id,
             replace_existing=True,
+            max_instances=1,
+            coalesce=True,
             misfire_grace_time=300,
         )
         logger.debug("Scheduled job %s for %s", job_id, next_poll)
@@ -885,7 +891,7 @@ class PollingScheduler:
             ).first()
             reschedule = None
             if config:
-                config.last_poll_at = now_ist()
+                config.last_poll_at = now_utc()
                 if result.get("success"):
                     config.status = MonitoringStatus.RUNNING.value
                     config.error_message = None
@@ -894,7 +900,7 @@ class PollingScheduler:
                 else:
                     config.status = MonitoringStatus.ERROR.value
                     config.error_message = result.get("error", "Unknown error")
-                config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
+                config.next_poll_at = now_utc() + timedelta(seconds=config.interval_seconds)
                 if config.enabled and config.status != MonitoringStatus.NOT_SUPPORTED.value:
                     reschedule = {
                         "device_id": config.device_id,
@@ -930,6 +936,8 @@ class PollingScheduler:
 
     async def _execute_poll_job(self, device_id: int, module_name: str, interval_seconds: int, config_id: int) -> None:
         """Execute a poll job and reschedule."""
+        self.active_jobs += 1
+        self.last_job_started_at = utc_now()
         async with self._worker_semaphore:
             job = PollJob(
                 device_id=device_id,
@@ -946,18 +954,26 @@ class PollingScheduler:
                     from types import SimpleNamespace
                     await self._schedule_config(SimpleNamespace(**reschedule))
 
+                if result.get("success") and not result.get("skipped"):
+                    self.last_job_success_at = utc_now()
+
             except Exception as exc:
+                self.last_job_failure_at = utc_now()
+                self.recent_failure_count += 1
                 logger.error("Poll job %s failed: %s", job.job_id, exc)
                 db = SessionLocal()
                 config = db.query(MonitoringConfig).filter(MonitoringConfig.id == config_id).first()
                 if config:
                     config.status = MonitoringStatus.ERROR.value
                     config.error_message = str(exc)
-                    config.next_poll_at = now_ist() + timedelta(seconds=config.interval_seconds)
+                    config.next_poll_at = now_utc() + timedelta(seconds=config.interval_seconds)
                     db.commit()
                     if config.enabled:
                         await self._schedule_config(config)
                 db.close()
+            finally:
+                self.last_job_finished_at = utc_now()
+                self.active_jobs = max(0, self.active_jobs - 1)
 
     @_database_worker
     async def add_job(self, device_id: int, module_name: str, interval_seconds: int) -> MonitoringConfig:
@@ -976,14 +992,14 @@ class PollingScheduler:
                     enabled=True,
                     interval_seconds=interval_seconds,
                     status=MonitoringStatus.RUNNING.value,
-                    last_started_at=now_ist(),
+                    last_started_at=now_utc(),
                 )
                 db.add(config)
             else:
                 config.enabled = True
                 config.interval_seconds = interval_seconds
                 config.status = MonitoringStatus.RUNNING.value
-                config.last_started_at = now_ist()
+                config.last_started_at = now_utc()
                 config.error_message = None
 
             db.commit()
@@ -1008,7 +1024,7 @@ class PollingScheduler:
             if config:
                 config.enabled = False
                 config.status = MonitoringStatus.STOPPED.value
-                config.last_stopped_at = now_ist()
+                config.last_stopped_at = now_utc()
                 config.next_poll_at = None
                 db.commit()
                 return True
@@ -1068,6 +1084,7 @@ class PollingScheduler:
                 "next_poll_at": config.next_poll_at.isoformat() if config.next_poll_at else None,
                 "error_message": config.error_message,
                 "scheduled": scheduled,
+                "active_jobs": self.active_jobs,
             }
         finally:
             db.close()

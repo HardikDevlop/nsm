@@ -113,7 +113,7 @@ export default function AuditLogs() {
                     {log.user_name ?? (log.user_id != null ? `User #${log.user_id}` : 'System')}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-                    {new Date(log.timestamp).toLocaleString()}
+                    {new Date(log.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                   </td>
                 </tr>
               ))}

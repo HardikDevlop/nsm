@@ -121,7 +121,7 @@ export function SNMPModuleShell({
         <div className="min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">{pageTitle ?? title(module)}</h1>
           <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
-            {device.name || device.hostname || device.ip_address} · {device.ip_address} · {device.last_seen ? `Last seen ${new Date(device.last_seen).toLocaleString()}` : 'Last seen N/A'}
+            {device.name || device.hostname || device.ip_address} · {device.ip_address} · {device.last_seen ? `Last seen ${new Date(device.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}` : 'Last seen N/A'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

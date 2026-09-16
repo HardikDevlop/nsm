@@ -2213,6 +2213,7 @@ export interface DeviceOverviewItem {
   ip_address: string
   mac_address?: string | null
   status: string
+  health?: { status?: string; health_reason?: string; freshness_status?: string; age_seconds?: number | null }
   monitoring_status: boolean
   vendor?: string | null
   device_type?: string | null
@@ -2340,6 +2341,7 @@ export interface OverviewResponse {
     active_alerts: number
     critical_alerts: number
     recent_events: number
+    health_counts?: Record<string, number>
   }
   devices: DeviceOverviewItem[]
   alerts: AlertRecord[]
@@ -2354,7 +2356,9 @@ export interface OverviewResponse {
 }
 
 export async function getOverview(hours = 24): Promise<OverviewResponse> {
-  return requestJson<OverviewResponse>(`/overview?hours=${hours}`)
+  // The overview is a live dashboard snapshot; never reuse the generic
+  // 30-second client cache for it. Backend applies a short 10-second cache.
+  return requestJson<OverviewResponse>(`/overview?hours=${hours}`, { cache: "no-store" })
 }
 
 // ── Kill all monitoring services ──────────────────────────────────────────
@@ -2375,6 +2379,10 @@ export async function killAllServices(): Promise<KillAllResponse> {
 
 export async function getServiceStates(): Promise<OverviewResponse["services"]> {
   return requestJson<OverviewResponse["services"]>("/monitoring/services")
+}
+
+export async function startPollingService(): Promise<OverviewResponse["services"]> {
+  return requestJson<OverviewResponse["services"]>("/monitoring/polling/start", { method: "POST" })
 }
 
 // ── Organizations (full CRUD) ─────────────────────────────────────────────

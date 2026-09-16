@@ -428,7 +428,7 @@ export default function DailyReport() {
 
         {/* ══ SECTION 2 — PERFORMANCE MONITORING ═════════════════════════ */}
         <GlassCard className="p-5 print-page">
-          <SectionTitle icon="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" title="2. Performance Monitoring" subtitle={`${d.performance.sample_count.toLocaleString()} metric samples in 24h`}/>
+          <SectionTitle icon="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" title="2. Performance Monitoring" subtitle={`${d.performance.sample_count.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} metric samples in 24h`}/>
 
           {/* Performance overview table */}
           <div className="overflow-x-auto mb-5">

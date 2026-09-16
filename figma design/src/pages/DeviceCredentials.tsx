@@ -96,7 +96,7 @@ export default function DeviceCredentials() {
                     <td className="px-4 py-3 font-display font-medium text-sm" style={{ color: 'var(--t-text)' }}>{device ? device.hostname : `Device #${item.device_id}`}</td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.credential_type}</td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.username || '—'}</td>
-                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{new Date(item.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{new Date(item.created_at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
                         <PermissionGuard permission="device_credentials:update"><button onClick={() => openEdit(item)} title="Edit" className="p-1.5 rounded transition-colors" style={{ color: 'var(--t-muted)' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--t-accent)' }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--t-muted)' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button></PermissionGuard>

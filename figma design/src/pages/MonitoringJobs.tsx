@@ -90,7 +90,7 @@ export default function MonitoringJobs() {
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.job_type}</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.schedule}</td>
                   <td className="px-4 py-3"><span className="px-2 py-1 rounded text-xs font-mono" style={{ background: item.enabled ? 'rgba(74,222,128,0.2)' : 'rgba(255,51,102,0.2)', color: item.enabled ? '#4ade80' : '#ff3366' }}>{item.enabled ? 'Enabled' : 'Disabled'}</span></td>
-                  <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.last_run ? new Date(item.last_run).toLocaleString() : '—'}</td>
+                  <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>{item.last_run ? new Date(item.last_run).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
                       <PermissionGuard permission="monitoring_jobs:update"><button onClick={() => openEdit(item)} title="Edit" className="p-1.5 rounded transition-colors" style={{ color: 'var(--t-muted)' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--t-accent)' }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--t-muted)' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button></PermissionGuard>

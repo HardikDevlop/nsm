@@ -47,7 +47,7 @@ function formatTimestamp(timestamp: string | null | undefined): string {
     if (diffMin < 60) return `${diffMin}m ago`;
     if (diffHr < 24) return `${diffHr}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
+    return date.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
   } catch {
     return 'recently';
   }

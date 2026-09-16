@@ -181,7 +181,7 @@ export default function Firewall() {
           { l: 'Critical Alerts', v: summary.blockedToday.toString(), c: '#ff3366', sub: 'From live backend' },
           { l: 'Total Alerts', v: summary.attackAttempts.toString(), c: '#ffaa00', sub: 'All time' },
           { l: 'Policy Violations', v: summary.policyViolations.toString(), c: '#7c3aed', sub: 'Unresolved' },
-          { l: 'Connections/sec', v: summary.connectionsPerSec.toLocaleString(), c: '#00d4ff', sub: 'Derived from devices' },
+          { l: 'Connections/sec', v: summary.connectionsPerSec.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }), c: '#00d4ff', sub: 'Derived from devices' },
         ].map(k => (
           <GlassCard key={k.l} className="p-4">
             <div className="font-display font-bold text-2xl transition-all" style={{ color: k.c }}>{k.v}</div>

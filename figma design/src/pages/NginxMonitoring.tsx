@@ -244,7 +244,7 @@ export default function NginxMonitoring() {
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
-          { l: 'Req/sec (est)', v: trafficStats.rps.toLocaleString(), c: '#00d4ff' },
+          { l: 'Req/sec (est)', v: trafficStats.rps.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }), c: '#00d4ff' },
           { l: 'Active Conn', v: trafficStats.activeConn.toString(), c: '#00ff88' },
           { l: 'Avg Latency', v: `${trafficStats.latency}ms`, c: '#7c3aed' },
           { l: 'Error Rate', v: `${trafficStats.errorRate}%`, c: '#ffaa00' },
@@ -314,7 +314,7 @@ export default function NginxMonitoring() {
             <div key={rc.code} className="flex items-center gap-2 py-1.5" style={{ borderBottom: '1px solid rgba(0,212,255,0.06)' }}>
               <div className="w-2 h-2 rounded-full" style={{ background: rc.color }} />
               <span className="font-mono text-sm font-semibold" style={{ color: rc.color }}>{rc.code}</span>
-              <span className="font-mono text-xs ml-auto" style={{ color: 'var(--t-muted, #8899bb)' }}>{rc.count.toLocaleString()}</span>
+              <span className="font-mono text-xs ml-auto" style={{ color: 'var(--t-muted, #8899bb)' }}>{rc.count.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</span>
               <span className="font-mono text-xs" style={{ color: rc.color }}>{rc.pct}%</span>
             </div>
           ))}

@@ -300,10 +300,10 @@ export default function SNMPMonitoringConfig() {
                       </select>
                     </td>
                     <td className="px-4 py-3 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      {m.config.last_poll_at ? new Date(m.config.last_poll_at).toLocaleString() : '—'}
+                      {m.config.last_poll_at ? new Date(m.config.last_poll_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                     </td>
                     <td className="px-4 py-3 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      {m.config.next_poll_at ? new Date(m.config.next_poll_at).toLocaleString() : '—'}
+                      {m.config.next_poll_at ? new Date(m.config.next_poll_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">

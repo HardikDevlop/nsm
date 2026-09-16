@@ -27,6 +27,7 @@ import { readViewports, centeredViewport, zoomViewport, type Viewport } from "./
 import { portEndpoint, compactPortLabel } from "./manualTopologyPorts"
 import { comparePhysicalConnection } from "./manualTopologyEvidence"
 import { useI18n } from "../i18n/I18nContext"
+import { buildLogicalTopologyGraph } from "../lib/topologyGraphBuilder"
 
 type Device = {
   id: string
@@ -1268,7 +1269,7 @@ export default function ManualTopology() {
         : await createManualTopologySnapshot(next)
       setSnapshotId(result.id)
       setChanges(result.changes ?? [])
-      setLastSaved(new Date().toLocaleTimeString())
+      setLastSaved(new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }))
       return result
     } catch {
       toast.error("Manual topology could not be saved.")
@@ -1314,7 +1315,7 @@ export default function ManualTopology() {
             const saved = await updateManualTopologySnapshot(result.id, next)
             if (active) {
               setChanges(saved.changes ?? [])
-              setLastSaved(new Date().toLocaleTimeString())
+              setLastSaved(new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }))
             }
           } catch {
             if (active) toast.error("Deleted devices could not be removed from the saved topology.")
@@ -1880,29 +1881,11 @@ export default function ManualTopology() {
     setDiscoveryBusy(true)
     toast.info("Discovery running — collecting fresh physical topology...")
     try {
-      // Reuse the same finalized/cached physical graph consumed by Network
-      // Topology. Manual Discovery must not run a second, divergent refresh
-      // assembly path.
-      let liveTopology = await getSNMPTopology(undefined, false)
-      try {
-        const cachedText = localStorage.getItem("topology-layout-cache-v2") || sessionStorage.getItem("topology-layout-cache-v2")
-        const cached = JSON.parse(cachedText || "null") as Record<string, unknown> | null
-        if (Array.isArray(cached?.nodes) && Array.isArray(cached?.links) && cached.links.length > 0) {
-          liveTopology = {
-            devices: cached.nodes.map((node: Record<string, unknown>) => ({
-              id: valueOf(node, "id"),
-              backendDeviceId: valueOf(node, "backendDeviceId", "deviceId", "device_id", "resourceId"),
-              hostname: valueOf(node, "hostname", "name", "sysName", "sys_name"),
-              ip_address: valueOf(node, "ip", "ip_address", "managementIp", "management_ip"),
-              mac_address: valueOf(node, "mac", "mac_address"),
-              type: valueOf(node, "type", "device_type"),
-              topologyNodeId: valueOf(node, "id"),
-            })),
-            links: cached.links,
-          } as typeof liveTopology
-          console.debug("MANUAL_DISCOVERY_USING_FINAL_NETWORK_GRAPH", { links: cached.links.length, nodes: cached.nodes.length })
-        }
-      } catch { /* optional cache unavailable; retain backend response */ }
+      // Use fresh backend topology evidence; the visual layout cache is not
+      // part of Manual Discovery authority.
+      const freshTopology = await getSNMPTopology(undefined, false)
+      // Discovery is deliberately independent of the visual layout cache.
+      const liveTopology: Awaited<ReturnType<typeof getSNMPTopology>> | null = freshTopology
       let canvasDevices = [...workspace.devices]
       const topologyValue = liveTopology as unknown as Record<string, unknown>
       const topologyDevices = Array.isArray(topologyValue.devices) ? topologyValue.devices as Record<string, unknown>[] : []
@@ -1918,7 +1901,19 @@ export default function ManualTopology() {
           return (id && item.id === id) || (ip && item.ip === ip) || (mac && item.mac === mac) || (name && item.name === name)
         })
       }
-      const initial = discoverPhysicalLinks(liveTopology, canvasDevices)
+      const logicalGraph = buildLogicalTopologyGraph({
+        nodes: topologyDevices.map((node) => ({
+          ...node,
+          id: String(valueOf(node, "topologyNodeId", "id", "device_id")),
+        })),
+        links: (Array.isArray(topologyValue.links) ? topologyValue.links : []).map((link) => ({
+          ...link,
+          from: String(valueOf(link, "from", "source_node", "source")),
+          to: String(valueOf(link, "to", "target_node", "target")),
+        })),
+      })
+      const logicalTopology = { ...liveTopology, devices: logicalGraph.nodes, links: logicalGraph.links }
+      const initial = discoverPhysicalLinks(logicalTopology, canvasDevices)
       for (const raw of initial.unresolved) {
         const item = matches(raw, "target")
         if (!item || canvasDevices.some((d) => normId(d.backendId) === normId(valueOf(item, "id", "device_id")))) continue
@@ -1929,7 +1924,7 @@ export default function ManualTopology() {
         const ip = String(valueOf(item, "ip_address", "ip", "management_ip") ?? "")
         canvasDevices.push({ id: `device-${backendId}`, backendId, name, subtitle: ip, ipAddress: ip || undefined, macAddress: String(valueOf(item, "mac_address", "mac") ?? "") || undefined, type, tone: toneFor(type, canvasDevices.length), status: String(valueOf(item, "status") ?? "unknown"), model: String(valueOf(item, "model") ?? "") || undefined, x: 220 + (canvasDevices.length % 4) * 260, y: 180 + Math.floor(canvasDevices.length / 4) * 190, ports: [] })
       }
-      const discovered = discoverPhysicalLinks(liveTopology, canvasDevices)
+      const discovered = discoverPhysicalLinks(logicalTopology, canvasDevices)
       console.debug("MANUAL_DISCOVERY_FROM_NETWORK_TOPOLOGY", {
         networkTopologyLinks: Array.isArray((liveTopology as unknown as Record<string, unknown>).links) ? ((liveTopology as unknown as Record<string, unknown>).links as unknown[]).length : 0,
         mappedLinks: discovered.links.length,
@@ -1995,7 +1990,7 @@ export default function ManualTopology() {
     const value = evidenceValue(change.observed, side === "source"
       ? ["source_port", "from_port", "port"]
       : ["target_port", "to_port", "remote_port"])
-    return value === "Not discovered" && isPartialDiscovery(change) ? "PORT 1" : value
+    return value
   }
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -2950,7 +2945,7 @@ export default function ManualTopology() {
               : "xl:grid-cols-1"
       }`}>
         {devicesPanelOpen && (
-        <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/[.1] bg-[#11161a] p-3">
+        <aside className="flex h-full min-h-0 flex-col overflow-y-auto rounded-xl border border-white/[.1] bg-[#11161a] p-3">
           <div className="mb-2 flex shrink-0 justify-end">
             <button
               className="tool"
@@ -3084,7 +3079,7 @@ export default function ManualTopology() {
               </button>
             ))}
           </div>
-          <div className="mt-3 min-h-[320px] flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+          <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
             {devicePanelTab === "canvas" &&
               visibleDevices.map((device) => (
                 <div
@@ -3163,7 +3158,7 @@ export default function ManualTopology() {
                       EDIT
                     </button>
                     <button
-                      className="tool h-7 px-2 text-[8px]"
+                      className="port-map-action tool h-7 min-w-full px-2 text-[8px] font-semibold"
                       onClick={() =>
                         navigate(`/manual-topology/device/${device.id}/ports`)
                       }

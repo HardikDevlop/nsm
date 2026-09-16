@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from backend.utils.time import utc_now
 
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,7 @@ from backend.services.discovery import _ping
 
 
 def _record_status_change(db: Session, device: Device, new_status: str, reason: str) -> None:
-    now = datetime.utcnow()
+    now = utc_now()
     old_status = device.status
     if old_status == new_status:
         return
@@ -48,7 +48,7 @@ def run_monitoring_check(
         reachable = _ping(device.ip_address, timeout_ms)
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
         if reachable:
-            device.last_seen = datetime.utcnow()
+            device.last_seen = utc_now()
             _record_status_change(db, device, "online", "ICMP check succeeded")
             db.add(DeviceMetric(device_id=device.id, latency=latency_ms, packet_loss=0.0))
         else:

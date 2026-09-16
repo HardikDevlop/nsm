@@ -33,7 +33,7 @@ function formatMetricValue(key: string, value: any): string {
     key.includes("last_poll")
   ) {
     const date = new Date(value)
-    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
   }
   return formatValue(value)
 }
@@ -242,7 +242,7 @@ export default function SNMPCollectorDataCard({
               className="ml-auto font-mono text-[10px]"
               style={{ color: "#667799" }}
             >
-              LAST POLL · {new Date(collector.timestamp).toLocaleString()}
+              LAST POLL · {new Date(collector.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
             </span>
           )}
           {name === "mac_table" && onRefresh && (

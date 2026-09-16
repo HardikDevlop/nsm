@@ -332,7 +332,7 @@ export default function Forensics() {
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{t.dst}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: '#7c3aed' }}>{t.proto}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{t.dur}</td>
-                        <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00d4ff' }}>{t.pkts.toLocaleString()}</td>
+                        <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00d4ff' }}>{t.pkts.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: '#00ff88' }}>{t.bytes}</td>
                         <td className="px-4 py-3">
                           <span className="font-mono text-xs px-2 py-0.5 rounded truncate" style={{ color: '#ff3366', background: 'rgba(255,51,102,0.12)' }}>{t.flags}</span>

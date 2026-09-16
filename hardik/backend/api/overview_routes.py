@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from backend.database.session import get_db
 from backend.dependencies import require_permission
+from backend.services.device_health import derive_device_health
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +150,14 @@ def get_overview(
     # ── build device list ──────────────────────────────────────────────────
     devices_out: list[dict[str, Any]] = []
     total = online = offline = 0
+    health_counts = {state: 0 for state in ("online", "offline", "degraded", "stale", "unknown")}
     for dev in device_rows:
         total += 1
-        if dev.status == "online":   online  += 1
-        elif dev.status == "offline": offline += 1
+        health = derive_device_health(db, dev)
+        derived_status = health["status"]
+        health_counts[derived_status] += 1
+        if derived_status == "online": online += 1
+        elif derived_status == "offline": offline += 1
 
         met = metric_by_device.get(dev.id)
         interface_count = iface_counts_by_device.get(dev.id)
@@ -162,6 +167,7 @@ def get_overview(
             "ip_address":       dev.ip_address,
             "mac_address":      dev.mac_address,
             "status":           dev.status,
+            "health":           health,
             "monitoring_status": dev.monitoring_status,
             "vendor":           dev.vendor.vendor_name if dev.vendor else None,
             "device_type":      dev.device_type.name if dev.device_type else None,
@@ -387,6 +393,7 @@ def get_overview(
             "online_devices":   online,
             "offline_devices":  offline,
             "warning_devices":  total - online - offline,
+            "health_counts":     health_counts,
             "active_alerts":    active_alerts,
             "critical_alerts":  critical_alerts,
             "recent_events":    len(event_rows),
@@ -400,7 +407,10 @@ def get_overview(
     }
     with _overview_cache_lock:
         _overview_cache[hours] = (now_ts, payload)
-    set_json(redis_key, payload)
+    # Keep the dashboard snapshot short-lived. The in-process cache is 10s;
+    # using the global Redis TTL here could otherwise serve an old overview
+    # long after a new poll has been persisted.
+    set_json(redis_key, payload, ttl_seconds=_OVERVIEW_CACHE_TTL_SECONDS)
     return payload
 
 
@@ -493,6 +503,25 @@ def get_service_states_endpoint(
     return _get_service_states(request)
 
 
+@router.post("/monitoring/polling/start")
+async def start_polling_service(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_permission("dashboard:read")),
+) -> dict[str, Any]:
+    """Recover the scheduler when the API process is alive but polling was stopped.
+
+    Only enabled configs are restored; explicitly disabled jobs remain disabled.
+    """
+    from backend.services.snmp_polling import get_polling_scheduler
+
+    if not getattr(request.app.state, "scheduler_lease_owned", False):
+        return _get_service_states(request)
+    scheduler = await get_polling_scheduler()
+    request.app.state.snmp_polling = scheduler
+    return _get_service_states(request)
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -536,6 +565,16 @@ def _get_service_states(request: Request | None = None) -> dict[str, Any]:
         "snmp_polling": {
             "running":   snmp_running,
             "job_count": snmp_jobs,
+            "scheduler_running": snmp_running,
+            "scheduler_state": "running" if snmp_running else "stopped",
+            "lease_owned": bool(request is not None and getattr(request.app.state, "scheduler_lease_owned", False)),
+            "registered_jobs": snmp_jobs,
+            "active_jobs": getattr(polling, "active_jobs", 0) if polling else 0,
+            "last_job_started_at": getattr(polling, "last_job_started_at", None).isoformat().replace("+00:00", "Z") if getattr(polling, "last_job_started_at", None) else None,
+            "last_job_finished_at": getattr(polling, "last_job_finished_at", None).isoformat().replace("+00:00", "Z") if getattr(polling, "last_job_finished_at", None) else None,
+            "last_job_success_at": getattr(polling, "last_job_success_at", None).isoformat().replace("+00:00", "Z") if getattr(polling, "last_job_success_at", None) else None,
+            "last_job_failure_at": getattr(polling, "last_job_failure_at", None).isoformat().replace("+00:00", "Z") if getattr(polling, "last_job_failure_at", None) else None,
+            "recent_failure_count": getattr(polling, "recent_failure_count", 0) if polling else 0,
             "label":     "SNMP Polling Engine (APScheduler)",
         },
         "realtime_monitor": {

@@ -232,7 +232,7 @@ export default function SNMPInterfaceDetails() {
           <div className="flex flex-col gap-2 min-w-[200px]">
             <SNMPStatusBadge status="supported" />
             <div className="font-mono text-xs" style={{ color: '#667799' }}>
-              Last Poll: {interfaceInfo.last_updated ? new Date(interfaceInfo.last_updated).toLocaleString() : '—'}
+              Last Poll: {interfaceInfo.last_updated ? new Date(interfaceInfo.last_updated).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
             </div>
           </div>
         </div>
@@ -342,7 +342,7 @@ export default function SNMPInterfaceDetails() {
                 {[...(history?.history ?? []).reverse()].map((row, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
                     <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      {new Date(row.timestamp).toLocaleString()}
+                      {new Date(row.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#00ff88' }}>
                       {row.rx_mbps?.toFixed(2)} Mbps

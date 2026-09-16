@@ -280,9 +280,9 @@ export default function IncidentManagement() {
                 {item.sla ? (
                   <div className="mt-1">
                     Response deadline{" "}
-                    {new Date(item.sla.response_deadline).toLocaleString()} ·
+                    {new Date(item.sla.response_deadline).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} ·
                     Resolution deadline{" "}
-                    {new Date(item.sla.resolution_deadline).toLocaleString()} ·{" "}
+                    {new Date(item.sla.resolution_deadline).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} ·{" "}
                     {item.sla.paused_at
                       ? "Paused by configured state"
                       : "Running"}

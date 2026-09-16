@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { formatISTTime } from '../../../time'
 
 interface DataPoint {
   timestamp: string
@@ -24,7 +25,7 @@ interface SNMPMetricChartProps {
 function formatTime(ts: string): string {
   try {
     const d = new Date(ts)
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+    return formatISTTime(d, false)
   } catch {
     return ''
   }

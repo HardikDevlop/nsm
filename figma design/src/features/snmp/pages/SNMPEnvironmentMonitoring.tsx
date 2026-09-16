@@ -235,7 +235,7 @@ export default function SNMPEnvironmentMonitoring() {
                     style={{ borderTop: '1px solid rgba(0,212,255,0.06)' }}
                   >
                     <span className="font-mono text-[9px]" style={{ color: '#445566' }}>
-                      {new Date(s.last_updated).toLocaleTimeString()}
+                      {new Date(s.last_updated).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                     </span>
                     <span className="font-mono text-[10px] flex items-center gap-1" style={{ color: '#00d4ff' }}>
                       History

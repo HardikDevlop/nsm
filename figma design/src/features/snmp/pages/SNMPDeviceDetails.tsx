@@ -43,7 +43,7 @@ function formatMetricValue(key: string, value: any): string {
   if (key.includes('percent')) return `${Number(value).toFixed(1)}%`
   if (key.includes('timestamp') || key.includes('polled_at') || key.includes('last_poll')) {
     const date = new Date(value)
-    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
   }
   return formatValue(value)
 }
@@ -85,7 +85,7 @@ function CollectorDataCard({ name, collector }: { name: string; collector: any }
             style={{ background: collector?.supported ? 'rgba(0,255,136,0.12)' : 'rgba(255,51,102,0.12)', color }}>
             {collector?.supported ? 'SUPPORTED' : 'NOT SUPPORTED'}
           </span>
-          {collector?.timestamp && <span className="font-mono text-[10px] ml-auto" style={{ color: '#667799' }}>{new Date(collector.timestamp).toLocaleString()}</span>}
+          {collector?.timestamp && <span className="font-mono text-[10px] ml-auto" style={{ color: '#667799' }}>{new Date(collector.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</span>}
         </div>
         {!collector?.supported && collector?.reason && (
           <div className="font-mono text-xs mt-2" style={{ color: '#ffaa00' }}>{collector.reason}</div>
@@ -359,8 +359,8 @@ export default function SNMPDeviceDetails() {
             <span style={{ color: '#00ff88' }}>
               Stored SNMP data active
             </span>
-            {latestMetrics?.cpu?.polled_at && <span style={{ color: '#8899bb' }}>CPU {new Date(latestMetrics.cpu.polled_at).toLocaleString()}</span>}
-            {latestMetrics?.memory?.polled_at && <span style={{ color: '#8899bb' }}>Memory {new Date(latestMetrics.memory.polled_at).toLocaleString()}</span>}
+            {latestMetrics?.cpu?.polled_at && <span style={{ color: '#8899bb' }}>CPU {new Date(latestMetrics.cpu.polled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</span>}
+            {latestMetrics?.memory?.polled_at && <span style={{ color: '#8899bb' }}>Memory {new Date(latestMetrics.memory.polled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</span>}
           </div>
         </GlassCard>
       )}
@@ -441,7 +441,7 @@ export default function SNMPDeviceDetails() {
                   <div>
                     <div className="font-mono text-[10px] mb-1" style={{ color: '#667799' }}>Last Seen</div>
                     <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>
-                      {new Date(device.last_seen).toLocaleString()}
+                      {new Date(device.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                     </div>
                   </div>
                 )}
@@ -636,10 +636,10 @@ export default function SNMPDeviceDetails() {
                           </select>
                         </td>
                         <td className="px-4 py-3 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                          {m.config.last_poll_at ? new Date(m.config.last_poll_at).toLocaleString() : '—'}
+                          {m.config.last_poll_at ? new Date(m.config.last_poll_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                         </td>
                         <td className="px-4 py-3 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                          {m.config.next_poll_at ? new Date(m.config.next_poll_at).toLocaleString() : '—'}
+                          {m.config.next_poll_at ? new Date(m.config.next_poll_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
@@ -697,7 +697,7 @@ export default function SNMPDeviceDetails() {
                 <div>
                   <div className="font-display font-bold text-sm tracking-wider neon-cyan">CPU</div>
                   <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
-                    Current: {latest_metrics.cpu.current_usage?.toFixed(1)}% · Last: {latest_metrics.cpu.polled_at ? new Date(latest_metrics.cpu.polled_at).toLocaleString() : '—'}
+                    Current: {latest_metrics.cpu.current_usage?.toFixed(1)}% · Last: {latest_metrics.cpu.polled_at ? new Date(latest_metrics.cpu.polled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                   </div>
                 </div>
                 <div className="font-mono text-lg font-semibold" style={{ color: '#00d4ff' }}>
@@ -842,7 +842,7 @@ export default function SNMPDeviceDetails() {
                           {iface.errors ? `${iface.errors}` : '0'}
                         </td>
                         <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                          {iface.last_poll ? new Date(iface.last_poll).toLocaleTimeString() : '—'}
+                          {iface.last_poll ? new Date(iface.last_poll).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                         </td>
                       </tr>
                     ))}
@@ -873,7 +873,7 @@ export default function SNMPDeviceDetails() {
                       {sensor.value !== null ? `${sensor.value.toFixed(1)} ${sensor.unit || ''}` : '—'}
                     </div>
                     <div className="font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      Type: {sensor.sensor_type} · {sensor.last_poll ? new Date(sensor.last_poll).toLocaleTimeString() : '—'}
+                      Type: {sensor.sensor_type} · {sensor.last_poll ? new Date(sensor.last_poll).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}
                     </div>
                   </div>
                 ))}
@@ -904,7 +904,7 @@ export default function SNMPDeviceDetails() {
                   {polling_history.map(p => (
                     <tr key={p.id} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
                       <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                        {new Date(p.timestamp).toLocaleString()}
+                        {new Date(p.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>{p.collector.toUpperCase()}</td>
                       <td className="px-4 py-2">
