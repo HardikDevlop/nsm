@@ -27,7 +27,7 @@ import { readViewports, centeredViewport, zoomViewport, type Viewport } from "./
 import { portEndpoint, compactPortLabel } from "./manualTopologyPorts"
 import { comparePhysicalConnection } from "./manualTopologyEvidence"
 import { useI18n } from "../i18n/I18nContext"
-import { buildLogicalTopologyGraph } from "../lib/topologyGraphBuilder"
+import { buildLogicalTopologyGraph, collectTopologyDevice, makeNode } from "../lib/topologyGraphBuilder"
 
 type Device = {
   id: string
@@ -1901,16 +1901,14 @@ export default function ManualTopology() {
           return (id && item.id === id) || (ip && item.ip === ip) || (mac && item.mac === mac) || (name && item.name === name)
         })
       }
+      const discoveryInventory = realDevices as unknown as DeviceRecord[]
+      const discoveryNodes = discoveryInventory.map((item, index) => makeNode(item, `inventory-${index}`))
+      const collections = await Promise.all(discoveryNodes.map((node) => collectTopologyDevice(node, true)))
       const logicalGraph = buildLogicalTopologyGraph({
-        nodes: topologyDevices.map((node) => ({
-          ...node,
-          id: String(valueOf(node, "topologyNodeId", "id", "device_id")),
-        })),
-        links: (Array.isArray(topologyValue.links) ? topologyValue.links : []).map((link) => ({
-          ...link,
-          from: String(valueOf(link, "from", "source_node", "source")),
-          to: String(valueOf(link, "to", "target_node", "target")),
-        })),
+        collections,
+        inventory: discoveryInventory,
+        topologyNodes: topologyDevices,
+        topologyLinks: Array.isArray(topologyValue.links) ? topologyValue.links : [],
       })
       const logicalTopology = { ...liveTopology, devices: logicalGraph.nodes, links: logicalGraph.links }
       const initial = discoverPhysicalLinks(logicalTopology, canvasDevices)

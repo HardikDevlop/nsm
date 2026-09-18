@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from threading import Lock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 from backend.database.session import get_db
 from backend.dependencies import require_permission
 from backend.services.device_health import derive_device_health
+from backend.models.snmp import PollStatus
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,152 @@ _OVERVIEW_CACHE_TTL_SECONDS = 10
 _OVERVIEW_HISTORY_MAX_ROWS = 5000
 _overview_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 _overview_cache_lock = Lock()
+
+_POLLING_FAILURE_STATUSES = frozenset({
+    PollStatus.TIMEOUT.value,
+    PollStatus.AUTHENTICATION_FAILED.value,
+    PollStatus.DEVICE_UNREACHABLE.value,
+    PollStatus.OID_NOT_SUPPORTED.value,
+    PollStatus.ERROR.value,
+})
+_POLLING_UNSUPPORTED_STATUSES = frozenset({
+    PollStatus.NOT_SUPPORTED.value,
+    PollStatus.OID_NOT_SUPPORTED.value,
+})
+
+
+def _classify_polling_rows(rows: list[Any]) -> dict[str, Any]:
+    """Classify persisted attempts without conflating capability with failure."""
+    counts = {
+        "successful_attempts": 0, "unsupported_attempts": 0,
+        "no_data_attempts": 0, "failed_attempts": 0,
+        "unknown_attempts": 0,
+    }
+    last: dict[str, datetime | None] = {
+        "success": None, "failure": None, "unsupported": None,
+        "no_data": None, "unknown": None,
+    }
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            _overview_timestamp(getattr(row, "created_at", None))
+            or datetime.min.replace(tzinfo=timezone.utc),
+            getattr(row, "id", 0) or 0,
+        ),
+        reverse=True,
+    )
+    for row in ordered:
+        status = getattr(row, "status", None)
+        if status == PollStatus.SUCCESS.value:
+            category = "successful_attempts"
+            last_key = "success"
+        elif status in _POLLING_UNSUPPORTED_STATUSES:
+            category = "unsupported_attempts"
+            last_key = "unsupported"
+        elif status == PollStatus.NO_DATA.value:
+            category = "no_data_attempts"
+            last_key = "no_data"
+        elif status in _POLLING_FAILURE_STATUSES:
+            category = "failed_attempts"
+            last_key = "failure"
+        else:
+            category = "unknown_attempts"
+            last_key = "unknown"
+        counts[category] += 1
+        if last[last_key] is None and getattr(row, "created_at", None) is not None:
+            last[last_key] = row.created_at
+
+    eligible = counts["successful_attempts"] + counts["failed_attempts"]
+    result = {**counts, "total_attempts": sum(counts.values())}
+    result["success_rate"] = (
+        counts["successful_attempts"] / eligible if eligible else None
+    )
+    for key, value in last.items():
+        result[f"last_{key}"] = value.isoformat() if value else None
+    return result
+
+
+def _overview_timestamp(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _capability_entries(capability: Any, module: str, list_key: str) -> list[Any]:
+    detail = capability.capability_detail if capability is not None else {}
+    item = detail.get(module) if isinstance(detail, dict) else None
+    if not isinstance(item, dict) or item.get("collection_status") != "SUCCESS":
+        return []
+    data = item.get("data")
+    entries = data.get(list_key) if isinstance(data, dict) else None
+    return entries if isinstance(entries, list) else []
+
+
+def _overview_network_counts(capabilities: list[Any]) -> dict[str, int]:
+    """Aggregate successful, scheduler-authoritative capability snapshots."""
+    neighbors: dict[tuple[Any, ...], str] = {}
+    for cap in capabilities:
+        for module in ("lldp", "cdp"):
+            for entry in _capability_entries(cap, module, "neighbors"):
+                if not isinstance(entry, dict):
+                    continue
+                key = (cap.device_id,
+                       entry.get("local_port") or entry.get("local_interface"),
+                       entry.get("remote_device") or entry.get("device_id") or entry.get("device"),
+                       entry.get("remote_port") or entry.get("remote_interface") or entry.get("port"),
+                       entry.get("mgmt_address") or entry.get("ip_address"))
+                if any(value is not None for value in key[1:]) and neighbors.get(key) != "lldp":
+                    neighbors[key] = module
+    return {
+        "lldp_neighbors": len(neighbors),
+        "vlan_count": sum(len(_capability_entries(c, "vlan", "vlans")) for c in capabilities),
+        "routing_entries": sum(len(_capability_entries(c, "routing", "routes")) for c in capabilities),
+        "arp_entries": sum(len(_capability_entries(c, "arp", "entries")) for c in capabilities),
+        "mac_entries": sum(len(_capability_entries(c, "mac_table", "entries")) for c in capabilities),
+    }
+
+
+def _select_current_interfaces(rows: list[Any], intervals: dict[int, int], now: datetime) -> list[dict[str, Any]]:
+    """Select one deterministic, freshness-classified row per device/interface."""
+    selected: dict[tuple[int, int], Any] = {}
+    for row in sorted(rows, key=lambda item: (_overview_timestamp(item.polled_at) or datetime.min.replace(tzinfo=timezone.utc), item.id), reverse=True):
+        selected.setdefault((row.device_id, row.interface_id), row)
+
+    result: list[dict[str, Any]] = []
+    for row in selected.values():
+        measured_at = _overview_timestamp(row.polled_at)
+        interval = intervals.get(row.device_id)
+        age = max(0.0, (now - measured_at).total_seconds()) if measured_at else None
+        fresh = measured_at is not None and interval is not None and age <= interval * 3
+        result.append({
+            "device_id": row.device_id,
+            "interface_id": row.interface_id,
+            "name": row.name,
+            "oper_status": row.oper_status,
+            "admin_status": row.admin_status,
+            "speed_bps": row.speed_bps,
+            "rx_mbps": row.rx_mbps,
+            "tx_mbps": row.tx_mbps,
+            "errors": row.errors,
+            "discards": row.discards,
+            "rx_packets": row.rx_packets,
+            "tx_packets": row.tx_packets,
+            "utilization_percent": row.utilization_percent,
+            "polled_at": measured_at.isoformat() if measured_at else None,
+            "freshness": "fresh" if fresh else ("stale" if measured_at else "missing"),
+            "freshness_age_seconds": age,
+            "freshness_interval_seconds": interval,
+        })
+    return result
+
+
+def _aggregate_current_traffic(rows: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    fresh = [row for row in rows if row["freshness"] == "fresh"]
+    rx = [row["rx_mbps"] for row in fresh if row["rx_mbps"] is not None]
+    tx = [row["tx_mbps"] for row in fresh if row["tx_mbps"] is not None]
+    return (sum(rx) if rx else None, sum(tx) if tx else None)
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +217,9 @@ def get_overview(
     from backend.models.snmp import (  # noqa: PLC0415
         LatestCPU, LatestMemory, LatestStorage, LatestInterface,
         LatestEnvironment, InterfaceStatistic, PollingHistory,
-        MonitoringConfig, OIDCache, LLDPNeighbor, VLANInformation,
-        RoutingEntry,
+        MonitoringConfig, OIDCache,
     )
+    from backend.models.identity import DeviceCapabilities  # noqa: PLC0415
 
     now_ts = datetime.utcnow().timestamp()
     redis_key = f"nms:overview:v1:hours:{hours}"
@@ -256,13 +403,25 @@ def get_overview(
         LatestStorage.device_id, LatestStorage.mount_name,
         LatestStorage.utilization_percent, LatestStorage.polled_at,
     )).filter(LatestStorage.device_id.in_(device_ids)).all() if device_ids else []
-    latest_interfaces = db.query(LatestInterface).options(load_only(
+    latest_interface_rows = db.query(LatestInterface).options(load_only(
+        LatestInterface.id,
         LatestInterface.device_id, LatestInterface.interface_id, LatestInterface.name,
         LatestInterface.oper_status, LatestInterface.admin_status, LatestInterface.speed_bps,
         LatestInterface.rx_mbps, LatestInterface.tx_mbps, LatestInterface.errors,
         LatestInterface.discards, LatestInterface.rx_packets, LatestInterface.tx_packets,
         LatestInterface.utilization_percent, LatestInterface.polled_at,
-    )).filter(LatestInterface.device_id.in_(device_ids)).all() if device_ids else []
+    )).filter(LatestInterface.device_id.in_(device_ids)).order_by(
+        LatestInterface.polled_at.desc(), LatestInterface.id.desc()
+    ).all() if device_ids else []
+    interface_configs = db.query(MonitoringConfig.device_id, MonitoringConfig.interval_seconds).filter(
+        MonitoringConfig.device_id.in_(device_ids),
+        MonitoringConfig.module_name == "interfaces",
+        MonitoringConfig.enabled.is_(True),
+    ).all() if device_ids else []
+    interface_intervals: dict[int, int] = {}
+    for config in interface_configs:
+        current = interface_intervals.get(config.device_id)
+        interface_intervals[config.device_id] = min(current, config.interval_seconds) if current is not None else config.interval_seconds
     latest_environment = db.query(LatestEnvironment).options(load_only(
         LatestEnvironment.device_id, LatestEnvironment.sensor_name,
         LatestEnvironment.sensor_type, LatestEnvironment.value,
@@ -277,7 +436,7 @@ def get_overview(
     ).limit(_OVERVIEW_HISTORY_MAX_ROWS).all()
     interface_stats.reverse()
     polling_rows = db.query(PollingHistory).options(load_only(
-        PollingHistory.device_id, PollingHistory.created_at,
+        PollingHistory.id, PollingHistory.device_id, PollingHistory.created_at,
         PollingHistory.status, PollingHistory.collector, PollingHistory.error,
     )).filter(PollingHistory.created_at >= since_24h).order_by(PollingHistory.created_at.desc()).all()
     device_by_id = {device.id: device for device in device_rows}
@@ -296,17 +455,12 @@ def get_overview(
             "value": row.value, "unit": row.unit, "status": row.status,
             "polled_at": row.polled_at.isoformat() if row.polled_at else None,
         })
-    interface_rows = [{
-        "device_id": row.device_id,
-        "device_name": device_by_id.get(row.device_id).hostname if device_by_id.get(row.device_id) else None,
-        "interface_id": row.interface_id, "name": row.name,
-        "oper_status": row.oper_status, "admin_status": row.admin_status,
-        "speed_bps": row.speed_bps, "rx_mbps": row.rx_mbps, "tx_mbps": row.tx_mbps,
-        "errors": row.errors, "discards": row.discards,
-        "rx_packets": row.rx_packets, "tx_packets": row.tx_packets,
-        "utilization_percent": row.utilization_percent,
-        "polled_at": row.polled_at.isoformat() if row.polled_at else None,
-    } for row in latest_interfaces]
+    interface_rows = _select_current_interfaces(
+        latest_interface_rows, interface_intervals, datetime.now(timezone.utc)
+    )
+    for row in interface_rows:
+        row["device_name"] = device_by_id.get(row["device_id"]).hostname if device_by_id.get(row["device_id"]) else None
+    current_rx, current_tx = _aggregate_current_traffic(interface_rows)
     latest_poll_by_device: dict[int, dict[str, Any]] = {}
     for row in polling_rows:
         latest_poll_by_device.setdefault(row.device_id, {
@@ -315,25 +469,28 @@ def get_overview(
         })
     top_devices: dict[int, dict[str, Any]] = {}
     for row in interface_rows:
+        if row["freshness"] != "fresh":
+            continue
         item = top_devices.setdefault(row["device_id"], {
-            "device_id": row["device_id"], "device_name": row["device_name"], "rx_mbps": 0, "tx_mbps": 0,
+            "device_id": row["device_id"], "device_name": row["device_name"], "rx_mbps": None, "tx_mbps": None,
         })
-        item["rx_mbps"] += row["rx_mbps"] or 0
-        item["tx_mbps"] += row["tx_mbps"] or 0
+        if row["rx_mbps"] is not None:
+            item["rx_mbps"] = (item["rx_mbps"] or 0) + row["rx_mbps"]
+        if row["tx_mbps"] is not None:
+            item["tx_mbps"] = (item["tx_mbps"] or 0) + row["tx_mbps"]
     alert_counts = {severity: sum(1 for alert in alert_rows if alert.severity == severity) for severity in ("critical", "high", "medium", "low", "warning", "info")}
     type_counts: dict[str, int] = {}
     for device in device_rows:
         type_name = device.device_type.name if device.device_type else "Other"
         type_counts[type_name] = type_counts.get(type_name, 0) + 1
     dashboard_counts = db.query(
-        db.query(func.count(MonitoringConfig.id)).filter(MonitoringConfig.enabled.is_(True)).scalar_subquery().label("active_jobs"),
+        db.query(func.count(MonitoringConfig.id)).filter(MonitoringConfig.enabled.is_(True)).scalar_subquery().label("configured_jobs"),
         db.query(func.count(OIDCache.id)).filter(OIDCache.supported.is_(False)).scalar_subquery().label("unsupported_oids"),
     ).one()
-    network_counts = db.query(
-        db.query(func.count(LLDPNeighbor.id)).scalar_subquery().label("lldp_neighbors"),
-        db.query(func.count(VLANInformation.id)).scalar_subquery().label("vlan_count"),
-        db.query(func.count(RoutingEntry.id)).scalar_subquery().label("routing_entries"),
-    ).one()
+    capabilities = db.query(DeviceCapabilities).filter(
+        DeviceCapabilities.device_id.in_(device_ids),
+    ).all() if device_ids else []
+    network_counts = _overview_network_counts(capabilities)
     normalized = {
         "devices": {
             str(device.id): {
@@ -348,23 +505,26 @@ def get_overview(
         },
         "interfaces": interface_rows,
         "traffic_history": [{
-            "timestamp": row.created_at.isoformat() if row.created_at else None,
+            "timestamp": _overview_timestamp(row.created_at).isoformat() if row.created_at else None,
             "device_id": row.device_id, "rx_mbps": row.rx_mbps, "tx_mbps": row.tx_mbps,
             "utilization_percent": row.utilization_percent,
         } for row in interface_stats],
         "traffic": {
-            "rx_mbps": sum(row["rx_mbps"] or 0 for row in interface_rows),
-            "tx_mbps": sum(row["tx_mbps"] or 0 for row in interface_rows),
+            "rx_mbps": current_rx,
+            "tx_mbps": current_tx,
+            "fresh_interface_count": sum(1 for row in interface_rows if row["freshness"] == "fresh"),
+            "interface_count": len(interface_rows),
             "top_devices": sorted(top_devices.values(), key=lambda item: item["rx_mbps"] + item["tx_mbps"], reverse=True)[:8],
             "top_interfaces": sorted(interface_rows, key=lambda item: (item["rx_mbps"] or 0) + (item["tx_mbps"] or 0), reverse=True)[:8],
         },
         "polling": {
-            "success": sum(1 for row in polling_rows if row.status == "success"),
-            "failure": sum(1 for row in polling_rows if row.status != "success"),
-            "last_success": next((row.created_at.isoformat() for row in polling_rows if row.status == "success" and row.created_at), None),
-            "last_failure": next((row.created_at.isoformat() for row in polling_rows if row.status != "success" and row.created_at), None),
-            "active_jobs": dashboard_counts.active_jobs,
-            "collector_failures": sum(1 for row in polling_rows if row.status not in ("success", "no_data")),
+            **(polling_summary := _classify_polling_rows(polling_rows)),
+            "success": polling_summary["successful_attempts"],
+            "failure": polling_summary["failed_attempts"],
+            "active_jobs": dashboard_counts.configured_jobs,
+            "configured_jobs": dashboard_counts.configured_jobs,
+            "enabled_jobs": dashboard_counts.configured_jobs,
+            "collector_failures": polling_summary["failed_attempts"],
             "unsupported_oids": dashboard_counts.unsupported_oids,
         },
         "interface_summary": {
@@ -377,10 +537,12 @@ def get_overview(
         "alerts_by_severity": alert_counts,
         "device_types": type_counts,
         "network": {
-            "lldp_neighbors": network_counts.lldp_neighbors,
-            "vlan_count": network_counts.vlan_count,
-            "routing_entries": network_counts.routing_entries,
-            "arp_entries": None, "mac_entries": None, "topology_nodes": len(device_rows),
+            "lldp_neighbors": network_counts["lldp_neighbors"],
+            "vlan_count": network_counts["vlan_count"],
+            "routing_entries": network_counts["routing_entries"],
+            "arp_entries": network_counts["arp_entries"],
+            "mac_entries": network_counts["mac_entries"],
+            "topology_nodes": len(device_rows),
         },
     }
 
@@ -531,19 +693,29 @@ def _get_service_states(request: Request | None = None) -> dict[str, Any]:
     # SNMP polling
     snmp_running = False
     snmp_jobs    = 0
+    lease_owned = False
+    polling = None
+    registered_job_ids: list[str] = []
+    registered_job_details: list[dict[str, Any]] = []
     try:
         if request is not None:
             polling = getattr(request.app.state, "snmp_polling", None)
+            lease_owned = bool(getattr(request.app.state, "scheduler_lease_owned", False))
             if polling is not None and polling.scheduler is not None:
                 snmp_running = polling.scheduler.running
-                snmp_jobs    = len(polling.scheduler.get_jobs())
+                jobs = polling.scheduler.get_jobs()
+                snmp_jobs = len(jobs)
+                registered_job_ids, registered_job_details = _registered_job_observability(jobs)
         else:
             # Called from overview (no request ref) — try importing app
             from backend.main import app  # noqa: PLC0415
             polling = getattr(app.state, "snmp_polling", None)
+            lease_owned = bool(getattr(app.state, "scheduler_lease_owned", False))
             if polling is not None and polling.scheduler is not None:
                 snmp_running = polling.scheduler.running
-                snmp_jobs    = len(polling.scheduler.get_jobs())
+                jobs = polling.scheduler.get_jobs()
+                snmp_jobs = len(jobs)
+                registered_job_ids, registered_job_details = _registered_job_observability(jobs)
     except Exception:
         pass
 
@@ -567,8 +739,10 @@ def _get_service_states(request: Request | None = None) -> dict[str, Any]:
             "job_count": snmp_jobs,
             "scheduler_running": snmp_running,
             "scheduler_state": "running" if snmp_running else "stopped",
-            "lease_owned": bool(request is not None and getattr(request.app.state, "scheduler_lease_owned", False)),
+            "lease_owned": lease_owned,
             "registered_jobs": snmp_jobs,
+            "registered_job_ids": registered_job_ids,
+            "registered_job_details": registered_job_details,
             "active_jobs": getattr(polling, "active_jobs", 0) if polling else 0,
             "last_job_started_at": getattr(polling, "last_job_started_at", None).isoformat().replace("+00:00", "Z") if getattr(polling, "last_job_started_at", None) else None,
             "last_job_finished_at": getattr(polling, "last_job_finished_at", None).isoformat().replace("+00:00", "Z") if getattr(polling, "last_job_finished_at", None) else None,
@@ -585,6 +759,22 @@ def _get_service_states(request: Request | None = None) -> dict[str, Any]:
         },
         "any_running": snmp_running or monitor_running,
     }
+
+
+def _registered_job_observability(jobs: list[Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Extract safe metadata from live APScheduler jobs without side effects."""
+    details: list[dict[str, Any]] = []
+    for job in jobs:
+        args = list(getattr(job, "args", ()) or ())
+        details.append({
+            "job_id": str(getattr(job, "id", "")),
+            "next_run_at": getattr(job, "next_run_time", None).isoformat() if getattr(job, "next_run_time", None) else None,
+            "config_id": args[3] if len(args) > 3 else None,
+            "device_id": args[0] if len(args) > 0 else None,
+            "module_name": args[1] if len(args) > 1 else None,
+        })
+    details.sort(key=lambda item: item["job_id"])
+    return [item["job_id"] for item in details], details
 
 
 # ---------------------------------------------------------------------------

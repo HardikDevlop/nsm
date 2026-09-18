@@ -171,6 +171,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20260902_0043_knowledge_relationships_usefulness", description="Add Knowledge change, CI, related article and feedback relationships"),
     Migration(migration_id="20260902_0044_syslog_backend_readiness", description="Complete Syslog receiver, parsing, filtering, rules and retention fields"),
     Migration(migration_id="20260910_0045_snmp_scalability_indexes", description="Add composite indexes for SNMP history and active-alert hot queries"),
+    Migration(migration_id="20260917_0046_icmp_health_evidence", description="Add durable realtime ICMP attempt and result evidence"),
 )
 
 
@@ -1176,6 +1177,10 @@ def run_migrations(engine: Engine) -> list[str]:
                 connection.execute(text("CREATE INDEX IF NOT EXISTS ix_syslog_hostname ON syslog_records (hostname)"))
         elif migration.migration_id == "20260910_0045_snmp_scalability_indexes":
             _ensure_snmp_scalability_indexes(engine)
+        elif migration.migration_id == "20260917_0046_icmp_health_evidence":
+            with engine.begin() as connection:
+                connection.execute(text('ALTER TABLE devices ADD COLUMN IF NOT EXISTS "last_icmp_attempt_at" TIMESTAMP'))
+                connection.execute(text('ALTER TABLE devices ADD COLUMN IF NOT EXISTS "last_icmp_status" VARCHAR(20)'))
         elif migration.migration_id == "20260831_0030_cmdb_reconciliation":
             _ensure_cmdb_reconciliation(engine)
         else:

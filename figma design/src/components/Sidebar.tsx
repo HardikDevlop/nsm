@@ -84,6 +84,7 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
   const [onlineCount, setOnlineCount] = useState(0)
   const [healthScore, setHealthScore] = useState(0)
   const [totalDevices, setTotalDevices] = useState(0)
+  const [summaryState, setSummaryState] = useState<'loading' | 'fresh' | 'stale' | 'unavailable'>('loading')
 
   // Filter nav items by permission
   const visibleNav = useMemo(() => nav.filter(item => item.to !== '/servers' && hasPermission(item.permission)), [hasPermission])
@@ -98,6 +99,7 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
         setTotalDevices(total)
         setOnlineCount(online)
         setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
+        setSummaryState('stale')
       } catch {
         // Ignore a malformed optional cache and use the live request below.
       }
@@ -123,30 +125,10 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
         setTotalDevices(total)
         setOnlineCount(online)
         setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
+        setSummaryState('fresh')
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') return
-        // The device list is the same DB-backed source used by SNMP Devices.
-        // Use it as a recovery path instead of replacing a valid count with 0.
-        try {
-          const fallback = await requestJson<{
-            items?: Array<{ status?: string }>
-            total?: number
-          }>('/snmp/devices?page=1&page_size=200', {
-            signal: controller.signal,
-            cache: 'no-store',
-          })
-          if (!mounted) return
-          const items = fallback.items ?? []
-          const total = fallback.total ?? items.length
-          const online = items.filter(item => String(item.status ?? '').toLowerCase() === 'online').length
-          setTotalDevices(total)
-          setOnlineCount(online)
-          setHealthScore(total > 0 ? Math.round((online / total) * 100) : 0)
-        } catch (fallbackError) {
-          if (!(fallbackError instanceof Error && fallbackError.name === 'AbortError')) {
-            // Keep the last known values if both authoritative requests fail.
-          }
-        }
+        setSummaryState('unavailable')
       } finally {
         inFlight = false
       }
@@ -408,9 +390,9 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
       {!navCollapsed && (
         <div className="px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--t-border-light)' }}>
           <div className="flex items-center gap-2 mb-2">
-            <span className={`status-dot ${onlineCount > 0 ? 'online' : 'offline'}`} />
+            <span className={`status-dot ${summaryState === 'fresh' && onlineCount > 0 ? 'online' : 'offline'}`} />
             <span className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-              {onlineCount} / {totalDevices} devices online
+              {summaryState === 'unavailable' ? 'Health unavailable' : `${onlineCount} / ${totalDevices} devices online${summaryState === 'stale' ? ' · stale' : ''}`}
             </span>
           </div>
           <div className="w-full rounded-full h-1" style={{ background: 'var(--t-border-light)' }}>
@@ -423,7 +405,7 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
                   : `linear-gradient(90deg, #ff3366, #ff336688)`,
             }} />
           </div>
-          <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted)' }}>{healthScore}% health score</div>
+          <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted)' }}>{summaryState === 'unavailable' ? 'Health unavailable' : `${healthScore}% health score${summaryState === 'stale' ? ' · stale' : ''}`}</div>
 
           {/* User info + logout */}
           {user && (

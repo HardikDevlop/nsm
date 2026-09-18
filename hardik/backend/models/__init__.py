@@ -149,6 +149,8 @@ class Device(Base):
     status: Mapped[str] = mapped_column(String(30), default="unknown")
     monitoring_status: Mapped[bool] = mapped_column(Boolean, default=True)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_icmp_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_icmp_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     uptime_seconds: Mapped[int] = mapped_column(Integer, default=0)
     downtime_seconds: Mapped[int] = mapped_column(Integer, default=0)

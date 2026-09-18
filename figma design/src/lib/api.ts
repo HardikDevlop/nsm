@@ -278,6 +278,7 @@ export interface DashboardSummary {
   total_devices: number
   online_devices: number
   offline_devices: number
+  health_counts: Record<'online' | 'offline' | 'degraded' | 'stale' | 'unknown', number>
   active_alerts: number
   critical_alerts: number
   recent_events: number
@@ -2305,11 +2306,20 @@ export interface NormalizedOverview {
     top_interfaces: NormalizedOverview["interfaces"]
   }
   polling: {
+    successful_attempts: number
+    unsupported_attempts: number
+    no_data_attempts: number
+    failed_attempts: number
+    unknown_attempts: number
+    total_attempts: number
+    success_rate: number | null
     success: number
     failure: number
     last_success?: string | null
     last_failure?: string | null
     active_jobs: number
+    configured_jobs: number
+    enabled_jobs: number
     collector_failures: number
     unsupported_oids: number
   }

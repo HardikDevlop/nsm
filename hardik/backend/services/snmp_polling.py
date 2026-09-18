@@ -31,11 +31,44 @@ from backend.models.identity import DeviceCapabilities
 from backend.snmp.collector import SNMPService
 from backend.snmp.credentials import SNMPCredentials
 from backend.utils.crypto import decrypt_secret
-from backend.utils.time import utc_now, iso_utc
+from backend.utils.time import as_utc, utc_now, iso_utc
 
 logger = logging.getLogger(__name__)
 def now_utc() -> datetime:
     return utc_now()
+
+
+def _is_restart_restorable_config(enabled: bool, status: str) -> bool:
+    return enabled and status in {
+        MonitoringStatus.RUNNING.value,
+        MonitoringStatus.ERROR.value,
+    }
+
+
+def _build_reschedule_payload(config: Any) -> dict[str, Any]:
+    """Carry the original config identity into post-success scheduling."""
+    return {
+        "id": config.id,
+        "device_id": config.device_id,
+        "module_name": config.module_name,
+        "interval_seconds": config.interval_seconds,
+        "config_id": config.id,
+        "next_poll_at": config.next_poll_at,
+    }
+
+
+def _interface_elapsed_seconds(now: datetime, previous: datetime | None) -> float:
+    """Return elapsed UTC seconds for interface counter-rate calculations.
+
+    InterfaceStatistic is a legacy DateTime column, so PostgreSQL may return
+    its semantically-UTC value as naive while application ``now`` is aware.
+    The canonical helper makes that legacy semantic explicit before arithmetic.
+    """
+    if previous is None:
+        return 60
+    current_utc = as_utc(now, legacy="UTC_NAIVE")
+    previous_utc = as_utc(previous, legacy="UTC_NAIVE")
+    return (current_utc - previous_utc).total_seconds()
 
 # Module name to collector name mapping
 MODULE_COLLECTOR_MAP = {
@@ -630,13 +663,15 @@ class SNMPPoller:
             rx_mbps = tx_mbps = packet_rate = error_rate = None
             if if_index in prev_counters:
                 prev = prev_counters[if_index]
-                elapsed = (now - prev["created_at"]).total_seconds() if prev["created_at"] else 60
+                elapsed = _interface_elapsed_seconds(now, prev["created_at"])
                 if elapsed > 0:
-                    from backend.snmp.statistics_engine import counter_delta
-                    rx_delta = counter_delta(float(in_oct or 0), float(prev["rx_octets"] or 0))
-                    tx_delta = counter_delta(float(out_oct or 0), float(prev["tx_octets"] or 0))
-                    rx_mbps = round(rx_delta * 8 / elapsed / 1_000_000, 3)
-                    tx_mbps = round(tx_delta * 8 / elapsed / 1_000_000, 3)
+                    from backend.snmp.statistics_engine import interface_rate_mbps
+                    rx_mbps = interface_rate_mbps(
+                        in_oct, prev["rx_octets"], elapsed, speed
+                    )
+                    tx_mbps = interface_rate_mbps(
+                        out_oct, prev["tx_octets"], elapsed, speed
+                    )
                     pkt_delta = (in_pkt + out_pkt) - (prev.get("rx_packets", 0) + prev.get("tx_packets", 0))
                     packet_rate = round(pkt_delta / elapsed, 2)
                     err_delta = errors - (prev.get("errors", 0) or 0)
@@ -797,12 +832,15 @@ class PollingScheduler:
 
     @_database_worker
     async def _load_jobs_from_db(self) -> None:
-        """Load all enabled monitoring configs from DB and schedule them."""
+        """Restore enabled runnable configs, including retryable errors."""
         db = SessionLocal()
         try:
             configs = db.query(MonitoringConfig).filter(
                 MonitoringConfig.enabled.is_(True),
-                MonitoringConfig.status == MonitoringStatus.RUNNING.value,
+                MonitoringConfig.status.in_((
+                    MonitoringStatus.RUNNING.value,
+                    MonitoringStatus.ERROR.value,
+                )),
             ).all()
 
             for config in configs:
@@ -902,13 +940,7 @@ class PollingScheduler:
                     config.error_message = result.get("error", "Unknown error")
                 config.next_poll_at = now_utc() + timedelta(seconds=config.interval_seconds)
                 if config.enabled and config.status != MonitoringStatus.NOT_SUPPORTED.value:
-                    reschedule = {
-                        "device_id": config.device_id,
-                        "module_name": config.module_name,
-                        "interval_seconds": config.interval_seconds,
-                        "config_id": config.id,
-                        "next_poll_at": config.next_poll_at,
-                    }
+                    reschedule = _build_reschedule_payload(config)
 
             transaction_db.commit()
             result["_reschedule"] = reschedule

@@ -94,10 +94,10 @@ async def lifespan(app: FastAPI):
 
     # Start centralized SNMP polling scheduler
     app.state.scheduler_lease = SchedulerLease()
-    app.state.scheduler_lease_owned = app.state.scheduler_lease.acquire()
+    app.state.scheduler_lease_owned = await asyncio.to_thread(app.state.scheduler_lease.acquire)
     scheduler = await get_polling_scheduler() if app.state.scheduler_lease_owned else None
     app.state.snmp_polling = scheduler
-    lease_task = asyncio.create_task(_renew_scheduler_lease(app.state.scheduler_lease)) if scheduler is not None else None
+    lease_task = asyncio.create_task(_supervise_scheduler_lease(app))
     linux_scheduler = LinuxMonitoringScheduler()
     app.state.linux_monitoring_scheduler = linux_scheduler
     await linux_scheduler.restore_enabled_servers()
@@ -112,20 +112,42 @@ async def lifespan(app: FastAPI):
     if syslog_service is not None:
         await syslog_service.stop()
     await linux_scheduler.shutdown()
-    if scheduler is not None:
-        await shutdown_polling_scheduler()
     if lease_task is not None:
         lease_task.cancel()
         await asyncio.gather(lease_task, return_exceptions=True)
+    app.state.scheduler_lease_owned = False
+    app.state.snmp_polling = None
+    await shutdown_polling_scheduler()
     app.state.scheduler_lease.release()
     await asyncio.to_thread(shutdown_snmp_workers)
     await asyncio.to_thread(get_engine().shutdown)
 
-async def _renew_scheduler_lease(lease: SchedulerLease):
+async def _supervise_scheduler_lease(app: FastAPI):
+    """Renew leadership or recover it after a competing lease expires."""
+    lease = app.state.scheduler_lease
+    interval = max(1, lease.ttl // 3)
     while True:
-        await asyncio.sleep(max(1, lease.ttl // 3))
-        if not lease.renew():
-            return
+        if not app.state.scheduler_lease_owned:
+            acquired = await asyncio.to_thread(lease.acquire)
+            if acquired:
+                try:
+                    app.state.snmp_polling = await get_polling_scheduler()
+                    app.state.scheduler_lease_owned = True
+                    logger.info("SNMP scheduler lease reacquired; polling started")
+                except Exception:
+                    app.state.scheduler_lease_owned = False
+                    await asyncio.to_thread(lease.release)
+                    logger.exception("SNMP scheduler startup after lease acquisition failed")
+            await asyncio.sleep(interval)
+            continue
+
+        renewed = await asyncio.to_thread(lease.renew)
+        if not renewed:
+            app.state.scheduler_lease_owned = False
+            app.state.snmp_polling = None
+            await shutdown_polling_scheduler()
+            logger.warning("SNMP scheduler lease lost; polling stopped")
+        await asyncio.sleep(interval)
 
 
 settings = get_settings()

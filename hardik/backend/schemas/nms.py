@@ -624,6 +624,7 @@ class DashboardSummary(BaseModel):
     total_devices: int
     online_devices: int
     offline_devices: int
+    health_counts: dict[str, int]
     active_alerts: int
     critical_alerts: int
     recent_events: int

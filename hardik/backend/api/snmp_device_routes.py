@@ -59,11 +59,18 @@ from backend.models import Device, DeviceCredential, Event, Vendor, DeviceType
 from backend.models.identity import DeviceCapabilities, DeviceIdentity
 from backend.models.snmp import DeviceInterface, LatestInterface
 from backend.snmp.normalizer import mac as canonical_mac
+from backend.utils.time import as_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["SNMP Device Monitoring"])
 MAX_SNMP_TABLE_ROWS = 500
+
+
+def _interface_api_elapsed(now: datetime, previous: datetime | None) -> float:
+    if previous is None:
+        return 0
+    return (as_utc(now, legacy="UTC_NAIVE") - as_utc(previous, legacy="UTC_NAIVE")).total_seconds()
 
 
 def _topology_revision(db: Session) -> dict[str, str]:
@@ -1544,8 +1551,7 @@ def get_snmp_interfaces(device_id: int, limit: int = Query(default=MAX_SNMP_TABL
         )).filter(LatestInterface.device_id == device_id).all()
         if row.if_index is not None
     }
-    from zoneinfo import ZoneInfo
-    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    now = utc_now()
     enriched_interfaces = []
     for iface in live_interfaces[:limit]:
         if not isinstance(iface, dict):
@@ -1566,19 +1572,19 @@ def get_snmp_interfaces(device_id: int, limit: int = Query(default=MAX_SNMP_TABL
             merged.setdefault("rx_packets", latest.rx_packets)
             merged.setdefault("tx_packets", latest.tx_packets)
             if latest.polled_at and in_octets is not None and latest.rx_octets is not None:
-                elapsed = max((now - latest.polled_at).total_seconds(), 0)
+                elapsed = max((_interface_api_elapsed(now, latest.polled_at)), 0)
                 if elapsed > 0:
-                    from backend.snmp.statistics_engine import counter_delta
-                    rx_mbps = round(counter_delta(float(in_octets), float(latest.rx_octets)) * 8 / elapsed / 1_000_000, 3)
+                    from backend.snmp.statistics_engine import interface_rate_mbps
+                    rx_mbps = interface_rate_mbps(float(in_octets), float(latest.rx_octets), elapsed, iface.get("speed_bps") or latest.speed_bps)
             if latest.polled_at and out_octets is not None and latest.tx_octets is not None:
-                elapsed = max((now - latest.polled_at).total_seconds(), 0)
+                elapsed = max((_interface_api_elapsed(now, latest.polled_at)), 0)
                 if elapsed > 0:
-                    from backend.snmp.statistics_engine import counter_delta
-                    tx_mbps = round(counter_delta(float(out_octets), float(latest.tx_octets)) * 8 / elapsed / 1_000_000, 3)
+                    from backend.snmp.statistics_engine import interface_rate_mbps
+                    tx_mbps = interface_rate_mbps(float(out_octets), float(latest.tx_octets), elapsed, iface.get("speed_bps") or latest.speed_bps)
 
             speed_bps = iface.get("speed_bps") or latest.speed_bps
             utilization = latest.utilization_percent
-            if speed_bps and (rx_mbps is not None or tx_mbps is not None):
+            if speed_bps and rx_mbps is not None and tx_mbps is not None:
                 utilization = round(((rx_mbps or 0) + (tx_mbps or 0)) * 1_000_000 / float(speed_bps) * 100, 2)
 
             merged["rx_mbps"] = rx_mbps

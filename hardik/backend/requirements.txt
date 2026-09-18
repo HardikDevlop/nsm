@@ -18,19 +18,74 @@ redis>=5.0,<6.0
 hypothesis>=6.100
 
 
+# new to run backend service //
+
 # cd /home/agnigate/Desktop/NMS/hardik
 # source .venv/bin/activate
+# sudo systemctl restart agnigate_backend.service
+# sudo systemctl status agnigate_backend.service --no-pager
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 # lsof -ti:8000 | xargs -r kill -9
-
-
-
-
-
-
-
-
-
-
-
-

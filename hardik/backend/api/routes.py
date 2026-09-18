@@ -112,6 +112,7 @@ from backend.schemas.nms import (
 )
 from backend.services.discovery import discover_network
 from backend.services.monitoring import run_monitoring_check
+from backend.services.device_health import derive_device_health
 from backend.services.alerting import _notify, create_device_added_alert, create_operational_alert
 from backend.incidents.service import create_incident_from_alert, process_alert_recovery
 from backend.utils.crypto import encrypt_secret
@@ -139,6 +140,15 @@ _dashboard_summary_lock = Lock()
 _PAGE_VIEW_TTL_SECONDS = 30
 _page_view_cache: dict[tuple[int, str], datetime] = {}
 _page_view_cache_lock = Lock()
+
+
+def _derived_dashboard_health_counts(db: Session, devices: list[Device]) -> dict[str, int]:
+    states = ("online", "offline", "degraded", "stale", "unknown")
+    counts = {state: 0 for state in states}
+    for device in devices:
+        status = derive_device_health(db, device).get("status")
+        counts[status if status in counts else "unknown"] += 1
+    return counts
 
 
 def audit(db: Session, user_id: int | None, action: str, resource_name: str) -> None:
@@ -1885,10 +1895,9 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_p
     # snapshot cannot make the UI report zero online devices.
 
     since = now - timedelta(hours=24)
+    eligible_devices = db.query(Device).filter(Device.deleted_at.is_(None)).all()
+    health_counts = _derived_dashboard_health_counts(db, eligible_devices)
     summary_counts = db.query(
-        db.query(func.count(Device.id)).filter(Device.deleted_at.is_(None)).scalar_subquery().label("total_devices"),
-        db.query(func.count(Device.id)).filter(Device.deleted_at.is_(None), Device.status == "online").scalar_subquery().label("online_devices"),
-        db.query(func.count(Device.id)).filter(Device.deleted_at.is_(None), Device.status == "offline").scalar_subquery().label("offline_devices"),
         db.query(func.count(Alert.id)).filter(
             Alert.status.in_(["open", "acknowledged"]), Alert.deleted_at.is_(None)
         ).scalar_subquery().label("active_alerts"),
@@ -1898,9 +1907,10 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_p
         db.query(func.count(Event.id)).filter(Event.timestamp >= since).scalar_subquery().label("recent_events"),
     ).one()
     summary = DashboardSummary(
-        total_devices=int(summary_counts.total_devices or 0),
-        online_devices=int(summary_counts.online_devices or 0),
-        offline_devices=int(summary_counts.offline_devices or 0),
+        total_devices=len(eligible_devices),
+        online_devices=health_counts["online"],
+        offline_devices=health_counts["offline"],
+        health_counts=health_counts,
         active_alerts=int(summary_counts.active_alerts or 0),
         critical_alerts=int(summary_counts.critical_alerts or 0),
         recent_events=int(summary_counts.recent_events or 0),

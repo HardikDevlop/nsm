@@ -27,7 +27,6 @@ import GlassCard from "../components/GlassCard"
 import { useI18n } from "../i18n/I18nContext"
 import {
   getOverview,
-  startPollingService,
   type NormalizedOverview,
   type OverviewResponse,
 } from "../lib/api"
@@ -639,13 +638,7 @@ export default function Dashboard() {
     try {
       setError(null)
       const hours = range === "1H" ? 1 : range === "6H" ? 6 : range === "12H" ? 12 : range === "7D" ? 168 : 24
-      let snapshot = await getOverview(hours)
-      // Recover a stopped in-process scheduler automatically. This does not
-      // enable jobs that were explicitly disabled in their monitoring config.
-      if (!snapshot.services.snmp_polling?.running) {
-        await startPollingService()
-        snapshot = await getOverview(hours)
-      }
+      const snapshot = await getOverview(hours)
       setData(snapshot)
       setUpdated(new Date())
     } catch (e) {
@@ -724,14 +717,17 @@ export default function Dashboard() {
   const rxSpark = useMemo(() => chart.slice(-20).map((p) => p.rx_mbps), [chart])
   const txSpark = useMemo(() => chart.slice(-20).map((p) => p.tx_mbps), [chart])
   const latestTrafficSample = chart.length ? chart[chart.length - 1].timestamp : null
+  const currentRx = n?.traffic.rx_mbps
+  const currentTx = n?.traffic.tx_mbps
 
   /* Peak combined throughput actually observed in this window — used to
      normalize the radar's "Traffic" axis dynamically instead of a fixed
      magic number, so the reading stays meaningful at any traffic scale. */
   const trafficPeak = useMemo(() => {
     const peak = chart.reduce((max, p) => Math.max(max, (p.rx_mbps ?? 0) + (p.tx_mbps ?? 0)), 0)
-    const current = (n?.traffic.rx_mbps ?? 0) + (n?.traffic.tx_mbps ?? 0)
-    return Math.max(peak, current, 1)
+    const currentValues = [currentRx, currentTx].filter((value): value is number => value != null && Number.isFinite(value))
+    const current = currentValues.length ? currentValues.reduce((sum, value) => sum + value, 0) : null
+    return Math.max(peak, current ?? 0, 1)
   }, [chart, n?.traffic.rx_mbps, n?.traffic.tx_mbps])
 
   const availability = summary?.total_devices
@@ -767,15 +763,16 @@ export default function Dashboard() {
   const radarData = useMemo(() => {
     const total = summary?.total_devices ?? 0
     const ifTotal = n?.interface_summary.total ?? 0
-    const pollTotal = (n?.polling.success ?? 0) + (n?.polling.failure ?? 0)
-    const currentTraffic = (n?.traffic.rx_mbps ?? 0) + (n?.traffic.tx_mbps ?? 0)
+    const pollTotal = (n?.polling.successful_attempts ?? 0) + (n?.polling.failed_attempts ?? 0)
+    const currentValues = [currentRx, currentTx].filter((value): value is number => value != null && Number.isFinite(value))
+    const currentTraffic = currentValues.length ? currentValues.reduce((sum, value) => sum + value, 0) : null
     return [
       { metric: "Availability", A: availability, full: 100 },
-      { metric: "Polling", A: pollTotal ? ((n?.polling.success ?? 0) / pollTotal) * 100 : 0, full: 100 },
+      { metric: "Polling", A: pollTotal ? ((n?.polling.successful_attempts ?? 0) / pollTotal) * 100 : 0, full: 100 },
       { metric: "Interfaces Up", A: ifTotal ? ((n?.interface_summary.up ?? 0) / ifTotal) * 100 : 0, full: 100 },
       { metric: "SNMP Enabled", A: total ? (snmpEnabled / total) * 100 : 0, full: 100 },
       { metric: "Health", A: total ? ((health.online + health.warning * 0.5) / total) * 100 : 0, full: 100 },
-      { metric: "Traffic", A: (currentTraffic / trafficPeak) * 100, full: 100 },
+      { metric: "Traffic", A: currentTraffic == null ? 0 : (currentTraffic / trafficPeak) * 100, full: 100 },
     ]
   }, [availability, snmpEnabled, summary, n, health, trafficPeak])
 
@@ -808,11 +805,11 @@ export default function Dashboard() {
     [n?.alerts_by_severity],
   )
 
-  const pollTotal = (n?.polling.success ?? 0) + (n?.polling.failure ?? 0)
-  const pollSuccessPct = pollTotal ? ((n?.polling.success ?? 0) / pollTotal) * 100 : 0
+  const pollTotal = (n?.polling.successful_attempts ?? 0) + (n?.polling.failed_attempts ?? 0)
+  const pollSuccessPct = pollTotal ? ((n?.polling.successful_attempts ?? 0) / pollTotal) * 100 : 0
   const pollDisplay = pollTotal
     ? `${pollSuccessPct.toFixed(1)}%`
-    : "0%"
+    : "N/A"
 
   return (
     <div
@@ -929,9 +926,9 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <Panel title="Live Traffic" subtitle="RX / TX current load">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
-                {[{ label: "Receive", short: "RX", value: Number(n?.traffic.rx_mbps ?? 0), tone: C.green, spark: rxSpark }, { label: "Transmit", short: "TX", value: Number(n?.traffic.tx_mbps ?? 0), tone: C.cyan, spark: txSpark }].map((item) => {
-                  const max = Math.max(Number(n?.traffic.rx_mbps ?? 0), Number(n?.traffic.tx_mbps ?? 0), 1)
-                  const pct = (item.value / max) * 100
+                {[{ label: "Receive", short: "RX", value: currentRx, tone: C.green, spark: rxSpark }, { label: "Transmit", short: "TX", value: currentTx, tone: C.cyan, spark: txSpark }].map((item) => {
+                  const max = Math.max(...[currentRx, currentTx].filter((value): value is number => value != null && Number.isFinite(value)), 1)
+                  const pct = item.value == null ? 0 : (item.value / max) * 100
                   return <div key={item.short} className="traffic-metric rounded-2xl p-4" style={{ border: `1px solid ${item.tone}35`, background: `linear-gradient(145deg, ${item.tone}12, transparent 70%)` }}>
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-[10px] uppercase tracking-widest" style={{ color: C.muted }}>{item.label} <b style={{ color: item.tone }}>· {item.short}</b></span>
@@ -1055,11 +1052,11 @@ export default function Dashboard() {
               ) : (
                 <div className="space-y-5 py-8">
                   <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: C.muted }}>Current load snapshot</div>
-                  {[{ label: "RX throughput", value: Number(n?.traffic.rx_mbps ?? 0), tone: C.green }, { label: "TX throughput", value: Number(n?.traffic.tx_mbps ?? 0), tone: C.cyan }].map((item) => {
-                    const max = Math.max(Number(n?.traffic.rx_mbps ?? 0), Number(n?.traffic.tx_mbps ?? 0), 1)
+                  {[{ label: "RX throughput", value: currentRx, tone: C.green }, { label: "TX throughput", value: currentTx, tone: C.cyan }].map((item) => {
+                    const max = Math.max(...[currentRx, currentTx].filter((value): value is number => value != null && Number.isFinite(value)), 1)
                     return <div key={item.label}>
                       <div className="flex justify-between font-mono text-xs mb-2"><span style={{ color: C.muted }}>{item.label}</span><strong style={{ color: item.tone }}>{formatTraffic(item.value)}</strong></div>
-                      <div className="h-3 rounded-full overflow-hidden" style={{ background: "var(--t-border-light)" }}><div className="traffic-fill h-full rounded-full" style={{ width: `${(item.value / max) * 100}%`, background: item.tone, boxShadow: `0 0 14px ${item.tone}` }} /></div>
+                      <div className="h-3 rounded-full overflow-hidden" style={{ background: "var(--t-border-light)" }}><div className="traffic-fill h-full rounded-full" style={{ width: `${item.value == null ? 0 : (item.value / max) * 100}%`, background: item.tone, boxShadow: `0 0 14px ${item.tone}` }} /></div>
                     </div>
                   })}
                   <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: C.muted }}><span className="h-2 w-2 rounded-full" style={{ background: C.amber }} /> Historical samples are not available for {range}</div>
@@ -1216,19 +1213,24 @@ export default function Dashboard() {
               </div>
             </Panel>
 
-            <Panel title={d.snmpMonitoring} subtitle="Successful SNMP polls / total poll attempts" onClick={() => navigate("/monitoring-jobs")}>
+            <Panel title={d.snmpMonitoring} subtitle="Historical polling attempt outcomes" onClick={() => navigate("/monitoring-jobs")}>
               <div className="space-y-3">
-                <BarLine label={d.successfulPolls} current={n?.polling.success ?? 0} total={pollTotal} />
-                <BarLine label={d.failedPolls} current={n?.polling.failure ?? 0} total={pollTotal} tone={C.red} />
+                <BarLine label={d.successfulAttempts} current={n?.polling.successful_attempts ?? 0} total={n?.polling.total_attempts ?? 0} />
+                <BarLine label={d.failedAttempts} current={n?.polling.failed_attempts ?? 0} total={n?.polling.total_attempts ?? 0} tone={C.red} />
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <div>
-                    <div className="font-mono text-[10px]" style={{ color: C.muted }}>{d.activeJobs}</div>
-                    <div className="font-display text-xl neon-cyan">{n?.polling.active_jobs ?? 0}</div>
+                    <div className="font-mono text-[10px]" style={{ color: C.muted }}>{d.configuredJobs}</div>
+                    <div className="font-display text-xl neon-cyan">{n?.polling.configured_jobs ?? 0}</div>
                   </div>
                   <div>
-                    <div className="font-mono text-[10px]" style={{ color: C.muted }}>{d.unsupportedOids}</div>
-                    <div className="font-display text-xl" style={{ color: C.amber }}>{n?.polling.unsupported_oids ?? 0}</div>
+                    <div className="font-mono text-[10px]" style={{ color: C.muted }}>{d.unsupportedAttempts}</div>
+                    <div className="font-display text-xl" style={{ color: C.amber }}>{n?.polling.unsupported_attempts ?? 0}</div>
                   </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 font-mono text-[10px]" style={{ color: C.muted }}>
+                  <span>{d.noDataAttempts}: <b className="text-white">{n?.polling.no_data_attempts ?? 0}</b></span>
+                  <span>{d.unknownAttempts}: <b className="text-white">{n?.polling.unknown_attempts ?? 0}</b></span>
+                  <span>{d.totalAttempts}: <b className="text-white">{n?.polling.total_attempts ?? 0}</b></span>
                 </div>
                 <div className="flex justify-center pt-2">
                   <ClockGauge
@@ -1259,7 +1261,7 @@ export default function Dashboard() {
                 }).map(([label, metric]) => (
                   <div key={label} className="transition-all duration-300 hover:translate-x-1">
                     <div className="font-mono text-[10px]" style={{ color: C.muted }}>{label}</div>
-                    <div className="font-display text-lg neon-cyan">{metric == null ? 0 : metric}</div>
+                    <div className="font-display text-lg neon-cyan">{metric == null ? "N/A" : metric}</div>
                   </div>
                 ))}
               </div>

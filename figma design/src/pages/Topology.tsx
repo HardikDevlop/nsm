@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router'
 import { useQueryClient } from '../lib/queryProvider'
 import { useI18n } from '../i18n/I18nContext'
 import { formatIST } from '../time'
-import { applyFdbArpEndpointNode, buildLogicalTopologyGraph, classifyDevice, correlateLldpCdpNeighbors, correlatePersistedVerifiedLinks, createLogicalGraphAccumulator, findByIdentity, inventoryMatch, makeNode, normalizeLldp, prepareFdbArpCorrelation, remoteFor, resolveFdbArpEndpoint, seedPersistedTopologyNodes, statusOf, type DeviceCollection, type DeviceStatus, type DeviceType, type GraphLink, type GraphNode, cleanMac, displayMac, isMac, lower, portKey, str, unique } from '../lib/topologyGraphBuilder'
+import { buildLogicalTopologyGraph, classifyDevice, collectTopologyDevice, findByIdentity, inventoryMatch, makeNode, normalizeLldp, remoteFor, statusOf, type DeviceCollection, type DeviceStatus, type DeviceType, type GraphLink, type GraphNode, cleanMac, displayMac, isMac, lower, portKey, str, unique } from '../lib/topologyGraphBuilder'
 
 const linkRenderKey = (link: GraphLink, index: number, scope: string) =>
   `${scope}:${link.id}:${link.from}:${link.to}:${link.localPort || ''}:${link.remotePort || ''}:${index}`
@@ -218,137 +218,11 @@ async function collectModule(deviceId: number, module: string, fresh = false): P
 }
 
 async function collectDevice(device: GraphNode, fresh = false): Promise<DeviceCollection> {
-  const deviceId = Number(device.id)
-  const results = await Promise.allSettled([
-    collectModule(deviceId, 'mac', fresh),
-    collectModule(deviceId, 'arp', fresh),
-    collectModule(deviceId, 'lldp', fresh),
-    collectModule(deviceId, 'routing', fresh),
-    collectModule(deviceId, 'interfaces', fresh),
-  ])
-  const value = (index: number) => results[index].status === 'fulfilled' ? results[index].value : null
-  const mac = value(0)
-  return {
-    device,
-    macEntries: unwrapRows(mac, ['entries', 'mac_entries']),
-    portGroups: unwrapRows(mac, ['port_groups']),
-    arpEntries: unwrapRows(value(1), ['entries', 'arp_entries']),
-    lldpNeighbors: unwrapRows(value(2), ['neighbors', 'lldp_entries', 'cdp']),
-    routes: unwrapRows(value(3), ['routes', 'routing']),
-    interfaces: unwrapRows(value(4), ['interfaces']),
-  }
+  return collectTopologyDevice(device, fresh)
 }
 
 async function collectStoredDevice(device: GraphNode): Promise<DeviceCollection> {
-  const payload = await requestJson<any>('/monitoring/data', {
-    method: 'POST',
-    body: JSON.stringify({
-      device_id: Number(device.id),
-      modules: ['interfaces', 'lldp', 'cdp', 'arp', 'mac_table', 'routing'],
-      include_history: false,
-    }),
-  })
-  const moduleData = (name: string) => payload?.modules?.[name]?.data
-  const mac = moduleData('mac_table')
-  const lldp = moduleData('lldp') || moduleData('cdp')
-  return {
-    device,
-    macEntries: unwrapRows(mac, ['entries', 'mac_entries']),
-    portGroups: unwrapRows(mac, ['port_groups']),
-    arpEntries: unwrapRows(moduleData('arp'), ['entries', 'arp_entries']),
-    lldpNeighbors: unwrapRows(lldp, ['neighbors', 'lldp_entries', 'cdp']),
-    routes: unwrapRows(moduleData('routing'), ['routes', 'routing']),
-    interfaces: unwrapRows(moduleData('interfaces'), ['interfaces']),
-  }
-}
-
-function buildGraph(collections: DeviceCollection[], inventory: DeviceRecord[], topologyNodes: any[], topologyLinks: any[]): { nodes: GraphNode[]; links: GraphLink[] } {
-  const graph = createLogicalGraphAccumulator()
-  const { nodes, byId, addNode, addLink } = graph
-
-  collections.forEach(item => addNode(item.device))
-  // Keep every managed DB device visible even when the cached SNMP snapshot
-  // contains only the device that was used as the collection root. Servers
-  // and unknown device types are still useful topology endpoints, so do not
-  // discard them before the graph is built.
-  inventory
-    .map((device, index) => makeNode(device, `inventory-${index}`))
-    .forEach(addNode)
-  seedPersistedTopologyNodes({ graph, topologyNodes, inventory })
-
-  correlateLldpCdpNeighbors({ graph, collections, inventory, topologyNodes })
-  correlatePersistedVerifiedLinks({ graph, topologyLinks })
-
-  const { arpByMac, groupsByPort: preparedGroupsByPort } = prepareFdbArpCorrelation(collections)
-
-  // One node per physical port. A port with many MACs remains expandable via
-  // the details panel instead of creating dozens of fake physical links.
-  collections.forEach(item => {
-    const parent = (byId.get(item.device.id) || addNode(item.device))
-    // Some persisted collectors update entries and port_groups separately.
-    // Merge both DB-backed shapes so a newly learned port cannot disappear
-    // just because the grouped projection is one poll behind.
-    const groups = preparedGroupsByPort[collections.indexOf(item)] || []
-    groups.forEach((group: any) => {
-      const port = str(group.port, group.if_index, group.ifIndex, group.interface)
-      const classification = lower(group.classification, group.class, group.port_type)
-      // Use the collector's PORT SUMMARY classification. LLDP alone is not
-      // enough to hide a port because an endpoint may also advertise LLDP.
-      if (!port || classification.includes('uplink') || classification.includes('trunk')) return
-      const groupMacs = unique([
-        ...(Array.isArray(group.macs) ? group.macs : []),
-        ...item.macEntries.filter(entry => portKey(str(entry.port, entry.if_index)) === portKey(port)).map(entry => str(entry.mac, entry.mac_address)),
-      ].filter(isMac).map(displayMac).sort())
-      if (!groupMacs.length) return
-      const entries = item.macEntries.filter(entry => groupMacs.some(mac => cleanMac(mac) === cleanMac(entry.mac)))
-      const ips = unique([
-        ...(Array.isArray(group.ip_addresses) ? group.ip_addresses : []),
-        ...entries.flatMap(entry => entry.ip_addresses || entry.ip_address || entry.ip || []),
-        ...groupMacs.flatMap(mac => {
-          const arp = arpByMac.get(cleanMac(mac))
-          return arp ? [str(arp.ip_address, arp.ip)] : []
-        }),
-      ].flat().filter(Boolean).map(String)).sort((left, right) =>
-        JSON.stringify(ipSortKey(left)).localeCompare(JSON.stringify(ipSortKey(right)), undefined, { numeric: true }),
-      )
-      const vlans = unique([
-        ...(Array.isArray(group.vlans) ? group.vlans : []),
-        ...entries.map(entry => entry.vlan_id ?? entry.vlan).filter((value: any) => value !== undefined && value !== null),
-      ])
-      // Use a stable machine identity for aggregate groups. ARP hostnames and
-      // raw walk order can change between polls, while sorted IP/MAC values do
-      // not cause the same topology card to rename itself.
-      const resolvedIp = ips[0] || ''
-      // A managed row can describe the same host without a MAC address. In
-      // that case identity matching cannot join it to the port group, so
-      // correlate the endpoint using the IPs learned from ARP as well.
-      // Prefer an exact learned MAC/IP from the managed inventory as the
-      // primary endpoint for a multi-MAC port. MAC/IP evidence is stronger
-      // than the inventory type because APs are often stored as unknown or
-      // generic network devices. The remaining learned hosts stay in the
-      // port details.
-      const { correlatedEndpoint, isSelfMac, endpointCandidate } = resolveFdbArpEndpoint({ nodes, parent, groupMacs, ips, port, group })
-      // The switch's own FDB entry is not a connected endpoint. Do not render
-      // it as a fake CPU/device node or create a self-link.
-      if (isSelfMac) return
-      const endpoint = applyFdbArpEndpointNode({ graph, resolution: { correlatedEndpoint, isSelfMac, endpointCandidate }, groupMacs, ips, port })
-      const iface = item.interfaces.find((row: any) => portKey(str(row.ifIndex, row.if_index, row.name, row.if_name, row.interface_name)) === portKey(port)) || {}
-      addLink({
-        id: `port-${parent.id}-${port}`,
-        from: parent.id,
-        to: endpoint.id,
-        localPort: port,
-        vlan: vlans.length === 1 ? vlans[0] : undefined,
-        speed: iface.speed_bps || iface.speed,
-        status: iface.oper_status || iface.status || group.status || 'up',
-        source: 'MAC/ARP',
-        confidence: 'INFERRED',
-        macCount: groupMacs.length,
-      })
-    })
-  })
-
-  return { nodes: graph.getNodes(), links: graph.getLinks() }
+  return collectTopologyDevice(device, false, true)
 }
 
 function layoutGraph(nodes: GraphNode[], links: GraphLink[]): Layout {
@@ -902,7 +776,7 @@ export default function Topology() {
       // refresh. Use the fresh collection as the source of truth instead of
       // allowing older stored module snapshots to repopulate stale links.
       const allCollections = forceRefresh && liveTopologyEvidence ? liveCollections : currentStoredCollections
-      const result = buildLogicalTopologyGraph(buildGraph(allCollections, inventory, topologyNodes, topologyLinks))
+      const result = buildLogicalTopologyGraph({ collections: allCollections, inventory, topologyNodes, topologyLinks })
       const mergedGraph = result
       const nextLayout = layoutGraph(mergedGraph.nodes, mergedGraph.links)
       if (forceRefresh && liveTopologyEvidence && root && Number.isFinite(Number(root.id))) {

@@ -32,9 +32,19 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+from backend.utils.time import utc_now
 
 # Indian Standard Time (UTC+5:30)
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _icmp_db_now() -> datetime:
+    """Canonical UTC instant stored as naive UTC for legacy DateTime columns."""
+    return utc_now().replace(tzinfo=None)
+
+
+def _should_advance_last_seen(current: datetime | None, candidate: datetime) -> bool:
+    return current is None or candidate >= current
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -83,7 +93,7 @@ class MonitoredDevice:
         if self.last_status_change:
             try:
                 lsc = datetime.fromisoformat(self.last_status_change)
-                elapsed = int((datetime.utcnow() - lsc).total_seconds())
+                elapsed = int((_icmp_db_now() - lsc).total_seconds())
                 if self.status == "up":
                     live_uptime += elapsed
                 elif self.status == "down":
@@ -241,7 +251,7 @@ class MonitorEngine:
         self._thread: threading.Thread | None = None
         self._executor: ThreadPoolExecutor | None = None
         self._executor_lock = threading.Lock()
-        self._metric_batch: list[tuple[int, float | None, float, datetime]] = []
+        self._metric_batch: list[tuple[int, float | None, float, datetime, str]] = []
         self._metric_batch_lock = threading.Lock()
         self._metric_batch_event = threading.Event()
         self._metric_batch_stop = threading.Event()
@@ -424,10 +434,10 @@ class MonitorEngine:
         while not self._metric_batch_stop.wait(METRIC_BATCH_INTERVAL):
             self._flush_metric_batch()
 
-    def _queue_metric(self, device_id: int, latency: float | None, packet_loss: float, now: datetime) -> None:
+    def _queue_metric(self, device_id: int, latency: float | None, packet_loss: float, now: datetime, icmp_status: str) -> None:
         should_flush = False
         with self._metric_batch_lock:
-            self._metric_batch.append((device_id, latency, packet_loss, now))
+            self._metric_batch.append((device_id, latency, packet_loss, now, icmp_status))
             should_flush = len(self._metric_batch) >= METRIC_BATCH_SIZE
         logger.debug("ICMP_METRIC_BATCH_QUEUED size=%s", len(self._metric_batch))
         if should_flush:
@@ -445,11 +455,14 @@ class MonitorEngine:
             from backend.models import Device, DeviceMetric
             db = SessionLocal()
             try:
-                for device_id, latency, packet_loss, timestamp in rows:
+                for device_id, latency, packet_loss, timestamp, icmp_status in rows:
                     db.add(DeviceMetric(device_id=device_id, latency=latency, packet_loss=packet_loss, created_at=timestamp))
                     device = db.query(Device).filter(Device.id == device_id).first()
-                    if device and packet_loss == 0.0:
-                        device.last_seen = timestamp
+                    if device and _should_advance_last_seen(device.last_icmp_attempt_at, timestamp):
+                        device.last_icmp_attempt_at = timestamp
+                        device.last_icmp_status = icmp_status
+                        if packet_loss == 0.0 and _should_advance_last_seen(device.last_seen, timestamp):
+                            device.last_seen = timestamp
                 db.commit()
             except Exception:
                 db.rollback()
@@ -599,7 +612,7 @@ class MonitorEngine:
 
         db = SessionLocal()
         try:
-            now = datetime.utcnow()
+            now = _icmp_db_now()
             cached = self._cached_device_state(dev.device_id)
             if cached is not None:
                 logger.debug("ICMP_DEVICE_CACHE_HIT device_id=%s", dev.device_id)
@@ -641,7 +654,18 @@ class MonitorEngine:
                 if not device:
                     self._invalidate_device_state(dev.device_id)
                     return
-                db.add(DeviceMetric(device_id=device.id, latency=rtt, packet_loss=0.0 if reachable else 100.0))
+                db.add(DeviceMetric(
+                    device_id=device.id,
+                    latency=rtt,
+                    packet_loss=0.0 if reachable else 100.0,
+                    created_at=now,
+                ))
+
+            if device is None and db_new_status != "unknown":
+                device = db.query(Device).filter(Device.id == dev.device_id).first()
+            if device is not None and (db_new_status == "unknown" or db_old_status != db_new_status) and _should_advance_last_seen(device.last_icmp_attempt_at, now):
+                device.last_icmp_attempt_at = now
+                device.last_icmp_status = "reachable" if reachable else "unreachable"
 
             # Keep last_seen current for every successful ping, not only when
             # the device changes state.
@@ -657,7 +681,7 @@ class MonitorEngine:
 
             if db_old_status == db_new_status:
                 db.close()
-                self._queue_metric(device_id, rtt, 0.0 if reachable else 100.0, now)
+                self._queue_metric(device_id, rtt, 0.0 if reachable else 100.0, now, "reachable" if reachable else "unreachable")
                 return
 
             self._flush_metric_batch()
