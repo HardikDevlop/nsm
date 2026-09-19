@@ -1570,6 +1570,7 @@ export async function updateDevice(
     monitoring_status: boolean
     vendor_name: string
     topology_metadata: {
+      [key: string]: unknown
       port?: string
       vlans?: string[]
       ips?: string[]
@@ -2369,6 +2370,15 @@ export async function getOverview(hours = 24): Promise<OverviewResponse> {
   // The overview is a live dashboard snapshot; never reuse the generic
   // 30-second client cache for it. Backend applies a short 10-second cache.
   return requestJson<OverviewResponse>(`/overview?hours=${hours}`, { cache: "no-store" })
+}
+
+export async function getDeviceMonitoringConfigs(deviceId: number): Promise<Array<{ device_id: number; module_name: string; enabled: boolean; interval_seconds: number; status: string; last_poll_at?: string | null; next_poll_at?: string | null; error_message?: string | null }>> {
+  return requestJson(`/snmp/devices/${deviceId}/monitoring`)
+}
+
+export async function restartMonitoringJob(deviceId: number, module: string, intervalSeconds: number): Promise<unknown> {
+  await requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/stop`, { method: "POST" })
+  return requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/start`, { method: "POST", body: JSON.stringify({ module_name: module, interval_seconds: intervalSeconds }) })
 }
 
 // ── Kill all monitoring services ──────────────────────────────────────────
@@ -3426,6 +3436,27 @@ export interface MonitoringJobRecord {
 
 export async function listMonitoringJobs(): Promise<MonitoringJobRecord[]> {
   return requestJson<MonitoringJobRecord[]>("/monitoring-jobs")
+}
+
+export interface RuntimeProcessRecord {
+  pid: number
+  name: string
+  status: string
+  uptime_seconds: number
+  command: string
+}
+
+export interface RuntimeStatusRecord {
+  response_time_ms: number
+  processes: RuntimeProcessRecord[]
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatusRecord> {
+  return requestJson<RuntimeStatusRecord>("/runtime-status", { cache: "no-store" })
+}
+
+export async function restartRuntimeProcess(pid: number): Promise<{ detail: string; pid: number }> {
+  return requestJson(`/runtime-status/restart/${pid}`, { method: "POST" })
 }
 
 export async function createMonitoringJob(data: {

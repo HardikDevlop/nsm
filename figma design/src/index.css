@@ -22,6 +22,378 @@
   --font-mono: 'JetBrains Mono', monospace;
 }
 
+table { color: var(--t-text); border-color: var(--t-border); }
+table thead { background: var(--t-table-header); color: var(--t-text-secondary); }
+table tbody tr { border-color: var(--t-border-light); }
+table tbody tr:hover { background: var(--t-table-row-hover); }
+
+/* MAC/FDB surfaces historically used dark blue-gray literals inline. Keep
+   semantic classification colors, but make structural/readability colors
+   follow the active palette, especially in light mode. */
+.snmp-collector-card table th,
+.snmp-collector-card table td,
+.snmp-collector-card [style*="#c8d8ee"],
+.snmp-collector-card [style*="#f1f5f9"],
+.snmp-collector-card [style*="#77859b"],
+.snmp-collector-card [style*="#8899bb"],
+.snmp-collector-card [style*="#667799"] {
+  color: var(--t-text) !important;
+}
+.snmp-collector-card table th { background: var(--t-table-header) !important; color: var(--t-text-secondary) !important; }
+.snmp-collector-card table td > div,
+.snmp-collector-card [style*="rgba(8,25,55"] {
+  background: var(--t-table-row) !important;
+  border-color: var(--t-border) !important;
+}
+.snmp-mac-topology { color: var(--t-text); border-color: var(--t-border); }
+.snmp-mac-topology [style*="#667799"],
+.snmp-mac-topology [style*="#8899bb"] { color: var(--t-text-secondary) !important; }
+
+[data-theme="light"] .snmp-inventory-table .snmp-inventory-head,
+[data-theme="light"] .snmp-inventory-table [style*="#c8d8ee"],
+[data-theme="light"] .snmp-inventory-table [style*="#8899bb"] {
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .snmp-inventory-table thead,
+[data-theme="light"] .snmp-inventory-table thead th {
+  background: var(--t-table-header) !important;
+  color: var(--t-text-secondary) !important;
+}
+[data-theme="light"] .snmp-inventory-table tbody tr {
+  background: var(--t-table-row) !important;
+  border-color: var(--t-border-light) !important;
+}
+[data-theme="light"] .snmp-inventory-table tbody tr:hover {
+  background: var(--t-table-row-hover) !important;
+}
+
+/* Keep the inventory readable during the initial theme render as well. */
+.snmp-inventory-table tbody td {
+  color: var(--t-text) !important;
+}
+.snmp-inventory-table thead th,
+.snmp-inventory-table .snmp-inventory-head {
+  color: var(--t-text-secondary) !important;
+}
+
+/* Interface monitoring has the same legacy dark inline palette as the
+   inventory table. Keep structural text dark on light surfaces while child
+   status/traffic colors retain their monitoring meaning. */
+.snmp-interface-table tbody td {
+  color: var(--t-text) !important;
+}
+.snmp-interface-table thead th {
+  color: var(--t-text-secondary) !important;
+}
+[data-theme="light"] .snmp-interface-table thead th {
+  background: var(--t-table-header) !important;
+}
+[data-theme="light"] .snmp-interface-table tbody tr {
+  background: var(--t-table-row) !important;
+  border-color: var(--t-border-light) !important;
+}
+[data-theme="light"] .snmp-interface-table tbody tr:nth-child(even) {
+  background: #f1f5f9 !important;
+}
+
+/* All SNMP module tables use legacy inline dark-theme colors. Normalize the
+   shared table chrome in light mode so LLDP, VLAN, routing, ARP, MAC,
+   inventory, topology, and the remaining module tabs stay readable too. */
+[data-theme="light"] .snmp-module-page table thead th,
+[data-theme="light"] .snmp-module-page table thead td {
+  background: var(--t-table-header) !important;
+  color: var(--t-text-secondary) !important;
+  border-color: var(--t-border) !important;
+}
+[data-theme="light"] .snmp-module-page table tbody td {
+  color: var(--t-text) !important;
+  border-color: var(--t-border-light) !important;
+}
+[data-theme="light"] .snmp-module-page table tbody tr {
+  background: var(--t-table-row) !important;
+  border-color: var(--t-border-light) !important;
+}
+[data-theme="light"] .snmp-module-page table tbody tr:nth-child(even) {
+  background: #f1f5f9 !important;
+}
+[data-theme="light"] .snmp-module-page table tbody tr:hover {
+  background: var(--t-table-row-hover) !important;
+}
+[data-theme="light"] .snmp-module-page input,
+[data-theme="light"] .snmp-module-page select,
+[data-theme="light"] .snmp-module-page textarea {
+  color: var(--t-text) !important;
+  background: var(--t-input-bg) !important;
+  border-color: var(--t-input-border) !important;
+}
+[data-theme="light"] .snmp-module-page input::placeholder {
+  color: var(--t-muted) !important;
+}
+
+/* MAC/FDB visualization also had dark inline surfaces. Preserve the graph's
+   colored topology markers, but make its cards, mapping chips, and canvas fit
+   the light palette. */
+[data-theme="light"] .snmp-mac-topology {
+  background: #f8fafc !important;
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .snmp-mac-topology [style*="rgba(2,8,18"],
+[data-theme="light"] .snmp-mac-topology [style*="rgba(8,25,55"],
+[data-theme="light"] .snmp-collector-card [style*="rgba(2,8,18"],
+[data-theme="light"] .snmp-collector-card [style*="rgba(8,25,55"] {
+  background: #e8eef5 !important;
+  color: var(--t-text) !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .snmp-mac-topology [style*="rgba(2,8,18"].snmp-mac-topology,
+[data-theme="light"] .snmp-mac-topology [style*="rgba(2,8,18"] {
+  background-color: #f8fafc !important;
+}
+[data-theme="light"] .snmp-collector-card [style*="#081937"] {
+  background: var(--t-table-header) !important;
+  color: var(--t-text-secondary) !important;
+}
+[data-theme="light"] .snmp-collector-card > div:first-child {
+  background: linear-gradient(135deg, #e8eef5, #f8fafc) !important;
+  border-color: var(--t-border) !important;
+}
+[data-theme="light"] .snmp-collector-card [style*="#667799"],
+[data-theme="light"] .snmp-collector-card [style*="#8899bb"] {
+  color: var(--t-text-secondary) !important;
+}
+/* Generic module summaries (Health, System, CPU, etc.) still carry an
+   inline dark gradient and pale text from the original console theme. */
+[data-theme="light"] .snmp-collector-card > .grid > div {
+  background: linear-gradient(145deg, #ffffff, #f1f5f9) !important;
+  border: 1px solid #d7e1ec !important;
+  box-shadow: 0 4px 12px rgba(30, 64, 110, .06);
+}
+[data-theme="light"] .snmp-collector-card > .grid > div [style*="#667799"],
+[data-theme="light"] .snmp-collector-card > .grid > div [style*="#8899bb"] {
+  color: #64748b !important;
+}
+[data-theme="light"] .snmp-collector-card > .grid > div [style*="#c8d8ee"] {
+  color: #172033 !important;
+}
+[data-theme="light"] .snmp-collector-card > .grid.grid-cols-2 > div > div:first-child {
+  color: #475569 !important;
+}
+[data-theme="light"] .snmp-collector-card > .grid.grid-cols-2 > div > div:nth-child(2) {
+  color: #0f172a !important;
+  font-weight: 600;
+}
+[data-theme="light"] .snmp-collector-card details {
+  background: #eef2f7 !important;
+  border-color: #d7e1ec !important;
+}
+[data-theme="light"] .snmp-collector-card details summary {
+  color: #2563eb !important;
+}
+[data-theme="light"] .snmp-collector-card details pre {
+  color: #475569 !important;
+}
+/* Device details overview still uses the old pale-on-dark inline palette. */
+[data-theme="light"] .snmp-device-details [style*="#c8d8ee"] {
+  color: #0f172a !important;
+}
+[data-theme="light"] .snmp-device-details [style*="#8899bb"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .snmp-device-details [style*="#667799"] {
+  color: #334155 !important;
+}
+[data-theme="light"] .snmp-device-details .neon-cyan {
+  color: #2563eb !important;
+  text-shadow: none !important;
+}
+[data-theme="light"] .snmp-device-details .glass-bright {
+  color: #2563eb !important;
+}
+[data-theme="light"] .snmp-device-details .grid.grid-cols-2 > div > .font-mono.text-xs,
+[data-theme="light"] .snmp-device-details .min-w-\[200px\] > div > .font-mono.text-xs {
+  color: #0f172a !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+[data-theme="light"] .snmp-device-details .grid.grid-cols-2 > div > .font-mono.text-\[10px\],
+[data-theme="light"] .snmp-device-details .min-w-\[200px\] > div > .font-mono.text-\[10px\] {
+  color: #334155 !important;
+  opacity: 1 !important;
+}
+
+/* Syslog workspace layout */
+.syslog-page { width: 100%; max-width: none; margin-inline: 0; }
+.syslog-hero {
+  position: relative;
+  padding: 1.15rem 1.35rem 1.35rem;
+  border: 1px solid var(--t-border);
+  border-radius: 1rem;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--t-card) 94%, var(--t-accent)), var(--t-card));
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--t-bg) 12%, transparent);
+}
+.syslog-hero::after {
+  content: '';
+  position: absolute;
+  right: 8%;
+  top: -2rem;
+  width: 10rem;
+  height: 10rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--t-accent) 10%, transparent);
+  filter: blur(28px);
+  pointer-events: none;
+}
+.syslog-hero > * { position: relative; z-index: 1; }
+.syslog-hero h1 { letter-spacing: -.025em; }
+.syslog-filter-card, .syslog-table-card { overflow: hidden; }
+.syslog-filter-card {
+  padding: 1.15rem !important;
+  border-top: 3px solid color-mix(in srgb, var(--t-accent) 65%, transparent) !important;
+}
+.syslog-filter-grid { align-items: end; }
+.syslog-filter-grid label > span:first-child { display: block; min-height: 1rem; }
+.syslog-table-card table { border-collapse: collapse; }
+.syslog-table-card thead { background: color-mix(in srgb, var(--t-table-header) 88%, var(--t-accent)); }
+.syslog-table-card th { white-space: nowrap; }
+.syslog-table-card tbody tr:last-child { border-bottom: 0; }
+.syslog-table-card tbody tr:hover { background: color-mix(in srgb, var(--t-accent) 5%, transparent); }
+.syslog-page > .glass-card { border-color: var(--t-border); }
+.syslog-page > .glass-card:nth-of-type(3) { border-top: 3px solid color-mix(in srgb, #8b5cf6 55%, transparent); }
+.syslog-page > .glass-card:nth-of-type(4) { border-top: 3px solid color-mix(in srgb, #ff6b7a 45%, transparent); }
+.syslog-page > .glass:has(h2) > div:first-child {
+  padding: 1rem 1.15rem !important;
+}
+.syslog-page > .glass:has(h2) > div:first-child h2 {
+  line-height: 1.25;
+}
+.syslog-page > .glass:has(h2) > div:first-child > p {
+  margin-top: .3rem;
+}
+.syslog-page > .glass:has(h2) form {
+  padding: 1rem 1.15rem !important;
+}
+.syslog-page > .glass-card { border-radius: 1rem; }
+@media (max-width: 768px) {
+  .syslog-page { padding-inline: .75rem; }
+  .syslog-hero { align-items: flex-start; }
+  .syslog-hero button { width: 100%; }
+  .syslog-filter-card { padding: .75rem !important; }
+}
+[data-theme="light"] .snmp-mac-stat {
+  background: transparent !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .snmp-mac-stat [style*="#667799"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .snmp-mac-mapping {
+  background: transparent !important;
+  border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .snmp-mac-mapping [style*="#8899bb"],
+[data-theme="light"] .snmp-mac-mapping [style*="#77859b"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .snmp-mac-topology-canvas {
+  background-image:
+    linear-gradient(rgba(100, 116, 139, .12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(100, 116, 139, .12) 1px, transparent 1px),
+    radial-gradient(circle at 50% 42%, rgba(14, 165, 233, .12), transparent 32%),
+    linear-gradient(145deg, #f8fafc, #e7eef6 72%) !important;
+  border-color: #94a3b8 !important;
+}
+[data-theme="light"] .snmp-mac-topology-controls {
+  background: rgba(248, 250, 252, .96) !important;
+  border-color: #94a3b8 !important;
+}
+[data-theme="light"] .snmp-mac-topology-core {
+  background: radial-gradient(circle, rgba(14, 165, 233, .22), rgba(186, 230, 253, .8) 56%, rgba(14, 165, 233, .1)) !important;
+  border-color: #0284c7 !important;
+  box-shadow: 0 0 28px rgba(14, 165, 233, .28), inset 0 0 24px rgba(14, 165, 233, .16) !important;
+}
+[data-theme="light"] .snmp-mac-topology-port {
+  color: #0f172a !important;
+  background: linear-gradient(145deg, #ffffff, #e8eef5) !important;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .16) !important;
+}
+[data-theme="light"] .snmp-mac-topology-port [style*="#8899bb"],
+[data-theme="light"] .snmp-mac-topology-port [style*="#667799"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .snmp-mac-topology-details {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .18) !important;
+}
+[data-theme="light"] .snmp-mac-topology-connection {
+  display: none !important;
+}
+
+/* SNMP module shell refresh: compact, layered chrome that remains legible in
+   both themes while allowing the monitoring accent colors to stand out. */
+.snmp-module-page {
+  position: relative;
+  isolation: isolate;
+}
+.snmp-module-page::before {
+  content: '';
+  position: absolute;
+  inset: 0 1.5rem auto;
+  height: 15rem;
+  pointer-events: none;
+  z-index: -1;
+  background: radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--t-accent) 14%, transparent), transparent 50%);
+}
+.snmp-breadcrumb {
+  color: var(--t-muted) !important;
+  letter-spacing: .02em;
+}
+.snmp-breadcrumb button { color: var(--t-text-secondary); }
+.snmp-breadcrumb button:hover { color: var(--t-accent) !important; }
+.snmp-page-header {
+  padding: 1.15rem 1.25rem;
+  border: 1px solid var(--t-border);
+  border-radius: 1rem;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--t-card) 92%, var(--t-accent)), var(--t-card));
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--t-bg) 20%, transparent);
+}
+.snmp-page-header h1 {
+  color: var(--t-text) !important;
+  letter-spacing: -.025em !important;
+  text-shadow: none !important;
+}
+.snmp-page-header p { color: var(--t-muted) !important; }
+.snmp-module-tabs {
+  padding: .4rem;
+  border: 1px solid var(--t-border);
+  border-radius: .9rem;
+  background: color-mix(in srgb, var(--t-card) 75%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--t-text) 5%, transparent);
+}
+.snmp-module-tabs button {
+  border-radius: .55rem !important;
+  transition: background .18s ease, border-color .18s ease, transform .18s ease;
+}
+.snmp-module-tabs button:hover { transform: translateY(-1px); }
+.snmp-collector-card {
+  border-radius: 1rem !important;
+  border-color: var(--t-border) !important;
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--t-bg) 24%, transparent);
+}
+.snmp-collector-card > div:first-child {
+  padding: 1.25rem !important;
+}
+.snmp-collector-card table thead th { font-weight: 600; letter-spacing: .08em; }
+.snmp-collector-card table tbody tr { transition: background .15s ease; }
+[data-theme="light"] .snmp-page-header {
+  background: linear-gradient(135deg, #ffffff, #f2f6fb);
+  box-shadow: 0 10px 28px rgba(30, 64, 110, .08);
+}
+[data-theme="light"] .snmp-module-tabs { background: rgba(255,255,255,.72); }
+[data-theme="dark"] .snmp-page-header {
+  background: linear-gradient(135deg, rgba(20,34,62,.9), rgba(11,19,35,.88));
+}
+
 * {
   box-sizing: border-box;
 }
@@ -157,6 +529,27 @@ a:focus-visible {
   color: var(--t-text) !important;
 }
 
+.text-zinc-100,
+.text-zinc-200,
+.text-zinc-300,
+.text-zinc-400,
+.text-zinc-500,
+.text-zinc-600,
+.text-zinc-700,
+.text-zinc-800,
+.text-zinc-900,
+.text-neutral-100,
+.text-neutral-200,
+.text-neutral-300,
+.text-neutral-400,
+.text-neutral-500,
+.text-neutral-600,
+.text-neutral-700,
+.text-neutral-800,
+.text-neutral-900 {
+  color: var(--t-text) !important;
+}
+
 .bg-black,
 .bg-white,
 .bg-gray-50,
@@ -167,6 +560,15 @@ a:focus-visible {
   background-color: var(--t-card) !important;
 }
 
+.bg-zinc-50,
+.bg-zinc-100,
+.bg-zinc-900,
+.bg-neutral-50,
+.bg-neutral-100,
+.bg-neutral-900 {
+  background-color: var(--t-card) !important;
+}
+
 .border-gray-200,
 .border-gray-300,
 .border-gray-700,
@@ -174,6 +576,13 @@ a:focus-visible {
 .border-slate-200,
 .border-slate-700,
 .border-white {
+  border-color: var(--t-border) !important;
+}
+
+.border-zinc-200,
+.border-zinc-700,
+.border-neutral-200,
+.border-neutral-700 {
   border-color: var(--t-border) !important;
 }
 

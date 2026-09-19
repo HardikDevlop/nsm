@@ -426,14 +426,8 @@ function ClockGauge({
 
       {/* center value */}
       <div
-        className={`absolute font-display ${isNoData ? "text-sm tracking-widest" : "text-2xl"}`}
+        className={`mt-2 font-display text-center ${isNoData ? "text-sm tracking-widest" : "text-2xl"}`}
         style={{
-          // The open area between the gauge's two endpoints is on the right.
-          // Keep the no-data message centered, but place real readings there
-          // so they don't compete with the lower arc.
-          left: isNoData ? "50%" : "76%",
-          top: isNoData ? size * 0.47 : size * 0.50,
-          transform: "translate(-50%, -50%)",
           color: isNoData ? "rgba(255,255,255,.4)" : tone,
           textShadow: isNoData ? "none" : `0 0 16px ${tone}88`,
         }}
@@ -494,8 +488,8 @@ function Speedometer({
   const endAngle = startAngle + sweep * animatedPct
 
   return (
-    <div className="relative" style={{ width: size, height: size * 0.6 }}>
-      <svg width={size} height={size * 0.65} className="overflow-visible">
+    <div className="relative flex flex-col items-center" style={{ width: size, height: size * 1.34 }}>
+      <svg width={size} height={size * 0.65} className="block shrink-0 overflow-visible">
         <path d={arc(startAngle, startAngle + sweep, radius)} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="9" strokeLinecap="round" />
         <path
           d={arc(startAngle, endAngle, radius)} fill="none" stroke={tone} strokeWidth="9" strokeLinecap="round"
@@ -520,11 +514,11 @@ function Speedometer({
         <circle cx={cx} cy={cy} r="6" fill={tone} style={{ filter: `drop-shadow(0 0 8px ${tone})` }} />
         <circle cx={cx} cy={cy} r="2.5" fill="#0a1428" />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-end pb-1">
-        <div className="font-display text-xl" style={{ color: tone, textShadow: `0 0 14px ${tone}88` }}>
+      <div className="pointer-events-none absolute left-0 right-0 top-[116px] flex flex-col items-center text-center">
+        <div className="font-display text-xl leading-none" style={{ color: tone, textShadow: `0 0 14px ${tone}88` }}>
           {(value * animatedPct / (pct || 1)).toFixed(value < 10 ? 1 : 0)}{unit}
         </div>
-        <div className="font-mono text-[9px] uppercase tracking-widest whitespace-nowrap" style={{ color: C.muted }}>{label}</div>
+        <div className="mt-1 font-mono text-[9px] uppercase tracking-widest whitespace-nowrap" style={{ color: C.muted }}>{label}</div>
       </div>
     </div>
   )
@@ -657,6 +651,7 @@ export default function Dashboard() {
   }, [range])
 
   const n: NormalizedOverview | null = data?.normalized ?? null
+  const rangeLabel = range === "1H" ? "Last 1 hour" : range === "6H" ? "Last 6 hours" : range === "12H" ? "Last 12 hours" : range === "7D" ? "Last 7 days" : "Last 24 hours"
   const devices = data?.devices ?? []
   const summary = data?.summary
   const snmpEnabled = devices.filter((d) => Boolean(d.snmp_version)).length
@@ -892,10 +887,10 @@ export default function Dashboard() {
             <Metric label={d.online} number={summary?.online_devices ?? 0} hint={d.reachable} tone="green" onClick={() => navigate("/device-monitoring")} />
             <Metric label={d.offline} number={summary?.offline_devices ?? 0} hint={d.unreachable} tone="red" onClick={() => navigate("/device-monitoring")} />
             <Metric label={d.snmpEnabled} number={snmpEnabled} hint={d.credentialsConfigured} tone="green" onClick={() => navigate("/snmp/devices")} />
-            <Metric label={d.snmpFailed} number={n?.polling.failure ?? 0} hint={d.last24Hours} tone="red" onClick={() => navigate("/monitoring-jobs")} />
+            <Metric label={d.snmpFailed} number={n?.polling.failure ?? 0} hint={rangeLabel} tone="red" onClick={() => navigate("/monitoring-jobs")} />
             <Metric label={d.criticalAlerts} number={summary?.critical_alerts ?? 0} hint={d.openAcknowledged} tone="red" onClick={() => navigate("/alerts")} />
             <Metric label={d.warningAlerts} number={(n?.alerts_by_severity.warning ?? 0) + (n?.alerts_by_severity.medium ?? 0)} hint={d.openAcknowledged} tone="amber" onClick={() => navigate("/alerts")} />
-            <Metric label={d.interfacesDown} number={n?.interface_summary.down ?? 0} hint={d.latestSnmpState} tone="red" onClick={() => navigate("/interfaces")} />
+          <Metric label={d.interfacesDown} number={n?.interface_summary.down ?? 0} hint={d.latestSnmpState} tone="red" onClick={() => navigate("/snmp")} />
           </div>
 
           {/* ═══════════ ROW: 4 CLOCK GAUGES ═══════════ */}
@@ -1017,7 +1012,7 @@ export default function Dashboard() {
 
           {/* ═══════════ ROW: Area Traffic + Top Devices ═══════════ */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <Panel title={d.networkTraffic} subtitle={`${d.storedInterfaceSamples} · ${range}`} onClick={() => navigate("/interfaces")}>
+            <Panel title={d.networkTraffic} subtitle={`${d.storedInterfaceSamples} · ${range}`} onClick={() => navigate("/snmp")}>
               <div className="flex gap-6 mb-3">
                 <div>
                   <div className="font-mono text-[10px]" style={{ color: C.muted }}>{d.rxTraffic}</div>
@@ -1171,7 +1166,7 @@ export default function Dashboard() {
 
           {/* ═══════════ ROW: Line Trend + Interfaces + SNMP ═══════════ */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <Panel title="Traffic Trend" subtitle={`DB persisted samples · ${range}${latestTrafficSample ? ` · last sample ${clock(latestTrafficSample)}` : " · awaiting samples"}`} onClick={() => navigate("/interfaces")}>
+            <Panel title="Traffic Trend" subtitle={`DB persisted samples · ${range}${latestTrafficSample ? ` · last sample ${clock(latestTrafficSample)}` : " · awaiting samples"}`} onClick={() => navigate("/snmp")}>
               {chart.length ? (
                 <ResponsiveContainer width="100%" height={230}>
                   <LineChart data={chart}>
@@ -1186,7 +1181,7 @@ export default function Dashboard() {
               ) : <Empty text={d.noInterfaceHistory} />}
             </Panel>
 
-            <Panel title={d.interfaces} subtitle={d.latestSnmpState} onClick={() => navigate("/interfaces")}>
+            <Panel title={d.interfaces} subtitle={d.latestSnmpState} onClick={() => navigate("/snmp")}>
               <div className="grid grid-cols-3 gap-2 mb-4">
                 <Mini label={d.total} number={n?.interface_summary.total ?? 0} />
                 <Mini label={d.up} number={n?.interface_summary.up ?? 0} tone={C.green} />
@@ -1197,7 +1192,7 @@ export default function Dashboard() {
                 <span>{d.drops} <b style={{ color: C.amber }}>{n?.interface_summary.drops ?? 0}</b></span>
               </div>
               {/* Mini gauges */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 items-start gap-3 pt-1">
                 <Speedometer
                   value={n?.interface_summary.total ? ((n?.interface_summary.up ?? 0) / n.interface_summary.total) * 100 : 0}
                   label="Interfaces UP"
@@ -1249,7 +1244,7 @@ export default function Dashboard() {
           {/* ═══════════ ROW: Network Info + Recent Table ═══════════ */}
           <SectionLabel label="Topology & Recent Activity" />
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <Panel title={d.networkInformation} subtitle={d.normalizedTopologyInventory} onClick={() => navigate("/topology")}>
+            <Panel title={d.networkInformation} subtitle={d.normalizedTopologyInventory}>
               <div className="grid grid-cols-2 gap-3">
                 {Object.entries({
                   [d.lldpCdpNeighbors]: n?.network.lldp_neighbors,

@@ -1,13 +1,99 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import GlassCard from '../components/GlassCard'
-import SNMPDiscoveryPanel from '../features/snmp/components/SNMPDiscoveryPanel'
 import SNMPSubnetDiscovery from '../features/snmp/components/SNMPSubnetDiscovery'
 import { PermissionGuard } from '../components/PermissionGuard'
 import { addDiscoveredDevices, checkStoredDevices, createDevice, createOrganization, createSite, deleteAllDevices, deleteDevice, detectLocalSubnet, getOverview, listDevices, listOrganizations, listSites, pingIps, startChunkedDiscovery, streamChunkedDiscovery, updateDevice, type ChunkedDiscoveryProgress, type DeviceRecord, type OrganizationRecord, type SiteRecord } from '../lib/api'
 import { confirmDanger, toast } from '../lib/swal'
 import { useI18n } from '../i18n/I18nContext'
+
+// ── Design tokens (shared across this page) ──
+const COLOR = {
+  cyan: '#00d4ff',
+  green: '#00ff88',
+  red: '#ff3366',
+  amber: '#ffaa00',
+  purple: '#9b8cff',
+}
+
+const muted = 'var(--t-muted, #8899bb)'
+const text = 'var(--t-text, #c8d8ee)'
+const cardAlpha = 'var(--t-card-alpha, rgba(4,14,33,0.85))'
+
+function fieldStyle(): React.CSSProperties {
+  return {
+    background: cardAlpha,
+    borderColor: 'rgba(0,212,255,0.24)',
+    color: text,
+  }
+}
+
+function tintStyle(color: string, alpha = 0.12, borderAlpha = 0.3): React.CSSProperties {
+  return {
+    background: `${color}${Math.round(alpha * 255).toString(16).padStart(2, '0')}`,
+    border: `1px solid ${color}${Math.round(borderAlpha * 255).toString(16).padStart(2, '0')}`,
+    color,
+  }
+}
+
+function StatusPill({ status }: { status: string }) {
+  const isOnline = status === 'online'
+  const color = isOnline ? COLOR.green : COLOR.red
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-mono text-[10px] tracking-wide"
+      style={tintStyle(color, 0.1, 0.28)}
+    >
+      <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+      {isOnline ? 'ONLINE' : 'OFFLINE'}
+    </span>
+  )
+}
+
+function SectionHeading({
+  title,
+  subtitle,
+  actions,
+}: {
+  title: string
+  subtitle?: string
+  actions?: React.ReactNode
+}) {
+  return (
+    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+      <div>
+        <div className="font-display font-bold text-base tracking-wider neon-cyan">{title}</div>
+        {subtitle ? (
+          <div className="font-mono text-xs mt-1" style={{ color: muted }}>{subtitle}</div>
+        ) : null}
+      </div>
+      {actions ? <div className="flex flex-wrap gap-2 shrink-0">{actions}</div> : null}
+    </div>
+  )
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div
+      className="rounded-lg border border-dashed px-4 py-6 text-center font-mono text-xs"
+      style={{ borderColor: 'rgba(0,212,255,0.18)', color: muted, background: 'rgba(0,212,255,0.02)' }}
+    >
+      {label}
+    </div>
+  )
+}
+
+function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="font-mono text-[11px] mb-1 block" style={{ color: required ? '#ff8866' : muted }}>
+        {label}{required ? ' *' : ''}
+      </label>
+      {children}
+    </div>
+  )
+}
 
 const moduleCatalog = [
   { key: 'icmp_discovery', label: 'ICMP', description: 'Ping reachability and host alive checks' },
@@ -48,6 +134,7 @@ function discoveryTargetIsValid(value: string): boolean {
 
 export default function ISPMonitoring() {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const tr = t.workflow
   const queryClient = useQueryClient()
   const [devices, setDevices] = useState<DeviceRecord[]>([])
@@ -58,7 +145,6 @@ export default function ISPMonitoring() {
   const [discoveryProgress, setDiscoveryProgress] = useState<ChunkedDiscoveryProgress | null>(null)
   const [discoveryResults, setDiscoveryResults] = useState<Record<string, unknown>[]>([])
   const [eventRows, setEventRows] = useState<Array<{ id: string; title: string; detail: string }>>([])
-  const [page, setPage] = useState(1)
   const [message, setMessage] = useState('')
   const [isDiscovering, setIsDiscovering] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -289,8 +375,6 @@ export default function ISPMonitoring() {
     return () => clearInterval(interval)
   }, [pingTopologyNodes])
 
-  const pageSize = 25
-
   const loadInitialData = async () => {
     try {
       const [deviceData, overview, subnetData] = await Promise.all([
@@ -339,20 +423,13 @@ export default function ISPMonitoring() {
     const online = devices.filter(device => device.status === 'online').length
     const offline = devices.filter(device => device.status !== 'online').length
     return [
-      { name: 'Devices', value: devices.length, color: '#00d4ff' },
-      { name: 'Online', value: online, color: '#00ff88' },
-      { name: 'Offline', value: offline, color: '#ff3366' },
-      { name: 'Interfaces', value: interfaceCount, color: '#ffaa00' },
-      { name: 'Open Alerts', value: openAlertCount, color: '#9b8cff' },
+      { name: 'Devices', value: devices.length, color: COLOR.cyan },
+      { name: 'Online', value: online, color: COLOR.green },
+      { name: 'Offline', value: offline, color: COLOR.red },
+      { name: 'Interfaces', value: interfaceCount, color: COLOR.amber },
+      { name: 'Open Alerts', value: openAlertCount, color: COLOR.purple },
     ]
   }, [devices, interfaceCount, openAlertCount])
-
-  const totalPages = Math.max(1, Math.ceil(eventRows.length / pageSize))
-  const pagedRows = useMemo(() => eventRows.slice((page - 1) * pageSize, page * pageSize), [eventRows, page])
-
-  useEffect(() => {
-    setPage(1)
-  }, [eventRows.length])
 
   const toggleModule = (moduleKey: string) => {
     // Open SNMP modal when SNMP is clicked
@@ -360,7 +437,7 @@ export default function ISPMonitoring() {
       setShowSNMPModal(true)
       return
     }
-    
+
     setSelectedModules(prev => {
       if (prev.includes(moduleKey)) {
         return prev.filter(item => item !== moduleKey)
@@ -402,7 +479,7 @@ export default function ISPMonitoring() {
       if (item.wmi) {
         rows.push({ id: `${index}-wmi`, title: 'WMI discovery', detail: JSON.stringify(item.wmi) })
       }
-      if (item.device_profile && !category && !os) {
+      if (item.device_profile && !item.snmp_name && !item.dns_hostname) {
         rows.push({ id: `${index}-profile-full`, title: 'Device profile', detail: JSON.stringify(item.device_profile) })
       }
       if (item.snmp_name) {
@@ -799,155 +876,177 @@ export default function ISPMonitoring() {
     })
   }
 
+  const newDeviceCount = discoveryResults.length - storedIps.size
+
   return (
     <div className="ip-scan-page p-4 md:p-6 space-y-4 md:space-y-5">
-      <div>
-        <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">{tr.scanTitle}</h1>
-        <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.scanSubtitle}</p>
+      {/* ── Header ── */}
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+        <div>
+          <h1 className="font-display font-bold text-2xl tracking-widest neon-cyan">{tr.scanTitle}</h1>
+          <p className="font-mono text-xs mt-0.5" style={{ color: muted }}>{tr.scanSubtitle}</p>
+        </div>
       </div>
 
-      {error ? <div className="font-mono text-xs" style={{ color: '#ff3366' }}>{error}</div> : null}
+      {error ? (
+        <div
+          className="rounded-lg px-4 py-2.5 font-mono text-xs"
+          style={tintStyle(COLOR.red, 0.08, 0.25)}
+        >
+          {error}
+        </div>
+      ) : null}
 
-
-      {/* Dynamic SNMP subnet sweep — scans all .1–.254 IPs in the current discovery target */}
-
-      <GlassCard className="p-4">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="font-display font-bold text-sm tracking-wider neon-cyan">{tr.discover}</div>
-            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>Choose the modules you want, start chunked discovery, then add discovered devices to the database.</div>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <div className="flex flex-col">
-              <input
-                value={discoveryTarget}
-                onChange={(event) => setDiscoveryTarget(event.target.value.replace(/[^\d./,-]/g, ''))}
-                className="rounded border px-3 py-2 font-mono text-xs outline-none"
-                style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)', minWidth: 180 }}
-                placeholder="192.168.1.1-192.168.1.255 or /24"
-              />
-              <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>
-                Single IP, start-end range, or CIDR. Maximum 255 IPs.
-              </div>
+      {/* ── Stat strip ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        {discoverySummary.map(entry => (
+          <GlassCard key={entry.name} className="p-3 cursor-pointer transition-all hover:-translate-y-0.5 hover:border-blue-400/60" onClick={() => navigate(entry.name === 'Interfaces' ? '/snmp' : entry.name === 'Open Alerts' ? '/alerts-management' : '/device-monitoring')} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') navigate(entry.name === 'Interfaces' ? '/snmp' : entry.name === 'Open Alerts' ? '/alerts-management' : '/device-monitoring') }}>
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: entry.color }} />
+              <span className="font-mono text-[10px] tracking-wide truncate" style={{ color: muted }}>{entry.name.toUpperCase()}</span>
             </div>
-            <PermissionGuard permission="discovery:execute">
+            <div className="font-display font-bold text-2xl mt-1" style={{ color: text }}>{entry.value}</div>
+          </GlassCard>
+        ))}
+      </div>
+
+      {/* ── Discovery panel ── */}
+      <GlassCard className="p-4 md:p-5">
+        <SectionHeading title={tr.discover} subtitle="Choose the modules you want, start chunked discovery, then add discovered devices to the database." />
+
+        <div className="flex flex-col lg:flex-row lg:items-start gap-4">
+          <div className="flex-1">
+            <label className="font-mono text-[11px] mb-1 block" style={{ color: muted }}>Discovery target</label>
+            <input
+              value={discoveryTarget}
+              onChange={(event) => setDiscoveryTarget(event.target.value.replace(/[^\d./,-]/g, ''))}
+              className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
+              style={fieldStyle()}
+              placeholder="192.168.1.1-192.168.1.255 or /24"
+            />
+            <div className="font-mono text-[10px] mt-1" style={{ color: muted }}>
+              Single IP, start-end range, or CIDR. Maximum 255 IPs.
+            </div>
+          </div>
+
+          <div className="lg:w-auto">
+            <span className="font-mono text-[11px] mb-1 block" style={{ color: muted }}>Modules</span>
+            <div className="flex flex-wrap gap-2">
+              {moduleCatalog.map(module => {
+                const active = selectedModules.includes(module.key)
+                return (
+                  <button
+                    key={module.key}
+                    type="button"
+                    title={module.description}
+                    onClick={() => toggleModule(module.key)}
+                    className="rounded-lg border px-3 py-2 text-left transition"
+                    style={active ? tintStyle(COLOR.cyan, 0.12, 0.35) : { borderColor: 'rgba(0,212,255,0.16)', background: 'rgba(255,255,255,0.03)', color: text }}
+                  >
+                    <div className="font-display text-xs tracking-wider">{module.label}</div>
+                    <div className="font-mono text-[10px] mt-0.5" style={{ color: active ? undefined : muted, opacity: active ? 0.85 : 1 }}>{module.description}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <PermissionGuard permission="discovery:execute">
             <button
               onClick={handleDiscover}
               disabled={isDiscovering}
-              className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition disabled:opacity-60"
-              style={{ background: isDiscovering ? 'rgba(255,170,0,0.2)' : 'rgba(0,212,255,0.16)', border: '1px solid rgba(0,212,255,0.3)', color: 'var(--t-text, #c8d8ee)' }}
+              className="rounded-lg px-5 py-2.5 font-display text-xs tracking-wider uppercase transition disabled:opacity-60 self-end lg:self-start lg:mt-5"
+              style={isDiscovering ? tintStyle(COLOR.amber, 0.16, 0.35) : tintStyle(COLOR.cyan, 0.16, 0.35)}
             >
-              {isDiscovering ? 'DISCOVERY RUNNING…' : tr.discover}
+              {isDiscovering ? 'Discovery running…' : tr.discover}
             </button>
-            </PermissionGuard>
-          </div>
+          </PermissionGuard>
         </div>
 
-        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {moduleCatalog.map(module => (
-            <label key={module.key} className="flex items-start gap-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: 'rgba(0,212,255,0.16)', background: 'rgba(255,255,255,0.03)' }}>
-              <input type="checkbox" checked={selectedModules.includes(module.key)} onChange={() => toggleModule(module.key)} />
-              <span>
-                <span className="font-display tracking-wider" style={{ color: 'var(--t-text, #c8d8ee)' }}>{module.label}</span>
-                <span className="block font-mono mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{module.description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2 items-center">
-          {discoveryResults.length > 0 && !isDiscovering && (
-            <PermissionGuard permission="devices:create">
-            <button
-              onClick={handleStoreResults}
-              className="rounded px-3 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80"
-              style={{ background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.3)', color: '#00ff88' }}
-            >
-              STORE ALL ({discoveryResults.length})
-            </button>
-            </PermissionGuard>
-          )}
-          <div className="font-mono text-xs self-center" style={{ color: 'var(--t-muted, #8899bb)' }}>{message || 'Discovery results will appear below as they stream in.'}</div>
+        <div className="mt-4 font-mono text-xs" style={{ color: muted }}>
+          {message || 'Discovery results will appear below as they stream in.'}
         </div>
 
         {discoveryProgress ? (
-          <div className="mt-4 rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.12)' }}>
-            <div className="flex items-center justify-between font-mono text-xs mb-2" style={{ color: 'var(--t-muted, #8899bb)' }}>
+          <div className="mt-3 rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.12)' }}>
+            <div className="flex items-center justify-between font-mono text-xs mb-2" style={{ color: muted }}>
               <span>{discoveryProgress.network_range}</span>
               <span>{discoveryProgress.progress_pct}% · {discoveryProgress.discovered_count} discovered</span>
             </div>
-            <div className="h-2 rounded-full" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.08))' }}>
-              <div className="h-2 rounded-full" style={{ width: `${Math.max(discoveryProgress.progress_pct, 4)}%`, background: discoveryProgress.status === 'completed' ? '#00ff88' : '#00d4ff' }} />
+            <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.08))' }}>
+              <div
+                className="h-2 rounded-full transition-all"
+                style={{ width: `${Math.max(discoveryProgress.progress_pct, 4)}%`, background: discoveryProgress.status === 'completed' ? COLOR.green : COLOR.cyan }}
+              />
             </div>
           </div>
         ) : null}
       </GlassCard>
- {!isDiscovering && discoveryResults.length > 0 && (
+
+      {/* ── Discovered devices ── */}
+      {!isDiscovering && discoveryResults.length > 0 && (
         <GlassCard className="p-4 md:p-5">
-          {/* header */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
-            <div>
-              <div className="font-display font-bold text-base tracking-wider neon-cyan">{tr.discovered}</div>
-              {/* <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>
-                {discoveryResults.length} device{discoveryResults.length !== 1 ? 's' : ''} found via ICMP/TCP scan
-                {storedIps.size > 0 && <span style={{ color: '#00ff88' }}> · {storedIps.size} stored</span>}
-              </div> */}
-            </div>
-            {discoveryResults.length > 0 && (
+          <SectionHeading
+            title={tr.discovered}
+            subtitle={`${discoveryResults.length} device${discoveryResults.length !== 1 ? 's' : ''} found${storedIps.size > 0 ? ` · ${storedIps.size} already stored` : ''}`}
+            actions={
               <PermissionGuard permission="devices:create">
-                <button onClick={handleStoreResults}
-                  className="rounded-lg px-4 py-2 font-display text-xs tracking-wider font-semibold transition hover:opacity-80 shrink-0"
-                  style={{ background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.3)', color: '#00ff88' }}>
-                  STORE ALL ({discoveryResults.length - storedIps.size} new)
+                <button
+                  onClick={handleStoreResults}
+                  disabled={newDeviceCount <= 0}
+                  className="rounded-lg px-4 py-2 font-display text-xs tracking-wider font-semibold transition hover:opacity-80 disabled:opacity-40"
+                  style={tintStyle(COLOR.green, 0.12, 0.3)}
+                >
+                  Store all ({newDeviceCount} new)
                 </button>
               </PermissionGuard>
-            )}
-          </div>
+            }
+          />
 
-          {/* device cards */}
-          <div className="space-y-3">
+          <div className="space-y-2">
             {sortedDiscoveryResults.map((device, idx) => {
               const item = device as Record<string, unknown>
-              const ip       = String(item.ip_address ?? item.ip ?? '')
+              const ip = String(item.ip_address ?? item.ip ?? '')
               const hostname = String(item.hostname ?? item.dns_hostname ?? item.snmp_name ?? ip)
-              const mac      = String(item.mac_address ?? item.mac ?? '—')
-              const status   = String(item.status ?? 'online')
+              const mac = String(item.mac_address ?? item.mac ?? '—')
+              const status = String(item.status ?? 'online')
               const deviceName = hostname !== ip ? hostname : `Device ${idx + 1}`
               const isStored = storedIps.has(ip)
               const isAdding = addingIps.has(ip)
 
               return (
-                <div key={`${ip}-${idx}`} className="ip-discovery-card rounded-xl overflow-hidden transition-all"
-                  style={{ border: isStored ? '1px solid rgba(0,255,136,0.25)' : '1px solid rgba(0,212,255,0.15)', background: isStored ? 'rgba(0,255,136,0.02)' : 'rgba(0,212,255,0.02)' }}>
-
-                  <div className="ip-discovery-row grid grid-cols-[1.4fr_1fr_1.4fr_0.9fr_1.2fr_auto] items-center gap-3 px-4 py-3"
-                    style={{ borderBottom: '1px solid rgba(0,212,255,0.08)', background: 'rgba(0,0,0,0.2)' }}>
-                    <div className="min-w-0">
-                      <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>Device Name</div>
-                      <div className="font-display text-sm tracking-wider truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{deviceName}</div>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>IP</div>
-                      <div className="font-mono text-xs truncate" style={{ color: '#00d4ff' }}>{ip}</div>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>Hostname</div>
-                      <div className="font-mono text-xs truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{hostname}</div>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>Status</div>
-                      <div className="font-mono text-xs truncate" style={{ color: status === 'online' ? '#00ff88' : '#ff3366' }}>{status}</div>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #556677)' }}>MAC</div>
-                      <div className="font-mono text-xs truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{mac}</div>
-                    </div>
-                    {!isStored && (
+                <div
+                  key={`${ip}-${idx}`}
+                  className="rounded-xl px-4 py-3 grid grid-cols-2 sm:grid-cols-[1.3fr_1fr_1.3fr_auto_auto] items-center gap-3 transition-colors"
+                  style={{ border: isStored ? '1px solid rgba(0,255,136,0.2)' : '1px solid rgba(0,212,255,0.14)', background: isStored ? 'rgba(0,255,136,0.02)' : 'rgba(0,212,255,0.02)' }}
+                >
+                  <div className="min-w-0">
+                    <div className="font-display text-sm tracking-wide truncate" style={{ color: text }}>{deviceName}</div>
+                    <div className="font-mono text-[11px] truncate" style={{ color: COLOR.cyan }}>{ip}</div>
+                  </div>
+                  <div className="min-w-0 hidden sm:block">
+                    <div className="font-mono text-[10px]" style={{ color: muted }}>MAC</div>
+                    <div className="font-mono text-xs truncate" style={{ color: text }}>{mac}</div>
+                  </div>
+                  <div className="min-w-0 hidden sm:block">
+                    <div className="font-mono text-[10px]" style={{ color: muted }}>Hostname</div>
+                    <div className="font-mono text-xs truncate" style={{ color: text }}>{hostname}</div>
+                  </div>
+                  <div className="justify-self-start sm:justify-self-auto">
+                    <StatusPill status={status} />
+                  </div>
+                  <div className="justify-self-end">
+                    {isStored ? (
+                      <span className="font-mono text-[11px]" style={{ color: COLOR.green }}>✓ Stored</span>
+                    ) : (
                       <PermissionGuard permission="devices:create">
-                        <button onClick={() => handleStoreSingle(device)} disabled={isAdding}
-                          className="font-mono text-xs px-3 py-1 rounded shrink-0 transition hover:opacity-80 disabled:opacity-50"
-                          style={{ background: 'rgba(0,212,255,0.12)', border: '1px solid rgba(0,212,255,0.3)', color: '#00d4ff' }}>
-                          {isAdding ? 'Adding…' : '+ ADD'}
+                        <button
+                          onClick={() => handleStoreSingle(device)}
+                          disabled={isAdding}
+                          className="font-mono text-xs px-3 py-1.5 rounded transition hover:opacity-80 disabled:opacity-50"
+                          style={tintStyle(COLOR.cyan, 0.1, 0.3)}
+                        >
+                          {isAdding ? 'Adding…' : '+ Add'}
                         </button>
                       </PermissionGuard>
                     )}
@@ -957,14 +1056,16 @@ export default function ISPMonitoring() {
             })}
           </div>
         </GlassCard>
-      )} 
+      )}
+
+      {/* ── Topology + stored devices ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <GlassCard className="p-4 md:p-5">
-          <div className="font-display font-bold text-base tracking-wider neon-cyan mb-2">NETWORK TOPOLOGY</div>
-          <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>
-            {topoNodes.length - 1} device(s) connected to gateway · {discoveryTarget}
-          </div>
-          <div className="relative" style={{ height: 320 }}>
+          <SectionHeading
+            title="Network topology"
+            subtitle={`${topoNodes.length - 1} device(s) connected to gateway · ${discoveryTarget}`}
+          />
+          <div className="relative" style={{ height: 300 }}>
             <canvas
               ref={canvasRef}
               className="w-full h-full"
@@ -987,47 +1088,46 @@ export default function ISPMonitoring() {
                     zIndex: 10,
                   }}
                 >
-                  <div className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{node.ip}</div>
-                  <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{node.hostname}</div>
+                  <div className="font-mono text-xs" style={{ color: text }}>{node.ip}</div>
+                  <div className="font-mono text-xs" style={{ color: muted }}>{node.hostname}</div>
                   {node.mac ? <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>MAC: {node.mac}</div> : null}
                 </div>
               )
             })()}
           </div>
-          <div className="flex flex-wrap gap-4 mt-3 justify-center">
+          <div className="flex flex-wrap gap-4 mt-3 justify-center border-t pt-3" style={{ borderColor: 'rgba(0,212,255,0.08)' }}>
             {discoverySummary.map(entry => (
-              <div key={entry.name} className="flex items-center gap-1.5 font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
+              <div key={entry.name} className="flex items-center gap-1.5 font-mono text-xs" style={{ color: muted }}>
                 <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: entry.color }} />
-                {entry.name}: <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{entry.value}</span>
+                {entry.name}: <span style={{ color: text }}>{entry.value}</span>
               </div>
             ))}
           </div>
         </GlassCard>
 
         <GlassCard className="p-4 md:p-5">
-          <div className="font-display font-bold text-base tracking-wider neon-cyan mb-2">STORED DEVICES</div>
-          <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Stored devices ready for monitoring ({devices.length})</div>
-          <div className="space-y-3">
+          <SectionHeading title="Stored devices" subtitle={`Ready for monitoring (${devices.length})`} />
+          <div className="space-y-2">
             {devices.length === 0 ? (
-              <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No stored devices yet. Discover and add devices to see them here.</div>
+              <EmptyState label="No stored devices yet. Discover and add devices to see them here." />
             ) : (
               <>
                 {(showAllStored ? devices : devices.slice(0, 5)).map(device => (
                   <div key={device.id} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
                     <div className="flex items-start justify-between gap-2">
-                      <div>
+                      <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="inline-block w-2 h-2 rounded-full" style={{ background: device.status === 'online' ? '#00ff88' : '#ff3366' }} />
-                          <div className="font-display text-sm tracking-wider" style={{ color: 'var(--t-text, #c8d8ee)' }}>{device.hostname}</div>
+                          <div className="font-display text-sm tracking-wider truncate" style={{ color: text }}>{device.hostname}</div>
+                          <StatusPill status={device.status} />
                         </div>
-                        <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · {device.model ?? '—'} · {device.status}</div>
-                        <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-muted, #667799)' }}>
-                          {device.mac_address ? `MAC: ${device.mac_address} · ` : ''}{device.vendor_name ? `Vendor: ${device.vendor_name} · ` : ''}{device.device_type ? `Type: ${device.device_type}` : ''}
-                        </div>
+                        <div className="font-mono text-xs mt-1" style={{ color: muted }}>{device.ip_address}{device.model ? ` · ${device.model}` : ''}</div>
+                        {(device.mac_address || device.vendor_name || device.device_type) ? (
+                          <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-muted, #667799)' }}>
+                            {device.mac_address ? `MAC: ${device.mac_address} · ` : ''}{device.vendor_name ? `Vendor: ${device.vendor_name} · ` : ''}{device.device_type ? `Type: ${device.device_type}` : ''}
+                          </div>
+                        ) : null}
                       </div>
-                      <div className="flex flex-col gap-2">
-                        <Link to={`/device-monitoring/${device.id}`} className="font-mono text-xs text-center" style={{ color: '#00d4ff' }}>View Details</Link>
-                      </div>
+                      <Link to={`/device-monitoring/${device.id}`} className="font-mono text-xs shrink-0" style={{ color: COLOR.cyan }}>Details</Link>
                     </div>
                   </div>
                 ))}
@@ -1035,9 +1135,9 @@ export default function ISPMonitoring() {
                   <button
                     onClick={() => setShowAllStored(!showAllStored)}
                     className="w-full rounded py-2 font-mono text-xs transition hover:opacity-80"
-                    style={{ background: 'rgba(0,212,255,0.08)', border: '1px solid rgba(0,212,255,0.2)', color: '#00d4ff' }}
+                    style={tintStyle(COLOR.cyan, 0.08, 0.2)}
                   >
-                    {showAllStored ? `Show Less` : `Show All ${devices.length} Devices ▼`}
+                    {showAllStored ? 'Show less' : `Show all ${devices.length} devices ▼`}
                   </button>
                 )}
               </>
@@ -1046,62 +1146,61 @@ export default function ISPMonitoring() {
         </GlassCard>
       </div>
 
-      {/* ── DEVICE CRUD MODULE ── */}
+      {/* ── Device management ── */}
       <GlassCard className="p-4 md:p-5">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
-          <div>
-            <div className="font-display font-bold text-base tracking-wider neon-cyan">DEVICE MANAGEMENT</div>
-            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted, #8899bb)' }}>Add, edit, and delete devices · Assign to organizations and sites</div>
-          </div>
-          <div className="flex gap-2 shrink-0">
-            <PermissionGuard permission="devices:delete">
-            <button
-              onClick={handleDeleteSelectedManaged}
-              disabled={selectedManagedDeviceIds.size === 0 || deletingSelectedManaged}
-              className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80 disabled:opacity-40"
-              style={{ background: 'rgba(255,51,102,0.12)', border: '1px solid rgba(255,51,102,0.3)', color: '#ff3366' }}
-            >
-              {deletingSelectedManaged ? 'DELETING…' : `DELETE SELECTED (${selectedManagedDeviceIds.size})`}
-            </button>
-            <button
-              onClick={handleDeleteAll}
-              disabled={devices.length === 0}
-              className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80 disabled:opacity-40"
-              style={{ background: 'rgba(255,51,102,0.12)', border: '1px solid rgba(255,51,102,0.3)', color: '#ff3366' }}
-            >
-              🗑 DELETE ALL
-            </button>
-            </PermissionGuard>
-            <PermissionGuard permission="devices:create">
-            <button
-              onClick={() => setShowAddDevice(!showAddDevice)}
-              className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80 shrink-0"
-              style={{ background: showAddDevice ? 'rgba(255,51,102,0.12)' : 'rgba(0,255,136,0.12)', border: `1px solid ${showAddDevice ? 'rgba(255,51,102,0.3)' : 'rgba(0,255,136,0.3)'}`, color: showAddDevice ? '#ff3366' : '#00ff88' }}
-            >
-              {showAddDevice ? '✕ CANCEL' : '+ ADD DEVICE'}
-            </button>
-            </PermissionGuard>
-          </div>
-        </div>
+        <SectionHeading
+          title="Device management"
+          subtitle="Add, edit, and delete devices · Assign to organizations and sites"
+          actions={
+            <>
+              <PermissionGuard permission="devices:delete">
+                <button
+                  onClick={handleDeleteSelectedManaged}
+                  disabled={selectedManagedDeviceIds.size === 0 || deletingSelectedManaged}
+                  className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80 disabled:opacity-40"
+                  style={tintStyle(COLOR.red, 0.12, 0.3)}
+                >
+                  {deletingSelectedManaged ? 'Deleting…' : `Delete selected (${selectedManagedDeviceIds.size})`}
+                </button>
+                <button
+                  onClick={handleDeleteAll}
+                  disabled={devices.length === 0}
+                  className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80 disabled:opacity-40"
+                  style={tintStyle(COLOR.red, 0.12, 0.3)}
+                >
+                  Delete all
+                </button>
+              </PermissionGuard>
+              <PermissionGuard permission="devices:create">
+                <button
+                  onClick={() => setShowAddDevice(!showAddDevice)}
+                  className="rounded px-4 py-2 font-display text-xs tracking-wider uppercase transition hover:opacity-80"
+                  style={showAddDevice ? tintStyle(COLOR.red, 0.12, 0.3) : tintStyle(COLOR.green, 0.12, 0.3)}
+                >
+                  {showAddDevice ? 'Cancel' : '+ Add device'}
+                </button>
+              </PermissionGuard>
+            </>
+          }
+        />
 
-        {crudError && <div className="font-mono text-xs mb-3" style={{ color: '#ff3366' }}>{crudError}</div>}
-        {crudMessage && <div className="font-mono text-xs mb-3" style={{ color: '#00ff88' }}>{crudMessage}</div>}
+        {crudError && <div className="font-mono text-xs mb-3" style={{ color: COLOR.red }}>{crudError}</div>}
+        {crudMessage && <div className="font-mono text-xs mb-3" style={{ color: COLOR.green }}>{crudMessage}</div>}
 
         {/* Add Device Form */}
         {showAddDevice && (
           <div className="mb-6 rounded-lg p-4" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.15)' }}>
-            <div className="font-display font-bold text-sm tracking-wider mb-3" style={{ color: '#00d4ff' }}>NEW DEVICE</div>
-            
+            <div className="font-display font-bold text-sm tracking-wider mb-3" style={{ color: COLOR.cyan }}>New device</div>
+
             {/* Organization & Site Selection */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Organization *</label>
+              <Field label="Organization" required>
                 <div className="flex gap-2">
                   <select
                     value={selectedOrgId ?? ''}
                     onChange={(e) => setSelectedOrgId(e.target.value ? Number(e.target.value) : null)}
                     className="flex-1 rounded border px-3 py-2 font-mono text-xs outline-none"
-                    style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                    style={fieldStyle()}
                   >
                     <option value="">Select organization</option>
                     {organizations.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}
@@ -1110,28 +1209,27 @@ export default function ISPMonitoring() {
                     value={newOrg}
                     onChange={(e) => setNewOrg(e.target.value)}
                     className="flex-1 rounded border px-3 py-2 font-mono text-xs outline-none"
-                    style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                    style={fieldStyle()}
                     placeholder="Or create new"
                   />
                   <PermissionGuard permission="organizations:create">
-                  <button
-                    onClick={handleCreateOrg}
-                    className="rounded px-3 py-2 font-mono text-xs transition hover:opacity-80"
-                    style={{ background: 'rgba(0,212,255,0.12)', border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff' }}
-                  >
-                    + Org
-                  </button>
+                    <button
+                      onClick={handleCreateOrg}
+                      className="rounded px-3 py-2 font-mono text-xs transition hover:opacity-80"
+                      style={tintStyle(COLOR.cyan, 0.12, 0.25)}
+                    >
+                      + Org
+                    </button>
                   </PermissionGuard>
                 </div>
-              </div>
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Site *</label>
+              </Field>
+              <Field label="Site" required>
                 <div className="flex gap-2">
                   <select
                     value={selectedSiteId ?? ''}
                     onChange={(e) => setSelectedSiteId(e.target.value ? Number(e.target.value) : null)}
                     className="flex-1 rounded border px-3 py-2 font-mono text-xs outline-none"
-                    style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                    style={fieldStyle()}
                     disabled={!selectedOrgId}
                   >
                     <option value="">Select site</option>
@@ -1141,105 +1239,99 @@ export default function ISPMonitoring() {
                     value={newSite}
                     onChange={(e) => setNewSite(e.target.value)}
                     className="flex-1 rounded border px-3 py-2 font-mono text-xs outline-none"
-                    style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                    style={fieldStyle()}
                     placeholder="Or create new"
                     disabled={!selectedOrgId}
                   />
                   <PermissionGuard permission="sites:create">
-                  <button
-                    onClick={handleCreateSite}
-                    disabled={!selectedOrgId}
-                    className="rounded px-3 py-2 font-mono text-xs transition hover:opacity-80 disabled:opacity-40"
-                    style={{ background: 'rgba(0,212,255,0.12)', border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff' }}
-                  >
-                    + Site
-                  </button>
+                    <button
+                      onClick={handleCreateSite}
+                      disabled={!selectedOrgId}
+                      className="rounded px-3 py-2 font-mono text-xs transition hover:opacity-80 disabled:opacity-40"
+                      style={tintStyle(COLOR.cyan, 0.12, 0.25)}
+                    >
+                      + Site
+                    </button>
                   </PermissionGuard>
                 </div>
-              </div>
+              </Field>
             </div>
 
             {/* Device Fields */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: '#ff6644' }}>Hostname * (required)</label>
+              <Field label="Hostname" required>
                 <input
                   value={deviceForm.hostname}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, hostname: e.target.value }))}
                   className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                  style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                  style={fieldStyle()}
                   placeholder="e.g., router-01"
                 />
-              </div>
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: '#ff6644' }}>IP Address * (required)</label>
+              </Field>
+              <Field label="IP address" required>
                 <input
                   value={deviceForm.ip_address}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, ip_address: e.target.value }))}
                   className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                  style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                  style={fieldStyle()}
                   placeholder="e.g., 192.168.1.100"
                 />
-              </div>
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>MAC Address</label>
+              </Field>
+              <Field label="MAC address">
                 <input
                   value={deviceForm.mac_address}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, mac_address: e.target.value }))}
                   className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                  style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                  style={fieldStyle()}
                   placeholder="e.g., 00:11:22:33:44:55"
                 />
-              </div>
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Model</label>
+              </Field>
+              <Field label="Model">
                 <input
                   value={deviceForm.model}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, model: e.target.value }))}
                   className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                  style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                  style={fieldStyle()}
                   placeholder="e.g., Cisco ISR 4321"
                 />
-              </div>
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Serial Number</label>
+              </Field>
+              <Field label="Serial number">
                 <input
                   value={deviceForm.serial_number}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, serial_number: e.target.value }))}
                   className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                  style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                  style={fieldStyle()}
                   placeholder="e.g., FTX12345678"
                 />
-              </div>
-              <div>
-                <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Firmware Version</label>
+              </Field>
+              <Field label="Firmware version">
                 <input
                   value={deviceForm.firmware_version}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, firmware_version: e.target.value }))}
                   className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                  style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                  style={fieldStyle()}
                   placeholder="e.g., 16.9.4"
                 />
-              </div>
+              </Field>
             </div>
 
             <PermissionGuard permission="devices:create">
-            <button
-              onClick={handleCreateDevice}
-              disabled={isCreating}
-              className="rounded px-6 py-2 font-display text-xs tracking-wider uppercase transition disabled:opacity-60"
-              style={{ background: 'rgba(0,255,136,0.16)', border: '1px solid rgba(0,255,136,0.3)', color: '#00ff88' }}
-            >
-              {isCreating ? 'CREATING…' : 'CREATE DEVICE'}
-            </button>
+              <button
+                onClick={handleCreateDevice}
+                disabled={isCreating}
+                className="rounded px-6 py-2 font-display text-xs tracking-wider uppercase transition disabled:opacity-60"
+                style={tintStyle(COLOR.green, 0.16, 0.3)}
+              >
+                {isCreating ? 'Creating…' : 'Create device'}
+              </button>
             </PermissionGuard>
           </div>
         )}
 
         {/* Device List with Edit/Delete */}
-        <div className="space-y-3">
+        <div className="space-y-2">
           {devices.length === 0 ? (
-            <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No devices yet. Add a device or run discovery to populate.</div>
+            <EmptyState label="No devices yet. Add a device or run discovery to populate." />
           ) : (
             devices.map(device => {
               const isEditing = editingDeviceId === device.id
@@ -1249,91 +1341,84 @@ export default function ISPMonitoring() {
               if (isEditing) {
                 return (
                   <div key={device.id} className="rounded-lg p-4" style={{ background: 'rgba(0,212,255,0.06)', border: '1px solid rgba(0,212,255,0.2)' }}>
-                    <div className="font-display text-sm tracking-wider mb-3" style={{ color: '#00d4ff' }}>EDIT DEVICE</div>
+                    <div className="font-display text-sm tracking-wider mb-3" style={{ color: COLOR.cyan }}>Edit device</div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                      <div>
-                        <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Hostname</label>
+                      <Field label="Hostname">
                         <input
                           value={editForm.hostname ?? ''}
                           onChange={(e) => setEditForm(prev => ({ ...prev, hostname: e.target.value }))}
                           className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                          style={fieldStyle()}
                         />
-                      </div>
-                      <div>
-                        <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>IP Address</label>
+                      </Field>
+                      <Field label="IP address">
                         <input
                           value={editForm.ip_address ?? ''}
                           onChange={(e) => setEditForm(prev => ({ ...prev, ip_address: e.target.value }))}
                           className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                          style={fieldStyle()}
                         />
-                      </div>
-                      <div>
-                        <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>MAC Address</label>
+                      </Field>
+                      <Field label="MAC address">
                         <input
                           value={editForm.mac_address ?? ''}
                           onChange={(e) => setEditForm(prev => ({ ...prev, mac_address: e.target.value }))}
                           className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                          style={fieldStyle()}
                         />
-                      </div>
-                      <div>
-                        <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Model</label>
+                      </Field>
+                      <Field label="Model">
                         <input
                           value={editForm.model ?? ''}
                           onChange={(e) => setEditForm(prev => ({ ...prev, model: e.target.value }))}
                           className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                          style={fieldStyle()}
                         />
-                      </div>
-                      <div>
-                        <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Serial Number</label>
+                      </Field>
+                      <Field label="Serial number">
                         <input
                           value={editForm.serial_number ?? ''}
                           onChange={(e) => setEditForm(prev => ({ ...prev, serial_number: e.target.value }))}
                           className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                          style={fieldStyle()}
                         />
-                      </div>
-                      <div>
-                        <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Firmware Version</label>
+                      </Field>
+                      <Field label="Firmware version">
                         <input
                           value={editForm.firmware_version ?? ''}
                           onChange={(e) => setEditForm(prev => ({ ...prev, firmware_version: e.target.value }))}
                           className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                          style={fieldStyle()}
                         />
-                      </div>
-                      <div>
-                        <label className="font-mono text-xs mb-1 block" style={{ color: 'var(--t-muted, #8899bb)' }}>Site</label>
+                      </Field>
+                      <Field label="Site">
                         <select
                           value={editForm.site_id ?? ''}
                           onChange={(e) => setEditForm(prev => ({ ...prev, site_id: e.target.value ? Number(e.target.value) : null }))}
                           className="w-full rounded border px-3 py-2 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-card-alpha, rgba(4,14,33,0.85))', borderColor: 'rgba(0,212,255,0.24)', color: 'var(--t-text, #c8d8ee)' }}
+                          style={fieldStyle()}
                         >
                           <option value="">No site</option>
                           {sites.map(site => <option key={site.id} value={site.id}>{site.name}</option>)}
                         </select>
-                      </div>
+                      </Field>
                     </div>
                     <div className="flex gap-2">
                       <PermissionGuard permission="devices:update">
-                      <button
-                        onClick={() => handleUpdateDevice(device.id)}
-                        className="rounded px-4 py-2 font-mono text-xs transition hover:opacity-80"
-                        style={{ background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.3)', color: '#00ff88' }}
-                      >
-                        ✓ SAVE
-                      </button>
+                        <button
+                          onClick={() => handleUpdateDevice(device.id)}
+                          className="rounded px-4 py-2 font-mono text-xs transition hover:opacity-80"
+                          style={tintStyle(COLOR.green, 0.12, 0.3)}
+                        >
+                          Save
+                        </button>
                       </PermissionGuard>
                       <button
                         onClick={() => { setEditingDeviceId(null); setEditForm({}) }}
                         className="rounded px-4 py-2 font-mono text-xs transition hover:opacity-80"
-                        style={{ background: 'rgba(255,51,102,0.12)', border: '1px solid rgba(255,51,102,0.3)', color: '#ff3366' }}
+                        style={tintStyle(COLOR.red, 0.12, 0.3)}
                       >
-                        ✕ CANCEL
+                        Cancel
                       </button>
                     </div>
                   </div>
@@ -1341,55 +1426,59 @@ export default function ISPMonitoring() {
               }
 
               return (
-                <div key={device.id} className="ip-managed-device rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
+                <div key={device.id} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
                   <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <input
-                          type="checkbox"
-                          checked={selectedManagedDeviceIds.has(device.id)}
-                          onChange={() => setSelectedManagedDeviceIds((current) => {
-                            const next = new Set(current)
-                            if (next.has(device.id)) next.delete(device.id)
-                            else next.add(device.id)
-                            return next
-                          })}
-                          aria-label={`Select ${device.hostname}`}
-                          className="h-4 w-4 accent-[#ff3366]"
-                        />
-                        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: device.status === 'online' ? '#00ff88' : '#ff3366' }} />
-                        <div className="font-display text-sm tracking-wider truncate" style={{ color: 'var(--t-text, #c8d8ee)' }}>{device.hostname}</div>
-                        <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address}</div>
-                      </div>
-                      <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>
-                        {device.model && <span>Model: {device.model} · </span>}
-                        {device.mac_address && <span>MAC: {device.mac_address} · </span>}
-                        {device.vendor_name && <span>Vendor: {device.vendor_name} · </span>}
-                        {device.device_type && <span>Type: {device.device_type} · </span>}
-                        {device.snmp_version && <span>SNMP: {device.snmp_version} · </span>}
-                        {org && <span>Org: {org.name} · </span>}
-                        {site && <span>Site: {site.name}</span>}
+                    <div className="flex-1 min-w-0 flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedManagedDeviceIds.has(device.id)}
+                        onChange={() => setSelectedManagedDeviceIds((current) => {
+                          const next = new Set(current)
+                          if (next.has(device.id)) next.delete(device.id)
+                          else next.add(device.id)
+                          return next
+                        })}
+                        aria-label={`Select ${device.hostname}`}
+                        className="h-4 w-4 mt-1 accent-[#ff3366] shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="font-display text-sm tracking-wider truncate" style={{ color: text }}>{device.hostname}</div>
+                          <span className="font-mono text-xs" style={{ color: muted }}>{device.ip_address}</span>
+                          <StatusPill status={device.status} />
+                        </div>
+                        <div className="font-mono text-[11px] mt-1" style={{ color: 'var(--t-muted, #667799)' }}>
+                          {[
+                            device.model && `Model: ${device.model}`,
+                            device.mac_address && `MAC: ${device.mac_address}`,
+                            device.vendor_name && `Vendor: ${device.vendor_name}`,
+                            device.device_type && `Type: ${device.device_type}`,
+                            device.snmp_version && `SNMP: ${device.snmp_version}`,
+                            org && `Org: ${org.name}`,
+                            site && `Site: ${site.name}`,
+                          ].filter(Boolean).join(' · ')}
+                        </div>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Link to={`/device-monitoring/${device.id}`} className="font-mono text-xs px-3 py-1 rounded" style={{ color: '#00d4ff', background: 'rgba(0,212,255,0.08)', border: '1px solid rgba(0,212,255,0.2)' }}>Details</Link>
+                    <div className="flex flex-wrap gap-2 shrink-0">
+                      <Link to={`/device-monitoring/${device.id}`} className="font-mono text-xs px-3 py-1 rounded" style={tintStyle(COLOR.cyan, 0.08, 0.2)}>Details</Link>
                       <PermissionGuard permission="devices:update">
-                      <button
-                        onClick={() => startEdit(device)}
-                        className="font-mono text-xs px-3 py-1 rounded transition hover:opacity-80"
-                        style={{ background: 'rgba(255,170,0,0.12)', border: '1px solid rgba(255,170,0,0.3)', color: '#ffaa00' }}
-                      >
-                        Edit
-                      </button>
+                        <button
+                          onClick={() => startEdit(device)}
+                          className="font-mono text-xs px-3 py-1 rounded transition hover:opacity-80"
+                          style={tintStyle(COLOR.amber, 0.12, 0.3)}
+                        >
+                          Edit
+                        </button>
                       </PermissionGuard>
                       <PermissionGuard permission="devices:delete">
-                      <button
-                        onClick={() => handleDeleteDevice(device.id, device.hostname)}
-                        className="font-mono text-xs px-3 py-1 rounded transition hover:opacity-80"
-                        style={{ background: 'rgba(255,51,102,0.12)', border: '1px solid rgba(255,51,102,0.3)', color: '#ff3366' }}
-                      >
-                        Delete
-                      </button>
+                        <button
+                          onClick={() => handleDeleteDevice(device.id, device.hostname)}
+                          className="font-mono text-xs px-3 py-1 rounded transition hover:opacity-80"
+                          style={tintStyle(COLOR.red, 0.12, 0.3)}
+                        >
+                          Delete
+                        </button>
                       </PermissionGuard>
                     </div>
                   </div>
@@ -1400,41 +1489,14 @@ export default function ISPMonitoring() {
         </div>
       </GlassCard>
 
-     
-
-      {/* <GlassCard className="p-5">
-        <div className="font-display font-bold text-base tracking-wider neon-cyan mb-2">DISCOVERY DETAILS</div>
-        <div className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted, #8899bb)' }}>Every module payload is rendered here with 25 rows per page so you can step through the full discovery output.</div>
-        {eventRows.length === 0 ? (
-          <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No discovery details yet. Start a discovery run to populate this view.</div>
-        ) : (
-          <>
-            <div className="space-y-3">
-              {pagedRows.map(row => (
-                <div key={row.id} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
-                  <div className="font-display text-sm tracking-wider" style={{ color: 'var(--t-text, #c8d8ee)' }}>{row.title}</div>
-                  <div className="font-mono text-xs mt-1 break-all" style={{ color: 'var(--t-muted, #8899bb)' }}>{row.detail}</div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 flex items-center justify-between">
-              <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>Page {page} of {totalPages} · {eventRows.length} rows</div>
-              <div className="flex gap-2">
-                <button onClick={() => setPage(prev => Math.max(1, prev - 1))} disabled={page === 1} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: 'var(--t-text, #c8d8ee)' }}>← Prev</button>
-                <button onClick={() => setPage(prev => Math.min(totalPages, prev + 1))} disabled={page >= totalPages} className="rounded px-2 py-1 font-mono text-xs" style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.2)', color: 'var(--t-text, #c8d8ee)' }}>Next →</button>
-              </div>
-            </div>
-          </>
-        )}
-      </GlassCard> */}
-
       {/* SNMP Discovery Modal */}
       {showSNMPModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)' }}
-          onClick={e => { if (e.target === e.currentTarget) setShowSNMPModal(false) }}>
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl"
-            style={{ background: 'rgba(8,25,55,0.98)', border: '2px solid rgba(0,212,255,0.3)' }}>
+          onClick={e => { if (e.target === e.currentTarget) setShowSNMPModal(false) }}
+        >
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl" style={{ background: 'rgba(8,25,55,0.98)', border: '2px solid rgba(0,212,255,0.3)' }}>
             <SNMPSubnetDiscovery
               subnet={discoveryTarget}
               onDevicesStored={async () => {
@@ -1446,8 +1508,9 @@ export default function ISPMonitoring() {
               <button
                 onClick={() => setShowSNMPModal(false)}
                 className="w-full py-2 rounded font-mono text-xs font-bold transition-all"
-                style={{ background: 'rgba(136,153,187,0.12)', border: '1px solid rgba(136,153,187,0.3)', color: 'var(--t-muted, #8899bb)' }}>
-                CLOSE
+                style={{ background: 'rgba(136,153,187,0.12)', border: '1px solid rgba(136,153,187,0.3)', color: muted }}
+              >
+                Close
               </button>
             </div>
           </div>

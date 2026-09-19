@@ -196,7 +196,7 @@ export default function SNMPCollectorDataCard({
   const qualityTone = dataQuality === "complete" ? "#00ff88" : dataQuality === "stale" ? "#ff6b8a" : "#ffaa00"
 
   return (
-    <GlassCard className="overflow-hidden">
+    <GlassCard className="snmp-collector-card overflow-hidden">
       <div
         className="relative overflow-hidden p-4"
         style={{
@@ -258,7 +258,7 @@ export default function SNMPCollectorDataCard({
           </div>
         )}
         {macTableStats && (
-          <div className="relative mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <div className="snmp-mac-stats relative mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
             {([
               ["PORTS", macTableStats.ports, "#00d4ff"],
               ["MAC ADDRESSES", macTableStats.macs, "#00ff88"],
@@ -269,7 +269,7 @@ export default function SNMPCollectorDataCard({
               ([label, value, tone]) => (
                 <div
                   key={label}
-                  className="rounded-lg border p-2.5"
+                  className="snmp-mac-stat rounded-lg border p-2.5"
                   style={{
                     borderColor: `${tone}33`,
                     background: "rgba(2,8,18,.55)",
@@ -394,7 +394,7 @@ export default function SNMPCollectorDataCard({
                             {(group.device_mappings || []).map((mapping: any) => (
                               <div
                                 key={mapping.mac}
-                                className="rounded border px-2 py-1"
+                                className="snmp-mac-mapping rounded border px-2 py-1"
                                 style={{ borderColor: "rgba(0,212,255,0.12)", background: "rgba(8,25,55,.28)" }}
                               >
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[9px] leading-tight">

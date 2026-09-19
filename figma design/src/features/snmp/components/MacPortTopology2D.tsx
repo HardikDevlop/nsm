@@ -27,7 +27,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
 
   return (
     <div
-      className="p-4 sm:p-5"
+      className="snmp-mac-topology p-4 sm:p-5"
       style={{ borderBottom: "1px solid rgba(0,212,255,0.08)" }}
     >
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
@@ -51,7 +51,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
         </div>
       </div>
       <div
-        className="relative overflow-hidden rounded-xl"
+        className="snmp-mac-topology-canvas relative overflow-hidden rounded-xl"
         onPointerDown={(event) => {
           if ((event.target as HTMLElement).closest("button")) return
           drag.current = { x: event.clientX, y: event.clientY }
@@ -81,7 +81,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
         }}
       >
         <div
-          className="absolute top-3 right-3 z-30 flex overflow-hidden rounded-md"
+            className="snmp-mac-topology-controls absolute top-3 right-3 z-30 flex overflow-hidden rounded-md"
           style={{
             background: "rgba(2,8,18,.9)",
             border: "1px solid rgba(0,212,255,.2)",
@@ -127,7 +127,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
           }}
         >
           <div
-            className="absolute left-1/2 top-1/2 rounded-full"
+            className="snmp-mac-topology-core absolute left-1/2 top-1/2 rounded-full"
             style={{
               width: 176,
               height: 176,
@@ -179,7 +179,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
             return (
               <div key={`${port}-${index}`}>
                 <div
-                  className="absolute left-1/2 top-1/2 origin-left"
+                  className="snmp-mac-topology-connection absolute left-1/2 top-1/2 origin-left"
                   style={{
                     width: `${Math.hypot((x - 50) * 2.1, (y - 50) * 1.8)}%`,
                     transform: `rotate(${angle}rad)`,
@@ -192,7 +192,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
                   type="button"
                   aria-label={`Port ${port}, ${group.mac_count ?? group.macs?.length ?? 0} MAC addresses, ${ips.length} IP addresses`}
                   onClick={() => setSelectedPort(active ? null : port)}
-                  className="absolute rounded-lg text-left transition-transform hover:scale-105"
+                  className="snmp-mac-topology-port absolute rounded-lg text-left transition-transform hover:scale-105"
                   style={{
                     left: `${x}%`,
                     top: `${y}%`,
@@ -238,7 +238,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
                 </button>
                 {active && (
                   <div
-                    className="absolute z-20 rounded-lg p-2 font-mono text-[9px]"
+                    className="snmp-mac-topology-details absolute z-20 rounded-lg p-2 font-mono text-[9px]"
                     style={{
                       left: `${Math.min(80, Math.max(8, x - 8))}%`,
                       top: `${Math.min(84, y + 10)}%`,

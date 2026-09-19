@@ -343,7 +343,11 @@ def get_overview(
             Alert.id, Alert.device_id, Alert.severity, Alert.title,
             Alert.description, Alert.status, Alert.created_at,
         ))
-        .filter(Alert.status.in_(["open", "acknowledged"]), Alert.deleted_at.is_(None))
+        .filter(
+            Alert.status.in_(["open", "acknowledged"]),
+            Alert.deleted_at.is_(None),
+            Alert.created_at >= since_24h,
+        )
         .order_by(Alert.created_at.desc())
         .limit(50)
         .all()

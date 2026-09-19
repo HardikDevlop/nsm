@@ -16,6 +16,7 @@ import {
 import { updateDevice, deleteDevice } from "../../../lib/api"
 import { useAuth } from "../../../components/AuthContext"
 import { confirmDanger, toast } from "../../../lib/swal"
+import { formatIST } from '../../../time'
 
 const STATUS_COLORS: Record<string, { dot: string text: string }> = {
   online: { dot: "#00ff88", text: "#00ff88" },
@@ -807,7 +808,7 @@ export default function SNMPDevicesPage() {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full" style={{ minWidth: 1000 }}>
+              <table className="w-full snmp-inventory-table" style={{ minWidth: 1000 }}>
                 <thead>
                   <tr
                     style={{ borderBottom: "1px solid rgba(0,212,255,0.08)" }}
@@ -972,17 +973,13 @@ export default function SNMPDevicesPage() {
                         className="px-4 py-2 font-mono text-[10px]"
                         style={{ color: "#8899bb" }}
                       >
-                        {device.last_seen
-                          ? new Date(device.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
-                          : "—"}
+                        {device.last_seen ? formatIST(device.last_seen) : "—"}
                       </td>
                       <td
                         className="px-4 py-2 font-mono text-[10px]"
                         style={{ color: "#8899bb" }}
                       >
-                        {device.last_poll_at
-                          ? new Date(device.last_poll_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
-                          : "—"}
+                        {device.last_poll_at ? formatIST(device.last_poll_at) : "—"}
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-1">

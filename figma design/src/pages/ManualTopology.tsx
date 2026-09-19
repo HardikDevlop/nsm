@@ -10,6 +10,7 @@ import {
   createManualTopologySnapshot,
   getLatestInterfaces,
   getLatestManualTopologySnapshot,
+  getOverview,
   getSNMPInterfaces,
   getSNMPTopology,
   listSNMPDevicesOptimized,
@@ -75,6 +76,7 @@ type Link = {
 }
 type Workspace = { devices: Device[] links: Link[] }
 type ViewMode = "manual" | "actual" | "compare"
+type DeviceHealthStatus = "online" | "offline" | "degraded" | "stale" | "unknown"
 type EditForm = {
   name: string
   type: string
@@ -82,18 +84,40 @@ type EditForm = {
   mac: string
   location: string
   description: string
+  vendor: string
+  model: string
+  serial: string
+  firmware: string
+  snmpVersion: string
 }
 
 const CANVAS = { width: 1400, height: 820 }
 const NODE_SOCKET = { x: 58, y: 34 }
 const STORAGE_KEY = "nms.manual-topology.workspace.v2"
 const VIEWPORT_STORAGE_KEY = "nms.manual-topology.viewport.v1"
+
+function normalizeHealthStatus(value: unknown): DeviceHealthStatus {
+  const status = String(value ?? "unknown").toLowerCase()
+  return status === "online" || status === "offline" || status === "degraded" || status === "stale"
+    ? status
+    : "unknown"
+}
+
+function healthColor(status: DeviceHealthStatus) {
+  if (status === "online") return "#61c98d"
+  if (status === "offline") return "#d9646a"
+  if (status === "degraded") return "#d4a95c"
+  return "#9aa3a0"
+}
+
+function healthLabel(status: DeviceHealthStatus) {
+  return status.charAt(0).toUpperCase() + status.slice(1)
+}
 const palette = [
   "#3b82f6",
   "#36c2b4",
   "#d4a95c",
   "#61c98d",
-  "#d9646a",
   "#9b8afb",
 ]
 const editableDeviceTypes = [
@@ -1104,6 +1128,7 @@ export default function ManualTopology() {
   const [showPortLabels, setShowPortLabels] = useState(false)
   const [hoveredLinkId, setHoveredLinkId] = useState<string | null>(null)
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null)
+  const [deviceHealth, setDeviceHealth] = useState<Record<number, DeviceHealthStatus>>({})
   const mainRef = useRef<HTMLElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const dragMoved = useRef(false)
@@ -1113,6 +1138,14 @@ export default function ManualTopology() {
   const dragLatestWorkspace = useRef<Workspace | null>(null)
   const routingLatestWorkspace = useRef<Workspace | null>(null)
   const saveTimer = useRef<number | null>(null)
+
+  const healthStatusFor = (device: Device): DeviceHealthStatus =>
+    device.backendId != null
+      ? deviceHealth[device.backendId] ?? "unknown"
+      : "unknown"
+  const healthColorFor = (device: Device) => healthColor(healthStatusFor(device))
+  const renderedToneFor = (device: Device) =>
+    healthStatusFor(device) === "offline" ? "#d9646a" : device.tone
   const panStart = useRef<{ x: number y: number } | null>(null)
 
   const clampZoom = (value: number) => Math.min(3, Math.max(0.25, value))
@@ -1208,8 +1241,8 @@ export default function ManualTopology() {
           (locationFilter === "all" || d.location === locationFilter) &&
           (healthFilter === "all" ||
             (healthFilter === "offline"
-              ? d.status?.toLowerCase() === "offline"
-              : d.status?.toLowerCase() !== "offline"))
+              ? healthStatusFor(d) === "offline"
+              : healthStatusFor(d) !== "offline"))
         )
       }),
     [
@@ -1286,6 +1319,28 @@ export default function ManualTopology() {
     commit(next)
     scheduleSave(next)
   }
+
+  useEffect(() => {
+    let active = true
+    const syncDeviceHealth = () => {
+      void getOverview()
+        .then((result) => {
+          if (!active) return
+          const next: Record<number, DeviceHealthStatus> = {}
+          for (const item of result.devices ?? []) {
+            if (item?.id != null) next[Number(item.id)] = normalizeHealthStatus(item.health?.status)
+          }
+          setDeviceHealth(next)
+        })
+        .catch(() => undefined)
+    }
+    syncDeviceHealth()
+    const healthTimer = window.setInterval(syncDeviceHealth, 10000)
+    return () => {
+      active = false
+      window.clearInterval(healthTimer)
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -2450,6 +2505,11 @@ export default function ManualTopology() {
       mac: device.macAddress || "",
       location: device.location || "",
       description: device.description || "",
+      vendor: device.vendor || "",
+      model: device.model || "",
+      serial: device.serialNumber || "",
+      firmware: device.firmware || "",
+      snmpVersion: device.snmpVersion || "",
     })
     setInspectorTab("overview")
   }
@@ -2482,17 +2542,30 @@ export default function ManualTopology() {
       editForm.mac.trim() !== (device.macAddress || "") ||
       editForm.location.trim() !== (device.location || "") ||
       editForm.description.trim() !== (device.description || "")
+      || editForm.vendor.trim() !== (device.vendor || "")
+      || editForm.model.trim() !== (device.model || "")
+      || editForm.serial.trim() !== (device.serialNumber || "")
+      || editForm.firmware.trim() !== (device.firmware || "")
+      || editForm.snmpVersion.trim() !== (device.snmpVersion || "")
     if (!changed) return
     setEditSaving(true)
     try {
       if (device.backendId) {
         await updateDevice(device.backendId, {
           hostname: editForm.name.trim(),
+          ip_address: editForm.ip.trim() || undefined,
+          mac_address: editForm.mac.trim() || undefined,
+          model: editForm.model.trim() || undefined,
+          serial_number: editForm.serial.trim() || undefined,
+          firmware_version: editForm.firmware.trim() || undefined,
+          vendor_name: editForm.vendor.trim() || undefined,
           topology_metadata: {
             ...device.topologyMetadata,
             manual_type: editForm.type.trim() || "Network Device",
             location: editForm.location.trim() || null,
             description: editForm.description.trim() || null,
+            manual_vendor: editForm.vendor.trim() || null,
+            manual_snmp_version: editForm.snmpVersion.trim() || null,
           },
         })
       }
@@ -2507,20 +2580,23 @@ export default function ManualTopology() {
           device.vendor,
           device.model,
         ),
-        subtitle: device.backendId ? device.subtitle : editForm.ip.trim(),
-        ipAddress: device.backendId
-          ? device.ipAddress
-          : editForm.ip.trim() || undefined,
-        macAddress: device.backendId
-          ? device.macAddress
-          : editForm.mac.trim() || undefined,
+        subtitle: editForm.ip.trim() || undefined,
+        ipAddress: editForm.ip.trim() || undefined,
+        macAddress: editForm.mac.trim() || undefined,
         location: editForm.location.trim() || undefined,
         description: editForm.description.trim() || undefined,
+        vendor: editForm.vendor.trim() || undefined,
+        model: editForm.model.trim() || undefined,
+        serialNumber: editForm.serial.trim() || undefined,
+        firmware: editForm.firmware.trim() || undefined,
+        snmpVersion: editForm.snmpVersion.trim() || undefined,
         topologyMetadata: {
           ...device.topologyMetadata,
           manual_type: editForm.type.trim() || "Network Device",
           location: editForm.location.trim() || null,
           description: editForm.description.trim() || null,
+          manual_vendor: editForm.vendor.trim() || null,
+          manual_snmp_version: editForm.snmpVersion.trim() || null,
         },
       }
       updateWorkspace({
@@ -3094,7 +3170,7 @@ export default function ManualTopology() {
                       height="28"
                       viewBox="0 0 48 48"
                       fill="none"
-                      stroke={device.tone}
+                      stroke={renderedToneFor(device)}
                       strokeWidth="2"
                       aria-hidden="true"
                     >
@@ -3108,10 +3184,7 @@ export default function ManualTopology() {
                     <span
                       className="mt-1 h-2.5 w-2.5 rounded-full"
                       style={{
-                        background:
-                          device.status?.toLowerCase() === "offline"
-                            ? "#d9646a"
-                            : device.tone,
+                        background: healthColorFor(device),
                       }}
                     />
                     <div className="min-w-0 flex-1">
@@ -3124,7 +3197,7 @@ export default function ManualTopology() {
                     </div>
                   </div>
                   <div className="mt-2 flex items-center justify-between font-mono text-[8px] text-[#8b9693]">
-                    <span>{device.status?.toUpperCase() || "UNKNOWN"}</span>
+                    <span>{healthLabel(healthStatusFor(device))}</span>
                     <span>{device.ports?.length || 0} ports</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">
@@ -3602,18 +3675,18 @@ export default function ManualTopology() {
                     fill="transparent"
                     stroke={
                       selectedId === device.id
-                        ? `${device.tone}ee`
-                        : `${device.tone}66`
+                        ? `${renderedToneFor(device)}ee`
+                        : `${renderedToneFor(device)}66`
                     }
                     strokeWidth="2"
                     strokeDasharray={selectedId === device.id ? "4 4" : undefined}
                   />
-                  <g>{deviceIllustration(device.type, device.tone)}</g>
+                  <g>{deviceIllustration(device.type, renderedToneFor(device))}</g>
                   <circle
                     cx="111"
                     cy="13"
                     r="3"
-                    fill={device.status?.toLowerCase() === "offline" ? "#d9646a" : "#61c98d"}
+                    fill={healthColorFor(device)}
                   />
                   {zoom < 0.5 && (
                     <text
@@ -3692,7 +3765,7 @@ export default function ManualTopology() {
                             {classifyDevice(device.type, device.name, device.vendor, device.model).replaceAll("_", " ")}
                           </span>
                           <span className="shrink-0 rounded border border-[#61c98d55] px-1 py-0.5 font-mono text-[7px] text-[#61c98d]">
-                            {device.status?.toUpperCase() || "UNKNOWN"}
+                            {healthLabel(healthStatusFor(device))}
                           </span>
                         </div>
                         <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 border-y border-white/[.08] py-1.5 font-mono text-[7px] leading-tight">
@@ -4112,7 +4185,6 @@ export default function ManualTopology() {
                       IP Address
                       <input
                         value={editForm.ip}
-                        readOnly={Boolean(selected.backendId)}
                         onChange={(event) =>
                           setEditForm({ ...editForm, ip: event.target.value })
                         }
@@ -4121,29 +4193,15 @@ export default function ManualTopology() {
                             ? "border-[#d9646a]"
                             : "border-white/[.1]"
                         } ${
-                          selected.backendId
-                            ? "bg-[#18201f] text-[#7f8b88]"
-                            : "bg-[#0d1113]"
+                          "bg-[#0d1113]"
                         } px-2 text-[10px]`}
                       />
-                      {selected.backendId ? (
-                        <span className="mt-1 block text-[8px] text-[#7f8b88]">
-                          READ ONLY: changing management IP can affect
-                          monitoring
-                        </span>
-                      ) : (
-                        editErrors.ip && (
-                          <span className="mt-1 block text-[9px] text-[#d9646a]">
-                            {editErrors.ip}
-                          </span>
-                        )
-                      )}
+                      {editErrors.ip && <span className="mt-1 block text-[9px] text-[#d9646a]">{editErrors.ip}</span>}
                     </label>
                     <label className="block">
                       MAC Address
                       <input
                         value={editForm.mac}
-                        readOnly={Boolean(selected.backendId)}
                         onChange={(event) =>
                           setEditForm({ ...editForm, mac: event.target.value })
                         }
@@ -4152,22 +4210,10 @@ export default function ManualTopology() {
                             ? "border-[#d9646a]"
                             : "border-white/[.1]"
                         } ${
-                          selected.backendId
-                            ? "bg-[#18201f] text-[#7f8b88]"
-                            : "bg-[#0d1113]"
+                          "bg-[#0d1113]"
                         } px-2 text-[10px]`}
                       />
-                      {selected.backendId ? (
-                        <span className="mt-1 block text-[8px] text-[#7f8b88]">
-                          READ ONLY: inventory-derived identity
-                        </span>
-                      ) : (
-                        editErrors.mac && (
-                          <span className="mt-1 block text-[9px] text-[#d9646a]">
-                            {editErrors.mac}
-                          </span>
-                        )
-                      )}
+                      {editErrors.mac && <span className="mt-1 block text-[9px] text-[#d9646a]">{editErrors.mac}</span>}
                     </label>
                     <label className="block">
                       {selected.backendId ? "Topology Location" : "Location"}
@@ -4198,25 +4244,16 @@ export default function ManualTopology() {
                     </label>
                     <div className="border-t border-white/[.08] pt-3">
                       <div className="font-mono text-[8px] uppercase tracking-widest text-[#7f8b88]">
-                        DISCOVERED / READ ONLY
+                        DISCOVERED / SYNCED
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2 text-[9px]">
-                        {[
-                          ["Vendor", selected.vendor],
-                          ["Model", selected.model],
-                          ["Serial", selected.serialNumber],
-                          ["Firmware", selected.firmware],
-                          ["SNMP Version", selected.snmpVersion],
-                          ["Last Seen", selected.lastSeen],
-                        ].map(([label, value]) => (
-                          <div
-                            key={label}
-                            className="rounded border border-white/[.06] bg-[#18201f] p-2"
-                          >
+                        {([["Vendor", "vendor"], ["Model", "model"], ["Serial", "serial"], ["Firmware", "firmware"], ["SNMP Version", "snmpVersion"]] as const).map(([label, field]) => (
+                          <label key={field} className="rounded border border-white/[.06] bg-[#18201f] p-2">
                             <div className="text-[#7f8b88]">{label}</div>
-                            <div className="mt-1">{value || "N/A"}</div>
-                          </div>
+                            <input value={editForm[field]} onChange={(event) => setEditForm({ ...editForm, [field]: event.target.value })} className="mt-1 h-7 w-full rounded border border-white/[.1] bg-[#0d1113] px-1 text-[9px]" />
+                          </label>
                         ))}
+                        <div className="rounded border border-white/[.06] bg-[#18201f] p-2"><div className="text-[#7f8b88]">Last Seen</div><div className="mt-1">{selected.lastSeen || "N/A"}</div></div>
                       </div>
                     </div>
                     <div className="flex gap-2 pt-1">
@@ -4238,7 +4275,12 @@ export default function ManualTopology() {
                             editForm.mac === (selected.macAddress || "") &&
                             editForm.location === (selected.location || "") &&
                             editForm.description ===
-                              (selected.description || ""))
+                              (selected.description || "") &&
+                            editForm.vendor === (selected.vendor || "") &&
+                            editForm.model === (selected.model || "") &&
+                            editForm.serial === (selected.serialNumber || "") &&
+                            editForm.firmware === (selected.firmware || "") &&
+                            editForm.snmpVersion === (selected.snmpVersion || ""))
                         }
                         onClick={() => void saveEditedDevice()}
                       >
@@ -4428,11 +4470,11 @@ export default function ManualTopology() {
               {selected && inspectorTab === "monitoring" && (
                 <div className="mt-4 space-y-2 text-[10px]">
                   {[
-                    ["Status", selected.status || "UNKNOWN"],
+                    ["Status", healthLabel(healthStatusFor(selected))],
                     ["SNMP", selected.snmpVersion || "N/A"],
                     [
                       "Reachability",
-                      selected.status === "offline" ? "Offline" : "Available",
+                      healthLabel(healthStatusFor(selected)),
                     ],
                     ["Last seen", selected.lastSeen || "N/A"],
                     ["Firmware", selected.firmware || "N/A"],

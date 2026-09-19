@@ -6,6 +6,7 @@ import GlassCard from '../../../components/GlassCard'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { useModuleData, useDeviceCapabilities } from '../modules/useSNMPModules'
 import { useLatestInterfaces } from '../hooks/useSnmpQueries'
+import { formatIST } from '../../../time'
 
 function interfaceHealth(util: number | undefined, status: string): 'healthy' | 'warning' | 'critical' | 'unknown' {
   if (status !== 'UP') return 'critical'
@@ -120,7 +121,7 @@ export default function SNMPInterfaceMonitoring() {
             <span style={{ color: isLoading ? '#ffaa00' : error ? '#ff3366' : '#00ff88' }}>
               {isLoading ? 'Loading latest poll...' : error ? 'Latest poll unavailable' : 'Latest poll snapshot'}
             </span>
-            {updatedAt && <span style={{ color: '#8899bb' }}>Updated {new Date(updatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</span>}
+            {updatedAt && <span style={{ color: 'var(--t-text-secondary)' }}>Updated {formatIST(updatedAt)}</span>}
             {livePayload?.collection_ms != null && <span style={{ color: '#8899bb' }}>{livePayload.collection_ms} ms</span>}
             {error && <span className="truncate" style={{ color: '#ff6688' }}>{error.message}</span>}
             {!error && livePayload?.reason && <span className="truncate" style={{ color: '#ffaa00' }}>{livePayload.reason}</span>}
@@ -160,7 +161,7 @@ export default function SNMPInterfaceMonitoring() {
               No interface rows yet. Start interface monitoring or use REFRESH after SNMP credentials are verified.
             </div>
           ) : (
-          <table className="w-full" style={{ minWidth: 1100 }}>
+          <table className="w-full snmp-interface-table" style={{ minWidth: 1100 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                 {[

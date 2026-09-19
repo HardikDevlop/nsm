@@ -2,6 +2,10 @@ from datetime import datetime, timedelta
 import csv
 import io
 import logging
+import os
+import signal
+import subprocess
+import time
 from threading import Lock
 from typing import Literal
 
@@ -1269,6 +1273,43 @@ def delete_interface(item_id: int, db: Session = Depends(get_db), current_user: 
 
 
 # ---------------------------------------------------------------- Monitoring jobs
+def _nms_processes() -> list[dict]:
+    started = time.perf_counter()
+    rows: list[dict] = []
+    try:
+        output = subprocess.run(["ps", "-eo", "pid=,etimes=,args="], capture_output=True, text=True, timeout=2, check=False).stdout
+        for line in output.splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) != 3:
+                continue
+            pid, elapsed, command = parts
+            if not any(name in command for name in ("uvicorn", "simple_monitor.py", "continuous_monitoring.py")):
+                continue
+            rows.append({"pid": int(pid), "name": "Backend" if "uvicorn" in command else "Monitoring worker", "status": "running", "uptime_seconds": int(elapsed), "command": command[:180]})
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return {"response_time_ms": round((time.perf_counter() - started) * 1000, 2), "processes": rows}
+
+
+@router.get("/runtime-status")
+def runtime_status(_: User = Depends(require_permission("monitoring_jobs:read"))):
+    return _nms_processes()
+
+
+@router.post("/runtime-status/restart/{pid}")
+def restart_runtime_process(pid: int, current_user: User = Depends(require_permission("monitoring_jobs:update"))):
+    snapshot = _nms_processes()["processes"]
+    target = next((row for row in snapshot if row["pid"] == pid and row["name"] == "Monitoring worker"), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Only an active NMS monitoring worker can be restarted")
+    try:
+        os.kill(pid, signal.SIGTERM)
+        subprocess.Popen(["nohup", "python3", "simple_monitor.py"], cwd="/home/agnigate/Desktop/NMS/hardik", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return {"detail": "Monitoring worker restart requested", "pid": pid}
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to restart worker: {exc}") from exc
+
+
 @router.get("/monitoring-jobs", response_model=list[MonitoringJobRead])
 def list_monitoring_jobs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("monitoring_jobs:read"))):
     return job_crud.list(db, skip, limit)

@@ -26,7 +26,7 @@ export function useKeyboardShortcuts(onNotifications: () => void) {
       if (navigationPrefix) {
         navigationPrefix = false
         if (prefixTimer) window.clearTimeout(prefixTimer)
-        const destinations: Record<string, string> = { d: '/', t: '/topology', a: '/alerts', s: '/snmp/devices', f: '/flow-analytics' }
+        const destinations: Record<string, string> = { d: '/', a: '/alerts', s: '/snmp/devices', f: '/flow-analytics' }
         const destination = destinations[event.key.toLowerCase()]
         if (destination) {
           event.preventDefault()

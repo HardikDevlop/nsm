@@ -106,9 +106,9 @@ export function SNMPModuleShell({
   };
 
   return (
-    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+    <div className="snmp-module-page p-4 md:p-6 space-y-4 md:space-y-5">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 font-mono text-xs" style={{ color: '#667799' }}>
+      <div className="snmp-breadcrumb flex items-center gap-2 font-mono text-xs" style={{ color: '#667799' }}>
         <button type="button" onClick={() => navigate('/snmp/devices')} className="hover:text-cyan-400 transition-colors">SNMP DEVICES</button>
         <span>/</span>
         <button type="button" onClick={() => navigate(`/snmp/devices/${id}`)} className="hover:text-cyan-400 transition-colors">{device.name || device.ip_address}</button>
@@ -117,7 +117,7 @@ export function SNMPModuleShell({
       </div>
 
       {/* Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="snmp-page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">{pageTitle ?? title(module)}</h1>
           <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
@@ -182,7 +182,7 @@ export function SNMPModuleShell({
       </div>
 
       {/* Module Navigation Tabs */}
-      <div className="flex flex-wrap gap-1.5 pb-1">
+      <div className="snmp-module-tabs flex flex-wrap gap-1.5 pb-1">
         {MODULE_ORDER.map(key => {
           const modConfig = getModuleConfig(key);
           if (!modConfig) return null;

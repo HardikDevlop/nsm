@@ -1,5 +1,5 @@
 import { lazyRetry } from "./components/lazyRetry"
-import { createBrowserRouter } from "react-router"
+import { createBrowserRouter, Navigate } from "react-router"
 import Layout from "./components/Layout"
 import ProtectedLayout from "./components/ProtectedLayout"
 import { withPermission } from "./components/ProtectedLayout"
@@ -9,7 +9,6 @@ import { snmpRoutes } from "./features/snmp/routes"
 const Login = lazyRetry(() => import("./pages/Login"))
 const Unauthorized = lazyRetry(() => import("./pages/Unauthorized"))
 const Dashboard = lazyRetry(() => import("./pages/Dashboard"))
-const Topology = lazyRetry(() => import("./pages/Topology"))
 const ManualTopology = lazyRetry(() => import("./pages/ManualTopology"))
 const DevicePortMap = lazyRetry(() => import("./pages/DevicePortMap"))
 const ISPMonitoring = lazyRetry(() => import("./pages/ISPMonitoring"))
@@ -38,7 +37,6 @@ const Thresholds = lazyRetry(() => import("./pages/Thresholds"))
 const MonitoringJobs = lazyRetry(() => import("./pages/MonitoringJobs"))
 const DeviceCredentials = lazyRetry(() => import("./pages/DeviceCredentials"))
 const DeviceTypes = lazyRetry(() => import("./pages/DeviceTypes"))
-const InterfacesList = lazyRetry(() => import("./pages/InterfacesList"))
 const FlowAnalytics = lazyRetry(() => import("./pages/FlowAnalytics"))
 const APM = lazyRetry(() => import("./pages/APM"))
 const CMDB = lazyRetry(() => import("./pages/CMDB"))
@@ -72,10 +70,6 @@ export const router = createBrowserRouter([
           {
             index: true,
             Component: withPermission(Dashboard, "dashboard:read"),
-          },
-          {
-            path: "topology",
-            Component: withPermission(Topology, "topology:read"),
           },
           {
             path: "manual-topology",
@@ -181,7 +175,7 @@ export const router = createBrowserRouter([
           },
           {
             path: "reports/daily",
-            Component: withPermission(DailyReport, "reports:read"),
+            element: <Navigate to="/reports/management?preset=daily" replace />,
           },
           {
             path: "reports/management",
@@ -219,10 +213,6 @@ export const router = createBrowserRouter([
           {
             path: "device-types",
             Component: withPermission(DeviceTypes, "device_types:read"),
-          },
-          {
-            path: "interfaces",
-            Component: withPermission(InterfacesList, "interfaces:read"),
           },
           { path: "*", Component: ErrorPage },
         ],

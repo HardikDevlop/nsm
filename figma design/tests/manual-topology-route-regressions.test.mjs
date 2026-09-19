@@ -69,8 +69,10 @@ test("manual topology exposes the staged port-to-port connection workflow", () =
 })
 
 test("manual topology provides the enterprise command header and persistent panels", () => {
-  assert.match(page, /DEVICES.*LINKS.*ONLINE.*ISSUES/s)
-  assert.match(page, /ON CANVAS.*AVAILABLE.*MANUAL/s)
+  assert.match(page, /workspace\.devices\.length/)
+  assert.match(page, /workspace\.links\.length/)
+  assert.match(page, /changes\.length/)
+  assert.match(page, /view === "actual"/)
   assert.match(page, /Inspector/)
   assert.match(page, /OVERVIEW.*PORTS.*MONITORING/s)
   assert.match(page, /CONNECT DEVICES/)
@@ -111,7 +113,7 @@ test("device port map keeps operational loading states and real interface classi
   assert.match(portMap, /UNABLE TO LOAD PORTS/)
   assert.match(portMap, /setRetryToken/)
   assert.match(portMap, /REFRESHING PORT STATUS/)
-  assert.match(portMap, /NO PHYSICAL PORTS DISCOVERED/)
+  assert.match(portMap, /PHYSICAL PORTS|SFP \/ HIGH-SPEED UPLINK BAY/)
   assert.match(portMap, /naturalPortSort/)
   assert.match(portMap, /isLogical/)
   assert.match(portMap, /isManagement/)
@@ -182,8 +184,8 @@ test("manual topology provides production viewport controls without topology wri
   assert.match(page, /zoomAtClientPoint/)
   assert.match(page, /event\.ctrlKey.*event\.metaKey/s)
   assert.match(page, /Fit visible topology/)
-  assert.match(page, /SHOW PORTS/)
-  assert.match(page, /onDoubleClick=\{\(\) => focusDevice\(device\)\}/)
+  assert.match(page, /fitToView/)
+  assert.match(page, /focusDevice\(device\)/)
   assert.match(page, /setPan\(\{[\s\S]*CANVAS\.width \/ 2 - point\.x \* zoom/)
   assert.match(page, /event\.key === "0"/)
   assert.match(page, /event\.key\.toLowerCase\(\) === "f"/)
@@ -191,12 +193,12 @@ test("manual topology provides production viewport controls without topology wri
 
 test("manual topology renders deterministic port sockets and link endpoint inspection", () => {
   assert.match(page, /const linkEndpoints = \(link: Link\)/)
-  assert.match(page, /endpointLabelsVisible/)
+  assert.match(page, /setHoveredLinkId/)
   assert.match(page, /PORT UNKNOWN/)
   assert.match(page, /MANUAL\)/)
   assert.match(page, /setHoveredLinkId/)
-  assert.match(page, /cx=\{endpoints\.source\.x\}/)
-  assert.match(page, /cx=\{endpoints\.target\.x\}/)
+  assert.match(page, /endpoints\.source(?:\.exit)?\.x/)
+  assert.match(page, /endpoints\.target(?:\.exit)?\.x/)
   assert.match(page, /SOURCE PORT/)
   assert.match(page, /TARGET PORT/)
   assert.match(page, /DELETE MANUAL LINK/)
@@ -226,6 +228,28 @@ test("manual topology derives device icons from names and metadata", () => {
   assert.match(page, /\(\^\|\\s\)nr\(\\s\|\[-_\]\|\$\)/)
   assert.match(page, /hints\.includes\("access point"\)/)
   assert.match(page, /hints\.includes\("storage"\)/)
+})
+
+test("manual topology overlays authoritative device health without creating alerts or snapshots", () => {
+  assert.match(page, /getOverview\(\)/)
+  assert.match(page, /deviceHealth/)
+  assert.match(page, /device\.backendId != null/)
+  assert.match(page, /setInterval\(syncDeviceHealth, 10000\)/)
+  assert.match(page, /healthStatusFor\(device\)/)
+  assert.match(page, /healthColorFor\(device\)/)
+  assert.match(page, /setDeviceHealth\(next\)/)
+  assert.match(page, /\.catch\(\(\) => undefined\)/)
+  assert.doesNotMatch(page, /create.*Alert|post.*alert/i)
+})
+
+test("manual topology reserves red for offline rendering and preserves configured tones", () => {
+  assert.match(page, /healthStatusFor\(device\) === "offline" \? "#d9646a" : device\.tone/)
+  assert.match(page, /deviceIllustration\(device\.type, renderedToneFor\(device\)\)/)
+  assert.match(page, /fill=\{healthColorFor\(device\)\}/)
+  assert.match(page, /\["Firewall", "Router", "Switch", "Server", "Wireless", "Generic Device"\]/)
+  assert.match(page, /status: "manual"/)
+  assert.match(page, /tone: toneFor\(type, workspace\.devices\.length\)/)
+  assert.doesNotMatch(page, /const palette\s*=\s*\[[^\]]*#d9646a/s)
 })
 
 test("manual connections verify live physical ports and expose mismatch details", () => {

@@ -14,7 +14,6 @@ type Props = {
 
 const nav = [
   { to: '/', label: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6', permission: 'dashboard:read', exact: true },
-  { to: '/topology', label: 'Network Topology', icon: 'M13 10V3L4 14h7v7l9-11h-7z', permission: 'topology:read' },
   { to: '/manual-topology', label: 'Manual Topology', icon: 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h5', permission: 'topology:read' },
   { to: '/isp', label: 'IP Scan', icon: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0', permission: 'isp:read' },
   { to: '/snmp/devices', label: 'SNMP Devices', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z', permission: 'devices:read' },
@@ -49,7 +48,6 @@ const nav = [
   { to: '/notifications', label: 'Notifications', icon: 'M15 17h5l-5 5v-5zM4.868 19.504L8.094 12l-3.226-7.504L3 5.496z', permission: 'notifications:read', management: true },
   // { to: '/thresholds', label: 'Thresholds', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', permission: 'thresholds:read', management: true },
   { to: '/monitoring-jobs', label: 'Monitoring Jobs', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', permission: 'monitoring_jobs:read', management: true },
-  { to: '/interfaces', label: 'Network Interfaces', icon: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0', permission: 'interfaces:read', management: true },
   
   // Admin section
   { to: '/roles', label: 'Role Management', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', permission: 'roles:read', admin: true },
@@ -60,12 +58,12 @@ const nav = [
   { to: '/device-types', label: 'Device Types', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z', permission: 'device_types:read', admin: true },
   { to: '/device-credentials', label: 'Device Credentials', icon: 'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z', permission: 'device_credentials:read', admin: true },
   { to: '/audit-logs', label: 'Audit Logs', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01', permission: 'audit_logs:read', admin: true },
-  { to: '/reports/management', label: 'Report Management', icon: 'M4 5h16v14H4zM7 9h10M7 13h6M7 17h4', permission: 'reports:read', admin: true },
-  { to: '/reports/daily', label: 'Daily Report', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', permission: 'reports:read', admin: true },
+  { to: '/reports/management', label: 'Report Center', icon: 'M4 5h16v14H4zM7 9h10M7 13h6M7 17h4', permission: 'reports:read', admin: true },
+  // { to: '/reports/daily', label: 'Daily Report', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', permission: 'reports:read', admin: true },
 ]
 
 const NAV_LABELS: Record<string, string> = {
-  Overview: 'अवलोकन', 'Network Topology': 'नेटवर्क टोपोलॉजी', 'Manual Topology': 'मैनुअल टोपोलॉजी', 'IP Scan': 'आईपी स्कैन', 'SNMP Devices': 'SNMP डिवाइस', 'Device Monitoring': 'डिवाइस मॉनिटरिंग', 'Packet Analysis': 'पैकेट विश्लेषण', 'Server Monitor': 'सर्वर मॉनिटर', 'Linux Server Monitoring': 'लिनक्स सर्वर मॉनिटरिंग', 'Alert Management': 'अलर्ट प्रबंधन', Events: 'इवेंट', 'Syslog Management': 'सिसलॉग प्रबंधन', Notifications: 'सूचनाएं', 'Monitoring Jobs': 'मॉनिटरिंग जॉब', 'Network Interfaces': 'नेटवर्क इंटरफेस', 'Role Management': 'भूमिका प्रबंधन', 'User Management': 'उपयोगकर्ता प्रबंधन', Organizations: 'संगठन', Sites: 'साइट', Vendors: 'विक्रेता', 'Device Types': 'डिवाइस प्रकार', 'Device Credentials': 'डिवाइस क्रेडेंशियल', 'Audit Logs': 'ऑडिट लॉग', 'Report Management': 'रिपोर्ट प्रबंधन', 'Daily Report': 'दैनिक रिपोर्ट',
+  Overview: 'अवलोकन', 'Network Topology': 'नेटवर्क टोपोलॉजी', 'Manual Topology': 'मैनुअल टोपोलॉजी', 'IP Scan': 'आईपी स्कैन', 'SNMP Devices': 'SNMP डिवाइस', 'Device Monitoring': 'डिवाइस मॉनिटरिंग', 'Packet Analysis': 'पैकेट विश्लेषण', 'Server Monitor': 'सर्वर मॉनिटर', 'Linux Server Monitoring': 'लिनक्स सर्वर मॉनिटरिंग', 'Alert Management': 'अलर्ट प्रबंधन', Events: 'इवेंट', 'Syslog Management': 'सिसलॉग प्रबंधन', Notifications: 'सूचनाएं', 'Monitoring Jobs': 'मॉनिटरिंग जॉब', 'Role Management': 'भूमिका प्रबंधन', 'User Management': 'उपयोगकर्ता प्रबंधन', Organizations: 'संगठन', Sites: 'साइट', Vendors: 'विक्रेता', 'Device Types': 'डिवाइस प्रकार', 'Device Credentials': 'डिवाइस क्रेडेंशियल', 'Audit Logs': 'ऑडिट लॉग', 'Report Management': 'रिपोर्ट प्रबंधन', 'Daily Report': 'दैनिक रिपोर्ट',
 }
 
 export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
@@ -159,7 +157,6 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
 
   const prefetchers = useMemo(() => ({
     '/': () => import('../pages/Dashboard'),
-    '/topology': () => import('../pages/Topology'),
     '/manual-topology': () => import('../pages/ManualTopology'),
     '/isp': () => import('../pages/ISPMonitoring'),
     '/device-monitoring': () => import('../pages/DeviceMonitoringList'),
@@ -184,7 +181,6 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
     '/notifications': () => import('../pages/Notifications'),
     '/thresholds': () => import('../pages/Thresholds'),
     '/monitoring-jobs': () => import('../pages/MonitoringJobs'),
-    '/interfaces': () => import('../pages/InterfacesList'),
     '/roles': () => import('../pages/RoleManagement'),
     '/users': () => import('../pages/UserManagement'),
     '/organizations': () => import('../pages/Organizations'),
