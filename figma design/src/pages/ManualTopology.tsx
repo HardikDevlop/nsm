@@ -1018,7 +1018,7 @@ function MiniMap({
 export default function ManualTopology() {
   const navigate = useNavigate()
   const { t } = useI18n()
-  const tr = t.workflow
+  const tr = { ...t.workflow, manualTitle: "Topology", manualSubtitle: "Network topology workspace" }
   const [workspace, setWorkspace] = useState<Workspace>(() => readCache())
   const [snapshotId, setSnapshotId] = useState<number | null>(null)
   const [realDevices, setRealDevices] = useState<SNMPDeviceListItem[]>([])
@@ -1211,7 +1211,28 @@ export default function ManualTopology() {
     const connectedPorts = workspace.links.filter(
       (link) => link.from === device.id || link.to === device.id,
     ).length
-    return { totalPorts, upPorts, connectedPorts }
+    const connections = workspace.links
+      .filter((link) => link.from === device.id || link.to === device.id)
+      .map((link) => {
+        const isFrom = link.from === device.id
+        const peer = workspace.devices.find((item) => item.id === (isFrom ? link.to : link.from))
+        return {
+          localPort: isFrom ? link.fromPort : link.toPort,
+          peerPort: isFrom ? link.toPort : link.fromPort,
+          peerName: peer?.name,
+          status: link.status,
+          source: link.discoverySource || link.origin,
+          confidence: link.confidence,
+        }
+      })
+    const evidenceState = connections.length
+      ? connections.some((connection) => connection.source && /lldp|cdp/i.test(connection.source))
+        ? "LLDP/CDP verified"
+        : connections.some((connection) => connection.source)
+          ? "Inferred / manual"
+          : "Manual link"
+      : "N/A — no link evidence"
+    return { totalPorts, upPorts, connectedPorts, connections, evidenceState }
   }
   const deviceTypes = useMemo(
     () => [...new Set(workspace.devices.map((d) => d.type))].sort(),
@@ -2031,7 +2052,7 @@ export default function ManualTopology() {
     if (keys.includes("source_device") || keys.includes("target_device")) {
       return workspace.devices.find(device => device.id === String(value))?.name || (value == null ? "Not discovered" : String(value))
     }
-    return value == null ? "N/A" : String(value)
+    return value == null ? "Not discovered" : String(value)
   }
   const deviceReference = (record: Record<string, unknown> | null | undefined, keys: string[]) => {
     const value = evidenceValue(record, keys)
@@ -3748,7 +3769,7 @@ export default function ManualTopology() {
                       x={tooltipPlacement(device).x}
                       y={tooltipPlacement(device).y}
                       width="300"
-                      height="172"
+                      height="230"
                       pointerEvents="none"
                     >
                       <div className="rounded-md border border-[#52615d] bg-[#11161a]/[.98] p-2 text-[#e7eceb] shadow-[0_8px_20px_#0009]">
@@ -3780,6 +3801,24 @@ export default function ManualTopology() {
                           <span className="text-[#7f8b88]">CONNECTED</span>
                           <span>{hoverDeviceStats(device).connectedPorts}</span>
                         </div>
+                        <div className="mb-1.5 border-b border-white/[.08] pb-1.5 font-mono text-[7px] leading-tight">
+                          <span className="text-[#7f8b88]">LINK EVIDENCE</span>
+                          <span className="ml-2 text-[#dce5e2]">{hoverDeviceStats(device).evidenceState}</span>
+                        </div>
+                        {hoverDeviceStats(device).connections.length > 0 && (
+                          <div className="mt-1.5 border-b border-white/[.08] pb-1.5 font-mono text-[7px] leading-tight">
+                            <div className="mb-1 uppercase tracking-wider text-[#7f8b88]">PORT CONNECTIONS</div>
+                            {hoverDeviceStats(device).connections.slice(0, 4).map((connection, index) => (
+                              <div key={`${connection.peerName}-${index}`} className="flex items-center justify-between gap-2">
+                                <span className="truncate text-[#dce5e2]">{connection.localPort || "Port unavailable"}</span>
+                                <span className="truncate text-right text-[#61c98d]">
+                                  → {connection.peerName || "Device unavailable"} · {connection.peerPort || "Port unavailable"}
+                                </span>
+                              </div>
+                            ))}
+                            {hoverDeviceStats(device).connections.length > 4 && <div className="mt-0.5 text-[#7f8b88]">+{hoverDeviceStats(device).connections.length - 4} more</div>}
+                          </div>
+                        )}
                         <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-1 font-mono text-[7px] leading-tight">
                           <span>
                             <b className="font-normal text-[#7f8b88]">MAC</b>
@@ -4804,7 +4843,7 @@ export default function ManualTopology() {
   )
   /*
     <header className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-white/[.08] pb-3">
-      <div><div className="font-mono text-[9px] uppercase tracking-[.24em] text-[#6f7975]">Network workspace / manual design board</div><h1 className="mt-1 text-2xl font-semibold">Manual Topology</h1><div className="font-mono text-[10px] text-[#9aa3a0]">Custom network topology</div></div>
+      <div><div className="font-mono text-[9px] uppercase tracking-[.24em] text-[#6f7975]">Network workspace / topology board</div><h1 className="mt-1 text-2xl font-semibold">Topology</h1><div className="font-mono text-[10px] text-[#9aa3a0]">Network topology workspace</div></div>
       <div className="flex flex-wrap items-center justify-end gap-2"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search device..." className="h-9 w-64 rounded-md border border-white/[.12] bg-[#111517] px-3 font-mono text-[10px] outline-none" /><button onClick={autoLayout} className="tool">Auto Layout</button><button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }} className="tool">Fit to View</button><button onClick={undo} disabled={!history.length} className="tool disabled:opacity-30">Undo</button><button onClick={redo} disabled={!future.length} className="tool disabled:opacity-30">Redo</button><button onClick={() => setSnap((v) => !v)} className={`tool ${snap ? "border-[#61c98d] text-[#61c98d]" : ""}`}>Snap {snap ? "On" : "Off"}</button><button onClick={exportSvg} className="tool">SVG</button><button onClick={exportPng} className="tool">PNG</button><button onClick={exportPdf} className="tool">PDF</button><button onClick={() => setPaletteOpen((v) => !v)} className="tool">More ...</button></div>
     </header>
     <div className="mb-2 flex items-center gap-2"><button className="tool" onClick={() => setPaletteOpen((v) => !v)}>Devices</button><button className="tool" onClick={() => setFiltersOpen((v) => !v)}>Filters</button>{filtersOpen && <><select className="tool" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="all">All types</option>{deviceTypes.map((t) => <option key={t}>{t}</option>)}</select><select className="tool" value={healthFilter} onChange={(e) => setHealthFilter(e.target.value)}><option value="all">All health</option><option value="online">Online</option><option value="offline">Offline</option></select></>}</div>

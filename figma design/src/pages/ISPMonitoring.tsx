@@ -1496,7 +1496,7 @@ export default function ISPMonitoring() {
           style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)' }}
           onClick={e => { if (e.target === e.currentTarget) setShowSNMPModal(false) }}
         >
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl" style={{ background: 'rgba(8,25,55,0.98)', border: '2px solid rgba(0,212,255,0.3)' }}>
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl" style={{ background: 'var(--t-bg)', border: '2px solid var(--t-border)' }}>
             <SNMPSubnetDiscovery
               subnet={discoveryTarget}
               onDevicesStored={async () => {
@@ -1504,11 +1504,11 @@ export default function ISPMonitoring() {
                 setShowSNMPModal(false)
               }}
             />
-            <div className="p-4 border-t" style={{ borderColor: 'rgba(0,212,255,0.1)' }}>
+            <div className="p-4 border-t" style={{ borderColor: 'var(--t-border)' }}>
               <button
                 onClick={() => setShowSNMPModal(false)}
                 className="w-full py-2 rounded font-mono text-xs font-bold transition-all"
-                style={{ background: 'rgba(136,153,187,0.12)', border: '1px solid rgba(136,153,187,0.3)', color: muted }}
+                style={{ background: 'var(--t-card)', border: '1px solid var(--t-border)', color: 'var(--t-text-secondary)' }}
               >
                 Close
               </button>

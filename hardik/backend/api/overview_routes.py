@@ -201,6 +201,7 @@ def _aggregate_current_traffic(rows: list[dict[str, Any]]) -> tuple[float | None
 @router.get("/overview")
 def get_overview(
     hours: int = Query(default=24, ge=1, le=168),
+    force_refresh: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: Any = Depends(require_permission("dashboard:read")),
 ) -> dict[str, Any]:
@@ -211,7 +212,7 @@ def get_overview(
     """
     from backend.cache.redis_cache import get_json, set_json  # noqa: PLC0415
     from backend.models import (  # noqa: PLC0415
-        Alert, Device, DeviceMetric, DeviceType, Event, Interface,
+        Alert, Device, DeviceMetric, DeviceStatusHistory, DeviceType, Event, Interface,
         Vendor, DeviceCredential,
     )
     from backend.models.snmp import (  # noqa: PLC0415
@@ -223,13 +224,14 @@ def get_overview(
 
     now_ts = datetime.utcnow().timestamp()
     redis_key = f"nms:overview:v1:hours:{hours}"
-    redis_value = get_json(redis_key)
-    if isinstance(redis_value, dict):
-        return redis_value
-    with _overview_cache_lock:
-        cached = _overview_cache.get(hours)
-        if cached and now_ts - cached[0] < _OVERVIEW_CACHE_TTL_SECONDS:
-            return cached[1]
+    if not force_refresh:
+        redis_value = get_json(redis_key)
+        if isinstance(redis_value, dict):
+            return redis_value
+        with _overview_cache_lock:
+            cached = _overview_cache.get(hours)
+            if cached and now_ts - cached[0] < _OVERVIEW_CACHE_TTL_SECONDS:
+                return cached[1]
 
     since_24h = datetime.utcnow() - timedelta(hours=hours)
 
@@ -252,6 +254,39 @@ def get_overview(
         .all()
     )
     device_ids = [device.id for device in device_rows]
+
+    # Historical availability for the selected dashboard window. For each
+    # device, carry the last known state into the window and accumulate the
+    # time spent online across status transitions.
+    availability_start = since_24h
+    availability_end = datetime.utcnow()
+    status_rows = db.query(DeviceStatusHistory).filter(
+        DeviceStatusHistory.device_id.in_(device_ids),
+        DeviceStatusHistory.timestamp < availability_end,
+    ).order_by(DeviceStatusHistory.device_id, DeviceStatusHistory.timestamp.asc(), DeviceStatusHistory.id.asc()).all() if device_ids else []
+    status_by_device: dict[int, list[DeviceStatusHistory]] = {}
+    for row in status_rows:
+        status_by_device.setdefault(row.device_id, []).append(row)
+    online_seconds = 0.0
+    monitored_seconds = 0.0
+    for device in device_rows:
+        rows = status_by_device.get(device.id, [])
+        before = [row for row in rows if row.timestamp < availability_start]
+        inside = [row for row in rows if availability_start <= row.timestamp < availability_end]
+        state = (before[-1].new_status if before else device.status or "unknown").lower()
+        cursor = availability_start
+        for row in inside:
+            transition = max(0.0, (row.timestamp - cursor).total_seconds())
+            monitored_seconds += transition
+            if state in ("online", "up"):
+                online_seconds += transition
+            state = (row.new_status or "unknown").lower()
+            cursor = row.timestamp
+        transition = max(0.0, (availability_end - cursor).total_seconds())
+        monitored_seconds += transition
+        if state in ("online", "up"):
+            online_seconds += transition
+    historical_availability = (online_seconds / monitored_seconds * 100) if monitored_seconds else None
 
     # ── latest metric per device (one query) ──────────────────────────────
     from sqlalchemy import func  # noqa: PLC0415
@@ -276,6 +311,21 @@ def get_overview(
         .all()
     )
     metric_by_device: dict[int, DeviceMetric] = {m.device_id: m for m in latest_metrics_raw} if device_ids else {}
+
+    # Range-based performance averages for the dashboard gauges. These are
+    # calculated from every persisted metric sample in the selected window,
+    # rather than averaging only the latest reading from each device.
+    performance_average = db.query(
+        func.avg(DeviceMetric.cpu_usage).label("avg_cpu"),
+        func.avg(DeviceMetric.memory_usage).label("avg_memory"),
+    ).filter(
+        DeviceMetric.created_at >= since_24h,
+        DeviceMetric.device_id.in_(device_ids),
+    ).one() if device_ids else None
+    performance_sample_count = db.query(func.count(DeviceMetric.id)).filter(
+        DeviceMetric.created_at >= since_24h,
+        DeviceMetric.device_id.in_(device_ids),
+    ).scalar() if device_ids else 0
 
     # ── interface counts per device ────────────────────────────────────────
     # Keep this query simple and portable. The previous cast-based aggregate
@@ -354,6 +404,32 @@ def get_overview(
     )
     active_alerts   = len(alert_rows)
     critical_alerts = sum(1 for a in alert_rows if a.severity == "critical")
+
+    # Exact timestamp correlation: count an alert once when the same device
+    # has an outage transition or high performance sample within +/- 5 min.
+    correlation_window = timedelta(minutes=5)
+    correlation_metrics = db.query(DeviceMetric).filter(
+        DeviceMetric.device_id.in_(device_ids),
+        DeviceMetric.created_at >= since_24h - correlation_window,
+        DeviceMetric.created_at <= datetime.utcnow() + correlation_window,
+    ).all() if device_ids else []
+    offline_events_by_device: dict[int, list[datetime]] = {}
+    for row in status_rows:
+        if str(row.new_status or "").lower() in ("offline", "down"):
+            offline_events_by_device.setdefault(row.device_id, []).append(row.timestamp)
+    high_metrics_by_device: dict[int, list[datetime]] = {}
+    for row in correlation_metrics:
+        if (row.cpu_usage is not None and row.cpu_usage >= 85) or (row.memory_usage is not None and row.memory_usage >= 85):
+            high_metrics_by_device.setdefault(row.device_id, []).append(row.created_at)
+    correlated_outage_alerts = 0
+    correlated_performance_alerts = 0
+    for alert in alert_rows:
+        if alert.device_id is None or alert.created_at is None:
+            continue
+        if any(abs(alert.created_at - timestamp) <= correlation_window for timestamp in offline_events_by_device.get(alert.device_id, [])):
+            correlated_outage_alerts += 1
+        if any(abs(alert.created_at - timestamp) <= correlation_window for timestamp in high_metrics_by_device.get(alert.device_id, [])):
+            correlated_performance_alerts += 1
 
     alerts_out = [
         {
@@ -495,7 +571,29 @@ def get_overview(
         DeviceCapabilities.device_id.in_(device_ids),
     ).all() if device_ids else []
     network_counts = _overview_network_counts(capabilities)
+    # Some deployments populate the SNMP latest tables but do not retain
+    # DeviceMetric history. Keep the gauges useful in that case by falling
+    # back to the latest per-device SNMP values.
+    avg_cpu = performance_average.avg_cpu if performance_average else None
+    avg_memory = performance_average.avg_memory if performance_average else None
+    if avg_cpu is None:
+        cpu_values = [row.utilization_percent for row in latest_cpu.values() if row.utilization_percent is not None]
+        avg_cpu = sum(cpu_values) / len(cpu_values) if cpu_values else None
+    if avg_memory is None:
+        memory_values = [row.utilization_percent for row in latest_memory.values() if row.utilization_percent is not None]
+        avg_memory = sum(memory_values) / len(memory_values) if memory_values else None
+
     normalized = {
+        "performance": {
+            "avg_cpu": float(avg_cpu) if avg_cpu is not None else None,
+            "avg_memory": float(avg_memory) if avg_memory is not None else None,
+            "sample_count": int(performance_sample_count or 0),
+        },
+        "correlation": {
+            "window_minutes": 5,
+            "correlated_outage_alerts": correlated_outage_alerts,
+            "correlated_performance_alerts": correlated_performance_alerts,
+        },
         "devices": {
             str(device.id): {
                 "cpu": latest_cpu.get(device.id).utilization_percent if latest_cpu.get(device.id) else None,
@@ -563,6 +661,7 @@ def get_overview(
             "active_alerts":    active_alerts,
             "critical_alerts":  critical_alerts,
             "recent_events":    len(event_rows),
+            "historical_availability_pct": round(historical_availability, 2) if historical_availability is not None else None,
         },
         "devices":  devices_out,
         "alerts":   alerts_out,

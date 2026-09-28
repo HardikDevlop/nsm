@@ -14,7 +14,7 @@ type Props = {
 
 const nav = [
   { to: '/', label: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6', permission: 'dashboard:read', exact: true },
-  { to: '/manual-topology', label: 'Manual Topology', icon: 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h5', permission: 'topology:read' },
+  { to: '/manual-topology', label: 'Topology', icon: 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h5', permission: 'topology:read' },
   { to: '/isp', label: 'IP Scan', icon: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0', permission: 'isp:read' },
   { to: '/snmp/devices', label: 'SNMP Devices', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z', permission: 'devices:read' },
   { to: '/device-monitoring', label: 'Device Monitoring', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', permission: 'device_monitoring:read' },
@@ -22,7 +22,7 @@ const nav = [
   // { to: '/attack-path', label: 'Attack Path', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7', permission: 'attack_path:read' },
   { to: '/packet-analysis', label: 'Packet Analysis', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', permission: 'packet_analysis:read' },
   // { to: '/flow-analytics', label: 'Flow Analytics', icon: 'M4 19V5m0 14h16M8 16v-5m4 5V7m4 9v-8', permission: 'flows:read' },
-  // { to: '/apm', label: 'APM Service Health', icon: 'M4 19h16M6 16v-5m4 5V7m4 9v-3m4 3V4', permission: 'apm:read' },
+  { to: '/apm', label: 'APM Service Health', icon: 'M4 19h16M6 16v-5m4 5V7m4 9v-3m4 3V4', permission: 'apm:read' },
   // { to: '/cmdb', label: 'CMDB', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'cmdb:read' },
   // { to: '/rca', label: 'Root Cause Analysis', icon: 'M12 3v18M3 12h18M5 5l14 14M19 5L5 19', permission: 'rca:read' },
   // { to: '/incident-management', label: 'Incident Management', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'incidents:read' },
@@ -85,7 +85,10 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
   const [summaryState, setSummaryState] = useState<'loading' | 'fresh' | 'stale' | 'unavailable'>('loading')
 
   // Filter nav items by permission
-  const visibleNav = useMemo(() => nav.filter(item => item.to !== '/servers' && hasPermission(item.permission)), [hasPermission])
+  const visibleNav = useMemo(() => nav.filter(item => {
+    if (item.admin && user?.role_name?.toLowerCase() !== 'admin') return false
+    return item.to !== '/servers' && hasPermission(item.permission)
+  }), [hasPermission, user?.role_name])
 
   useEffect(() => {
     const summary = window.sessionStorage.getItem('nms.dashboard.summary.v1')

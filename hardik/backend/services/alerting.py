@@ -82,11 +82,18 @@ def create_offline_alert(db: Session, device_id: int, hostname: str, ip_address:
     """Create one open alert per device outage and notify active recipients."""
     existing = db.query(Alert).filter(
         Alert.device_id == device_id,
-        Alert.status.in_(("open", "acknowledged")),
-        Alert.deleted_at.is_(None),
+        Alert.status.in_({"open", "acknowledged"}),
         Alert.title.like("Device Down:%"),
     ).first()
     if existing:
+        return None
+    dismissed = db.query(Alert).filter(
+        Alert.device_id == device_id,
+        Alert.title.like("Device Down:%"),
+        Alert.deleted_at.is_not(None),
+        Alert.status.in_({"open", "acknowledged"}),
+    ).first()
+    if dismissed:
         return None
 
     alert = Alert(
@@ -194,10 +201,15 @@ def create_threshold_alert(
         existing = db.query(Alert).filter(
             Alert.device_id == device_id,
             Alert.title == title,
-            Alert.status.in_(("open", "acknowledged")),
-            Alert.deleted_at.is_(None),
+            Alert.status.in_({"open", "acknowledged"}),
         ).first()
     if existing:
+        return None
+    dismissed = db.query(Alert).filter(
+        Alert.device_id == device_id, Alert.title == title,
+        Alert.deleted_at.is_not(None), Alert.status.in_({"open", "acknowledged"}),
+    ).first()
+    if dismissed:
         return None
     alert = Alert(device_id=device_id, interface_id=interface_id, severity=severity, title=title,
                   description=description, status="open", created_at=now_ist())
@@ -222,8 +234,7 @@ def resolve_interface_down_alert(
             Alert.device_id == device_id,
             Alert.interface_id == interface_id,
             Alert.title.ilike("Interface Down:%"),
-            Alert.status.in_(("open", "acknowledged")),
-            Alert.deleted_at.is_(None),
+            Alert.status.in_({"open", "acknowledged"}),
         ).order_by(Alert.created_at.desc()).first()
         if alert is None:
             # Retain compatibility with alerts created before interface_id existed.
@@ -236,13 +247,37 @@ def resolve_interface_down_alert(
     if alert is None:
         return None
 
+    return resolve_alert(db, alert, "Interface is operational again; SNMP reports link UP.")
+
+
+def resolve_alert(
+    db: Session,
+    alert: Alert,
+    recovery_description: str,
+    *,
+    notification_intents: list[NotificationIntent] | None = None,
+) -> Alert:
+    """Resolve one verified active alert and preserve a complete recovery record."""
+    if alert.status not in ("open", "acknowledged"):
+        return alert
+    resolved_at = now_ist()
+    duration = max(0, int((resolved_at - alert.created_at).total_seconds())) if alert.created_at else 0
+    original = alert.description or "No original description recorded."
+    alert.description = (
+        f"{original}\n\nRecovery: {recovery_description}"
+        f"\nTriggered at (IST): {alert.created_at.isoformat() if alert.created_at else 'unknown'}"
+        f"\nResolved at (IST): {resolved_at.isoformat()}"
+        f"\nTotal duration: {duration // 3600}h {(duration % 3600) // 60}m {duration % 60}s"
+    )
     alert.status = "resolved"
-    alert.resolved_at = now_ist()
+    alert.resolved_at = resolved_at
     try:
         from backend.incidents.service import process_alert_recovery
         process_alert_recovery(db, alert.id)
     except Exception:
-        logger.exception("Incident recovery failed for interface alert %s", alert.id)
+        logger.exception("Incident recovery failed for alert %s", alert.id)
+    # Send the same detailed recovery record through the existing notification path.
+    _notify(db, alert, notification_intents)
     return alert
 
 

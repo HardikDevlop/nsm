@@ -316,6 +316,7 @@ class AuditLog(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     action: Mapped[str] = mapped_column(String(120))
     resource_name: Mapped[str] = mapped_column(String(160))
+    outcome: Mapped[str] = mapped_column(String(20), default="success", server_default="success")
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped[User | None] = relationship(back_populates="audit_logs")

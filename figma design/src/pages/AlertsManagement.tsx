@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useLocation } from 'react-router'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
 import TablePagination from '../components/TablePagination'
@@ -42,10 +43,12 @@ const statusColors: Record<string, string> = {
 }
 
 export default function AlertsManagement() {
+  const location = useLocation()
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
   const [devices, setDevices] = useState<DeviceOptionRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [detailsAlert, setDetailsAlert] = useState<AlertRecord | null>(null)
   const [editing, setEditing] = useState<AlertRecord | null>(null)
   const [saving, setSaving] = useState(false)
   const { search, setSearch, normalizedSearch } = useDeferredSearch()
@@ -73,6 +76,16 @@ export default function AlertsManagement() {
   }, [statusFilter])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    const id = Number(new URLSearchParams(location.search).get('alert_id'))
+    if (!id || !alerts.length || detailsAlert) return
+    const alert = alerts.find(item => item.id === id)
+    if (alert) {
+      const device = alert.device_id != null ? deviceMap.get(alert.device_id) : undefined
+      setDetailsAlert(device ? { ...alert, hostname: alert.hostname ?? device.hostname, ip_address: alert.ip_address ?? device.ip_address } : alert)
+    }
+  }, [alerts, location.search])
 
   function openCreate() {
     setEditing(null)
@@ -179,6 +192,7 @@ export default function AlertsManagement() {
     a.severity.toLowerCase().includes(normalizedSearch)
   )
   const deviceMap = new Map(devices.map(device => [device.id, device]))
+  const detailDevice = detailsAlert?.device_id != null ? deviceMap.get(detailsAlert.device_id) : undefined
   const pagination = useTablePagination(filtered)
 
   if (loading) {
@@ -283,6 +297,11 @@ export default function AlertsManagement() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
+                        <button onClick={() => { const device = alert.device_id != null ? deviceMap.get(alert.device_id) : undefined; setDetailsAlert(device ? { ...alert, hostname: alert.hostname ?? device.hostname, ip_address: alert.ip_address ?? device.ip_address } : alert) }} title="Show alert details"
+                          className="p-1.5 rounded transition-colors text-xs font-mono px-2"
+                          style={{ background: 'rgba(0,212,255,0.1)', color: 'var(--t-accent)', border: '1px solid rgba(0,212,255,0.2)' }}>
+                          SHOW
+                        </button>
                         {alert.status === 'open' && (
                           <PermissionGuard permission="alerts:update">
                             <button onClick={() => handleAcknowledge(alert)} title="Acknowledge"
@@ -432,6 +451,28 @@ export default function AlertsManagement() {
                 {saving ? <><span className="w-3 h-3 rounded-full border animate-spin inline-block" style={{ borderColor:'#fff',borderTopColor:'transparent' }}/> Saving…</> : editing ? '✓ Update' : '+ Create'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {detailsAlert && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setDetailsAlert(null)}>
+          <div className="glass rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" style={{ border: '1px solid rgba(0,212,255,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div><div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--t-muted)' }}>Alert #{detailsAlert.id}</div><h3 className="font-display font-bold text-xl mt-1" style={{ color: 'var(--t-text)' }}>{detailsAlert.title}</h3></div>
+              <button onClick={() => setDetailsAlert(null)} className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>CLOSE ✕</button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-5">
+              {[['Severity', detailsAlert.severity.toUpperCase(), severityColors[detailsAlert.severity] ?? 'var(--t-accent)'], ['Status', detailsAlert.status.toUpperCase(), statusColors[detailsAlert.status] ?? 'var(--t-muted)'], ['Device', detailsAlert.hostname ?? detailDevice?.hostname ?? (detailsAlert.device_id ? `Device #${detailsAlert.device_id}` : 'Global'), 'var(--t-text)'], ['Device ID', detailsAlert.device_id ?? 'N/A', 'var(--t-text)'], ['Resolved', detailsAlert.resolved_at ? 'YES' : 'NO', detailsAlert.resolved_at ? '#4ade80' : 'var(--t-muted)']].map(([label, value, color]) => <div key={label} className="rounded-lg p-3" style={{ background: 'var(--t-border-light)', border: '1px solid var(--t-border-alpha)' }}><div className="font-mono text-[9px] uppercase" style={{ color: 'var(--t-muted)' }}>{label}</div><div className="font-display text-sm mt-1" style={{ color }}>{value}</div></div>)}
+            </div>
+            <div className="grid md:grid-cols-2 gap-3 mb-5 font-mono text-xs">
+              <div><span style={{ color: 'var(--t-muted)' }}>IP address: </span><span style={{ color: 'var(--t-text)' }}>{detailsAlert.ip_address ?? detailsAlert.ip ?? detailDevice?.ip_address ?? 'N/A'}</span></div>
+              <div><span style={{ color: 'var(--t-muted)' }}>MAC address: </span><span style={{ color: 'var(--t-text)' }}>{detailDevice?.mac_address ?? 'N/A'}</span></div>
+              <div><span style={{ color: 'var(--t-muted)' }}>Created (IST): </span><span style={{ color: 'var(--t-text)' }}>{new Date(detailsAlert.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}</span></div>
+              <div><span style={{ color: 'var(--t-muted)' }}>Resolved (IST): </span><span style={{ color: 'var(--t-text)' }}>{detailsAlert.resolved_at ? new Date(detailsAlert.resolved_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : 'Still active'}</span></div>
+              <div><span style={{ color: 'var(--t-muted)' }}>Acknowledged by: </span><span style={{ color: 'var(--t-text)' }}>{detailsAlert.acknowledged_by ?? 'N/A'}</span></div>
+            </div>
+            <div className="rounded-lg p-4" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid var(--t-border-alpha)' }}><div className="font-mono text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--t-muted)' }}>Full event history</div><pre className="font-mono text-xs whitespace-pre-wrap break-words" style={{ color: 'var(--t-text)', fontFamily: 'inherit' }}>{detailsAlert.description || 'No description recorded.'}</pre></div>
           </div>
         </div>
       )}

@@ -311,9 +311,8 @@ export default function DevicePortMap() {
         normalizePort(item, index, snmp.length ? "snmp" : "latest"),
       )
       if (rows.length) {
-        setPorts(
-          rows.sort(naturalPortSort),
-        )
+        rows.sort(naturalPortSort)
+        setPorts(rows.length ? rows : [fallbackPort(current)])
         setError(null)
       } else {
         setPorts([fallbackPort(current)])

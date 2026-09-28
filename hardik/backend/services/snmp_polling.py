@@ -358,7 +358,7 @@ class SNMPPoller:
 
     def _evaluate_alerts(self, device_id: int, module: str, data: dict) -> None:
         """Turn supported SNMP health values into deduplicated alerts."""
-        from backend.services.alerting import create_threshold_alert
+        from backend.services.alerting import create_threshold_alert, resolve_alert
         from backend.models import Alert
         create_parameters = inspect.signature(create_threshold_alert).parameters.values()
         supports_deferred_notifications = any(
@@ -466,6 +466,20 @@ class SNMPPoller:
                     self.db, device_id, name,
                     f"Value {value}{unit} reached threshold {threshold}{unit}", severity,
                 )
+            elif value is not None:
+                active = self.db.query(Alert).filter(
+                    Alert.device_id == device_id,
+                    Alert.title == name,
+                    Alert.status.in_(("open", "acknowledged")),
+                    Alert.deleted_at.is_(None),
+                ).order_by(Alert.created_at.desc()).first()
+                if active:
+                    resolve_alert(
+                        self.db,
+                        active,
+                        f"Verified value {value}{unit} is below the recovery threshold {threshold}{unit}.",
+                        notification_intents=self._notification_intents,
+                    )
 
     async def _persist_cpu(self, device_id: int, data: dict, now: datetime) -> None:
         from backend.models.snmp import CPUStatistic, LatestCPU
@@ -980,7 +994,22 @@ class PollingScheduler:
             )
 
             try:
-                result = await asyncio.to_thread(self._poll_in_worker, job)
+                # Retry transient worker failures twice before marking the
+                # monitoring config unhealthy. Each retry is deliberately
+                # short and bounded so one device cannot occupy a worker.
+                result = None
+                last_error: Exception | None = None
+                for attempt in range(1, 3):
+                    try:
+                        result = await asyncio.to_thread(self._poll_in_worker, job)
+                        last_error = None
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        if attempt < 2:
+                            await asyncio.sleep(0.5)
+                if last_error is not None:
+                    raise last_error
                 reschedule = result.pop("_reschedule", None)
                 if reschedule:
                     from types import SimpleNamespace
@@ -988,12 +1017,45 @@ class PollingScheduler:
 
                 if result.get("success") and not result.get("skipped"):
                     self.last_job_success_at = utc_now()
+                    if result.get("supported"):
+                        db = SessionLocal()
+                        try:
+                            from backend.models import Alert
+                            from backend.services.alerting import resolve_alert
+                            active = db.query(Alert).filter(
+                                Alert.device_id == device_id,
+                                Alert.title == f"SNMP Unavailable: {module_name}",
+                                Alert.status.in_(("open", "acknowledged")),
+                                Alert.deleted_at.is_(None),
+                            ).order_by(Alert.created_at.desc()).first()
+                            if active:
+                                resolve_alert(db, active, f"SNMP {module_name} poll succeeded after retry and returned verified data.")
+                                db.commit()
+                        finally:
+                            db.close()
 
             except Exception as exc:
                 self.last_job_failure_at = utc_now()
                 self.recent_failure_count += 1
                 logger.error("Poll job %s failed: %s", job.job_id, exc)
                 db = SessionLocal()
+                # Persist scheduler-level failures too; failures raised
+                # before the poller can write its normal attempt record must
+                # remain visible in polling history after a restart.
+                db.add(PollingHistory(
+                    device_id=device_id,
+                    collector=job.collector_name,
+                    status=PollStatus.ERROR.value,
+                    duration_ms=None,
+                    error=f"worker failure after retry: {exc}",
+                    created_at=utc_now(),
+                ))
+                from backend.models import Alert
+                from backend.services.alerting import create_threshold_alert
+                create_threshold_alert(
+                    db, device_id, f"SNMP Unavailable: {module_name}",
+                    f"SNMP {module_name} polling failed after retry: {exc}", "critical",
+                )
                 config = db.query(MonitoringConfig).filter(MonitoringConfig.id == config_id).first()
                 if config:
                     config.status = MonitoringStatus.ERROR.value

@@ -22,12 +22,12 @@ const DARK_DEFAULTS: ThemeColors = {
 }
 
 const LIGHT_DEFAULTS: ThemeColors = {
-  bg: '#f1f5f9',
+  bg: '#f6f3ed',
   text: '#172033',
   accent: '#3b82f6',
-  card: '#f8fafc',
+  card: '#fcfaf7',
   muted: '#64748b',
-  border: '#d7dee8',
+  border: '#ded8ce',
 }
 
 interface ThemeContextType {
@@ -95,12 +95,12 @@ function applyCSS(colors: ThemeColors, theme: Theme) {
   s.setProperty('--t-text-disabled', disabled)
   s.setProperty('--t-border-strong', colors.border)
   s.setProperty('--t-table-header', theme === 'light' ? '#e8eef5' : colors.card)
-  s.setProperty('--t-table-row', theme === 'light' ? '#f8fafc' : colors.card)
-  s.setProperty('--t-table-row-hover', theme === 'light' ? '#eef2f7' : hexToRgba(colors.accent, 0.08))
+  s.setProperty('--t-table-row', theme === 'light' ? colors.card : colors.card)
+  s.setProperty('--t-table-row-hover', theme === 'light' ? '#f3eee6' : hexToRgba(colors.accent, 0.08))
   s.setProperty('--t-tooltip-bg', colors.card)
   s.setProperty('--t-surface-hover', hexToRgba(colors.accent, 0.08))
   s.setProperty('--t-surface-active', hexToRgba(colors.accent, 0.15))
-  s.setProperty('--t-input-bg', theme === 'light' ? '#f8fafc' : colors.card)
+  s.setProperty('--t-input-bg', theme === 'light' ? colors.card : colors.card)
   s.setProperty('--t-input-border', colors.border)
   s.setProperty('--t-sidebar-bg', colors.card)
   s.setProperty('--t-header-bg', colors.card)
@@ -133,7 +133,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           const next = { ...fallback, ...value }
           // Migrate the previous stock light palette while preserving genuine
           // user customizations and all dark/custom theme behavior.
-          if (fallback.bg === LIGHT_DEFAULTS.bg && next.bg.toLowerCase() === '#eef2f6') next.bg = LIGHT_DEFAULTS.bg
+          if (fallback.bg === LIGHT_DEFAULTS.bg && ['#eef2f6', '#f1f5f9'].includes(next.bg.toLowerCase())) next.bg = LIGHT_DEFAULTS.bg
+          if (fallback.bg === LIGHT_DEFAULTS.bg && ['#f8fafc'].includes(next.card.toLowerCase())) next.card = LIGHT_DEFAULTS.card
+          if (fallback.bg === LIGHT_DEFAULTS.bg && next.border.toLowerCase() === '#d7dee8') next.border = LIGHT_DEFAULTS.border
           if (fallback.bg === LIGHT_DEFAULTS.bg && next.muted.toLowerCase() === '#475569') next.muted = LIGHT_DEFAULTS.muted
           if (fallback.bg === LIGHT_DEFAULTS.bg && next.border.toLowerCase() === '#cbd5e1') next.border = LIGHT_DEFAULTS.border
           if (['#ff6432', '#ff3366', '#d72323'].includes(next.accent.toLowerCase())) next.accent = '#FF0015'

@@ -532,6 +532,7 @@ class AuditLogRead(BaseModel):
     user_name: str | None = None
     action: str
     resource_name: str
+    outcome: str = "success"
     timestamp: datetime
 
 

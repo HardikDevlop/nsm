@@ -217,8 +217,22 @@ export async function requestJson<T>(
     if (existing) return existing as Promise<T>
   }
 
+  const timeoutController = new AbortController()
+  const timeoutMs = 15_000
+  let didTimeout = false
+  const timeoutId = window.setTimeout(() => {
+    didTimeout = true
+    timeoutController.abort()
+  }, timeoutMs)
+  const externalSignal = init.signal
+  if (externalSignal) {
+    if (externalSignal.aborted) timeoutController.abort()
+    else externalSignal.addEventListener("abort", () => timeoutController.abort(), { once: true })
+  }
+
   const request = fetch(buildUrl(path), {
     ...init,
+    signal: timeoutController.signal,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
@@ -257,6 +271,7 @@ export async function requestJson<T>(
       // Browser fetch failures are TypeError instances; do not leak browser or
       // runtime implementation text into the UI.
       if (error instanceof Error) {
+        if (error.name === "AbortError" && didTimeout) throw new Error("Request timed out. Please try again.")
         if (error.name === "TypeError") throw new Error(networkMessage(error))
         throw error
       }
@@ -270,6 +285,7 @@ export async function requestJson<T>(
     if (isMutation) invalidateGetCache()
     return result
   } finally {
+    window.clearTimeout(timeoutId)
     if (canCache) inflightRequests.delete(key)
   }
 }
@@ -346,7 +362,7 @@ export interface FlowRecordsResponse {
   to: string
 }
 
-export type FlowProtocol = "sflow" | "ipfix"
+export type FlowProtocol = 'sflow' | 'ipfix'
 
 export interface FlowAnalyticsFilters {
   hours: number
@@ -375,9 +391,7 @@ export async function getFlowAnalytics(
   )
 }
 
-export async function getFlowTrends(
-  filters: FlowAnalyticsFilters,
-): Promise<FlowTrendItem[]> {
+export async function getFlowTrends(filters: FlowAnalyticsFilters): Promise<FlowTrendItem[]> {
   const query = new URLSearchParams({
     hours: String(filters.hours),
     bucket: filters.hours > 48 ? "day" : "hour",
@@ -392,9 +406,7 @@ export async function getFlowTrends(
   return response.items
 }
 
-export async function getFlowRecords(
-  filters: FlowAnalyticsFilters,
-): Promise<FlowRecordsResponse> {
+export async function getFlowRecords(filters: FlowAnalyticsFilters): Promise<FlowRecordsResponse> {
   const query = new URLSearchParams({
     hours: String(filters.hours),
     page: String(filters.page ?? 1),
@@ -496,20 +508,13 @@ export async function listAPMServices(
     }`,
   )
 }
-export async function getAPMOverview(
-  filters: APMFilters,
-): Promise<{ items: APMOverviewItem[] from: string to: string }> {
+export async function getAPMOverview(filters: APMFilters): Promise<{ items: APMOverviewItem[] from: string to: string }> {
   return requestJson(`/apm/overview${apmQuery(filters)}`)
 }
-export async function getAPMServiceMetrics(
-  serviceId: number,
-  filters: APMFilters,
-): Promise<{ items: APMServiceMetric[] from: string to: string }> {
+export async function getAPMServiceMetrics(serviceId: number, filters: APMFilters): Promise<{ items: APMServiceMetric[] from: string to: string }> {
   return requestJson(`/apm/services/${serviceId}/metrics${apmQuery(filters)}`)
 }
-export async function getAPMDependencies(
-  filters: APMFilters,
-): Promise<{ items: APMDependencyItem[] from: string to: string }> {
+export async function getAPMDependencies(filters: APMFilters): Promise<{ items: APMDependencyItem[] from: string to: string }> {
   return requestJson(`/apm/dependencies${apmQuery(filters)}`)
 }
 
@@ -579,17 +584,13 @@ export interface CMDBItemFilters {
 export async function listCMDBTypes(): Promise<CMDBType[]> {
   return requestJson("/cmdb/types")
 }
-export async function listCMDBItems(
-  filters: CMDBItemFilters = {},
-): Promise<CMDBItem[]> {
+export async function listCMDBItems(filters: CMDBItemFilters = {}): Promise<CMDBItem[]> {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(filters))
     if (value != null && value !== "") query.set(key, String(value))
   return requestJson(`/cmdb/items${query.toString() ? `?${query}` : ""}`)
 }
-export async function getCMDBRelationships(
-  ciId: number,
-): Promise<CMDBRelationship[]> {
+export async function getCMDBRelationships(ciId: number): Promise<CMDBRelationship[]> {
   return requestJson(`/cmdb/items/${ciId}/relationships`)
 }
 export async function getCMDBHistory(ciId: number): Promise<CMDBHistory[]> {
@@ -1092,9 +1093,7 @@ export async function listSyslogRecords(
     if (value !== undefined && value !== null && value !== "")
       query.set(key, String(value))
   })
-  return requestJson<SyslogRecordsResponse>(
-    `/syslog/records?${query.toString()}`,
-  )
+  return requestJson<SyslogRecordsResponse>(`/syslog/records?${query.toString()}`)
 }
 
 export async function listSyslogRules(): Promise<SyslogRule[]> {
@@ -1339,6 +1338,8 @@ export interface DeviceHistoryResponse {
     downtime_hours: number
     availability_pct: number
     total_status_changes: number
+    up_events?: number
+    down_events?: number
     total_pings: number
     current_status: string
     last_seen: string | null
@@ -2243,9 +2244,25 @@ export interface ServiceState {
   device_count?: number
   label: string
   summary?: Record<string, unknown>
+  last_job_started_at?: string | null
+  last_job_finished_at?: string | null
+  last_job_success_at?: string | null
+  last_job_failure_at?: string | null
+  recent_failure_count?: number
+  lease_owned?: boolean
 }
 
 export interface NormalizedOverview {
+  performance?: {
+    avg_cpu: number | null
+    avg_memory: number | null
+    sample_count?: number
+  }
+  correlation?: {
+    window_minutes: number
+    correlated_outage_alerts: number
+    correlated_performance_alerts: number
+  }
   devices: Record<string, {
     cpu: number | null
     memory: number | null
@@ -2345,6 +2362,7 @@ export interface NormalizedOverview {
 
 export interface OverviewResponse {
   summary: {
+    historical_availability_pct?: number | null
     total_devices: number
     online_devices: number
     offline_devices: number
@@ -2366,10 +2384,10 @@ export interface OverviewResponse {
   fetched_at: string
 }
 
-export async function getOverview(hours = 24): Promise<OverviewResponse> {
+export async function getOverview(hours = 24, forceRefresh = false): Promise<OverviewResponse> {
   // The overview is a live dashboard snapshot; never reuse the generic
   // 30-second client cache for it. Backend applies a short 10-second cache.
-  return requestJson<OverviewResponse>(`/overview?hours=${hours}`, { cache: "no-store" })
+  return requestJson<OverviewResponse>(`/overview?hours=${hours}${forceRefresh ? "&force_refresh=true" : ""}`, { cache: "no-store" })
 }
 
 export async function getDeviceMonitoringConfigs(deviceId: number): Promise<Array<{ device_id: number; module_name: string; enabled: boolean; interval_seconds: number; status: string; last_poll_at?: string | null; next_poll_at?: string | null; error_message?: string | null }>> {
@@ -2835,6 +2853,7 @@ export async function listSNMPDevicesOptimized(
   if (params.sort_order) query.set("sort_order", params.sort_order)
   return requestJson<SNMPDevicesResponse>(`/snmp/devices?${query.toString()}`, {
     signal,
+    cache: "no-store",
   })
 }
 

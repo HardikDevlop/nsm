@@ -30,7 +30,7 @@ const DailyReport = lazyRetry(() => import("./pages/DailyReport"))
 const ReportManagement = lazyRetry(() => import("./pages/ReportManagement"))
 const AlertsManagement = lazyRetry(() => import("./pages/AlertsManagement"))
 const Events = lazyRetry(() => import("./pages/Events"))
-const SyslogManagement = lazyRetry(() => import("./pages/SyslogManagement"))
+const SyslogManagement = lazyRetry(() => import('./pages/SyslogManagement'))
 const Notifications = lazyRetry(() => import("./pages/Notifications"))
 const AuditLogs = lazyRetry(() => import("./pages/AuditLogs"))
 const Thresholds = lazyRetry(() => import("./pages/Thresholds"))
@@ -72,8 +72,8 @@ export const router = createBrowserRouter([
             Component: withPermission(Dashboard, "dashboard:read"),
           },
           {
-            path: "manual-topology",
-            Component: withPermission(ManualTopology, "topology:read"),
+            path: 'manual-topology',
+            Component: withPermission(ManualTopology, 'topology:read'),
           },
           {
             path: "manual-topology/device/:deviceId/ports",
@@ -94,11 +94,11 @@ export const router = createBrowserRouter([
           },
           {
             path: "flow-analytics",
-            Component: withPermission(FlowAnalytics, "flows:read"),
+            Component: withPermission(FlowAnalytics, 'flows:read'),
           },
-          { path: "apm", Component: withPermission(APM, "apm:read") },
-          { path: "cmdb", Component: withPermission(CMDB, "cmdb:read") },
-          { path: "rca", Component: withPermission(RCA, "rca:read") },
+          { path: 'apm', Component: withPermission(APM, 'apm:read') },
+          { path: 'cmdb', Component: withPermission(CMDB, 'cmdb:read') },
+          { path: 'rca', Component: withPermission(RCA, 'rca:read') },
           {
             path: "incident-management",
             Component: withPermission(IncidentManagement, "incidents:read"),
@@ -109,19 +109,13 @@ export const router = createBrowserRouter([
           },
           {
             path: "change-management",
-            Component: withPermission(ChangeManagement, "changes:read"),
+            Component: withPermission(ChangeManagement, 'changes:read'),
           },
           {
             path: "knowledge-base",
-            Component: withPermission(KnowledgeBase, "knowledge:read"),
+            Component: withPermission(KnowledgeBase, 'knowledge:read'),
           },
-          {
-            path: "configuration-backups",
-            Component: withPermission(
-              ConfigurationBackups,
-              "config_backups:read",
-            ),
-          },
+          { path: 'configuration-backups', Component: withPermission(ConfigurationBackups, 'config_backups:read') },
           {
             path: "configuration-compliance",
             Component: withPermission(
@@ -187,10 +181,7 @@ export const router = createBrowserRouter([
             Component: withPermission(AlertsManagement, "alerts:read"),
           },
           { path: "events", Component: withPermission(Events, "events:read") },
-          {
-            path: "syslog",
-            Component: withPermission(SyslogManagement, "syslog:read"),
-          },
+          { path: 'syslog', Component: withPermission(SyslogManagement, 'syslog:read') },
           {
             path: "notifications",
             Component: withPermission(Notifications, "notifications:read"),

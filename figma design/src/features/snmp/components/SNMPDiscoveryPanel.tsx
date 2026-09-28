@@ -35,8 +35,8 @@ function clean(v: unknown, fallback = '—'): string {
 }
 
 const INPUT = "w-full rounded-lg px-3 py-2 font-mono text-xs outline-none"
-const INPUT_STYLE = { background: 'rgba(4,14,33,0.85)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' } as const
-const SEL_STYLE  = { background: '#041021', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' } as const
+const INPUT_STYLE = { background: 'var(--t-input-bg)', border: '1px solid var(--t-input-border)', color: 'var(--t-text)' } as const
+const SEL_STYLE  = { background: 'var(--t-input-bg)', border: '1px solid var(--t-input-border)', color: 'var(--t-text)' } as const
 
 function parseIPv4(value: string): number[] | null {
   const parts = value.trim().split('.')

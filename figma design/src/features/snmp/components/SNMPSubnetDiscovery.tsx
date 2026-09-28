@@ -64,7 +64,7 @@ interface SD {
 }
 
 /* ── style constants ──────────────────────────────────────────────────────── */
-const SEL = { background: 'rgba(4,14,33,0.85)', border: '1px solid rgba(0,212,255,0.2)', color: '#c8d8ee' } as const
+const SEL = { background: 'var(--t-input-bg)', border: '1px solid var(--t-input-border)', color: 'var(--t-text)' } as const
 const INP = { ...SEL, outline: 'none' } as const
 
 /* ── DevCard ──────────────────────────────────────────────────────────────── */

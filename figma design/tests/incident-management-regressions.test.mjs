@@ -24,7 +24,7 @@ test('incident management uses persisted APIs and permission guard', () => {
   assert.match(api, /reopenIncident/)
   assert.match(api, /analyzeIncidentRCA/)
   assert.match(api, /`\/incidents\/\$\{id\}\/rca`/)
-  assert.match(api, /method: 'POST'/)
+  assert.match(api, /method: ["']POST["']/)
   assert.match(routes, /withPermission\(IncidentManagement, ["']incidents:read["']\)/)
 })
 

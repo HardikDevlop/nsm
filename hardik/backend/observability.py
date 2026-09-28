@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+import asyncio
+from datetime import datetime
 from contextvars import ContextVar
 from typing import Any
 
@@ -18,6 +20,8 @@ db_query_count_var: ContextVar[int] = ContextVar("db_query_count", default=0)
 snmp_duration_var: ContextVar[float] = ContextVar("snmp_duration_ms", default=0.0)
 collector_duration_var: ContextVar[float] = ContextVar("collector_duration_ms", default=0.0)
 timing_state_var: ContextVar[dict[str, Any] | None] = ContextVar("timing_state", default=None)
+_apm_buffer: dict[tuple[str, str], dict[str, float]] = {}
+_apm_lock = asyncio.Lock()
 
 
 def _add_duration(var: ContextVar[float], duration_ms: float) -> None:
@@ -107,9 +111,55 @@ async def request_timing_middleware(request: Any, call_next: Any) -> Any:
         else:
             logger.info("api_request " + fields, *values)
 
+        # Real NMS backend telemetry for the APM page. Aggregation keeps one
+        # database write per route/window instead of one write per request.
+        if request.method != "OPTIONS" and not request.url.path.startswith("/health"):
+            route_key = route_path[:240]
+            async with _apm_lock:
+                bucket = _apm_buffer.setdefault(("NMS Backend", route_key), {"requests": 0, "errors": 0, "duration": 0})
+                bucket["requests"] += 1
+                bucket["errors"] += 1 if status_code >= 500 else 0
+                bucket["duration"] += total_duration_ms
+                if sum(item["requests"] for item in _apm_buffer.values()) >= 10:
+                    snapshot = dict(_apm_buffer)
+                    _apm_buffer.clear()
+                    asyncio.create_task(asyncio.to_thread(_flush_apm_snapshot, snapshot))
+
         request_id_var.reset(request_token)
         db_duration_var.reset(db_token)
         db_query_count_var.reset(count_token)
         snmp_duration_var.reset(snmp_token)
         collector_duration_var.reset(collector_token)
         timing_state_var.reset(state_token)
+
+
+def _flush_apm_snapshot(snapshot: dict[tuple[str, str], dict[str, float]]) -> None:
+    """Persist aggregated real backend request telemetry without blocking API responses."""
+    if not snapshot:
+        return
+    try:
+        from backend.database.session import SessionLocal
+        from backend.models import APMApplication, APMService
+        from backend.apm.service import APMMetric, ingest_metrics
+        db = SessionLocal()
+        try:
+            now = datetime.utcnow()
+            app = db.query(APMApplication).filter(APMApplication.name == "NMS Backend", APMApplication.deleted_at.is_(None)).first()
+            if not app:
+                app = APMApplication(name="NMS Backend", environment="production", enabled=True, created_at=now, updated_at=now)
+                db.add(app); db.flush()
+            metrics = []
+            for (_, route), values in snapshot.items():
+                key = f"api:{route}"
+                service = db.query(APMService).filter(APMService.application_id == app.id, APMService.service_key == key, APMService.deleted_at.is_(None)).first()
+                if not service:
+                    service = APMService(application_id=app.id, name=route, service_key=key, enabled=True, created_at=now, updated_at=now)
+                    db.add(service); db.flush()
+                requests = int(values["requests"])
+                errors = int(values["errors"])
+                metrics.append(APMMetric(app.id, service.id, now, values["duration"] / max(requests, 1), requests, errors, 0, max(0, (requests - errors) / max(requests, 1) * 100)))
+            ingest_metrics(db, metrics, now)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("real_apm_telemetry_flush_failed")

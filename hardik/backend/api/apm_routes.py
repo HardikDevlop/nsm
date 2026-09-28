@@ -15,6 +15,8 @@ from backend.dependencies import require_permission
 router = APIRouter(prefix="/api/v1/apm", tags=["APM"])
 
 
+
+
 class APMMetricPayload(BaseModel):
     application_id: int = Field(gt=0)
     service_id: int = Field(gt=0)

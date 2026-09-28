@@ -397,9 +397,15 @@ export default function SNMPCollectorDataCard({
                                 className="snmp-mac-mapping rounded border px-2 py-1"
                                 style={{ borderColor: "rgba(0,212,255,0.12)", background: "rgba(8,25,55,.28)" }}
                               >
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[9px] leading-tight">
-                                  <span style={{ color: mapping.ips?.length ? "#f1f5f9" : "#77859b" }}><span style={{ color: "#8899bb" }}>MAC</span> {mapping.mac}</span>
-                                  <span style={{ color: mapping.ips?.length ? "#67e8f9" : "#77859b" }}><span style={{ color: "#8899bb" }}>IP</span> {mapping.ips?.join(", ") || "NOT RESOLVED"}</span>
+                                <div className="flex flex-wrap items-center gap-2 font-mono text-[9px] leading-tight">
+                                  <span className="inline-flex items-center gap-1">
+                                    <b className="rounded px-1 py-0.5 text-[8px] font-semibold tracking-wider" style={{ color: 'var(--t-text-secondary)', background: 'var(--t-table-header)', border: '1px solid var(--t-border)' }}>MAC</b>
+                                    <span className="font-semibold" style={{ color: 'var(--t-text)' }}>{mapping.mac}</span>
+                                  </span>
+                                  <span className="inline-flex items-center gap-1">
+                                    <b className="rounded px-1 py-0.5 text-[8px] font-semibold tracking-wider" style={{ color: 'var(--t-accent)', background: 'var(--t-accent-alpha)', border: '1px solid var(--t-accent-border)' }}>IP</b>
+                                    <span className="font-semibold" style={{ color: mapping.ips?.length ? 'var(--t-accent)' : 'var(--t-muted)' }}>{mapping.ips?.join(", ") || "NOT RESOLVED"}</span>
+                                  </span>
                                 </div>
                               </div>
                             ))}

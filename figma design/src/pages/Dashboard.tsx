@@ -12,11 +12,6 @@ import {
   LineChart,
   Pie,
   PieChart,
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
   ResponsiveContainer,
   Tooltip,
   Treemap,
@@ -25,8 +20,14 @@ import {
 } from "recharts"
 import GlassCard from "../components/GlassCard"
 import { useI18n } from "../i18n/I18nContext"
+import { useTheme } from "../components/ThemeContext"
+import { useAuth } from "../components/AuthContext"
 import {
   getOverview,
+  getLinuxCurrentMetrics,
+  listLinuxServers,
+  type LinuxMetricSnapshot,
+  type LinuxServerRecord,
   type NormalizedOverview,
   type OverviewResponse,
 } from "../lib/api"
@@ -35,7 +36,7 @@ import { formatISTTime, parseISTDate } from "../time"
 /* ─────────────────────────────  THEME  ───────────────────────────── */
 const C = {
   cyan: "#00d4ff",
-  green: "#00ff88",
+  green: "#41b8b5",
   red: "#ff3366",
   amber: "#ffaa00",
   purple: "#8b5cf6",
@@ -48,7 +49,7 @@ const C = {
 }
 
 const PALETTE = [
-  "#00d4ff", "#00ff88", "#ffaa00", "#ff3366", "#8b5cf6",
+  "#00d4ff", "#41b8b5", "#ffaa00", "#ff3366", "#8b5cf6",
   "#ec4899", "#ff6b35", "#3b82f6", "#14b8a6", "#a3e635",
   "#f472b6", "#22d3ee", "#facc15", "#fb7185", "#c084fc",
 ]
@@ -141,7 +142,7 @@ function Metric({
   const color = C[tone]
   return (
     <GlassCard
-      className="p-4 transition-all duration-500 hover:-translate-y-1.5 hover:shadow-2xl cursor-pointer group relative overflow-hidden"
+      className={`p-4 transition-all duration-500 ${onClick ? 'hover:-translate-y-1.5 hover:shadow-2xl cursor-pointer' : ''} group relative overflow-hidden`}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -288,6 +289,7 @@ function ClockGauge({
   showTicks?: boolean
   showScale?: boolean
 }) {
+  const { theme } = useTheme()
   // A non-numeric valueLabel ("NO DATA", "WAITING"...) means there's nothing
   // real to plot. Render a calm, static ring instead of a needle pointing at
   // a meaningless 0% — that's what was overlapping the "NO DATA" text.
@@ -295,16 +297,17 @@ function ClockGauge({
   const pct = isNoData ? 0 : Math.max(0, Math.min(1, value / max))
   const [animatedPct, setAnimatedPct] = useState(0)
   useEffect(() => {
+    setAnimatedPct(0)
     if (isNoData) {
-      setAnimatedPct(0)
       return
     }
     let frame = 0
     const started = performance.now()
-    const duration = 1250
+    const duration = 1800
     const animate = (now: number) => {
       const progress = Math.min(1, (now - started) / duration)
-      const eased = 1 - Math.pow(1 - progress, 3)
+      // Smoothstep keeps the start and finish gentle instead of snapping.
+      const eased = progress * progress * (3 - 2 * progress)
       setAnimatedPct(pct * eased)
       if (progress < 1) frame = requestAnimationFrame(animate)
     }
@@ -313,6 +316,9 @@ function ClockGauge({
   }, [pct, isNoData])
 
   const animatedValue = max * animatedPct
+  const animatedValueLabel = valueLabel && !isNoData
+    ? `${animatedValue.toFixed(animatedValue < 10 ? 1 : 0)}${unit}`
+    : valueLabel
   const radius = size / 2 - 18
   const cx = size / 2
   const cy = size / 2
@@ -348,7 +354,7 @@ function ClockGauge({
           d={arcPath(startAngle, startAngle + totalAngle, radius)}
           fill="none"
           className="gauge-track"
-          stroke="rgba(255,255,255,.08)"
+          stroke={theme === 'light' ? '#dfe4ea' : 'rgba(255,255,255,.08)'}
           strokeWidth="10"
           strokeLinecap="round"
         />
@@ -380,7 +386,7 @@ function ClockGauge({
                 x1={inner.x} y1={inner.y}
                 x2={outer.x} y2={outer.y}
                 className="gauge-tick"
-                stroke={active ? tone : "rgba(255,255,255,.18)"}
+                stroke={active ? tone : theme === 'light' ? '#cbd3dc' : 'rgba(255,255,255,.18)'}
                 strokeWidth={isMajor ? 2 : 1}
                 strokeLinecap="round"
                 style={{ transition: "stroke .4s ease" }}
@@ -402,12 +408,12 @@ function ClockGauge({
                 style={{ filter: `drop-shadow(0 0 6px ${tone})`, transition: "all 1s ease-out" }}
               />
               <circle cx={cx} cy={cy} r="6" fill={tone} style={{ filter: `drop-shadow(0 0 8px ${tone})` }} />
-              <circle className="gauge-center" cx={cx} cy={cy} r="2.5" fill="#0a1428" />
+              <circle className="gauge-center" cx={cx} cy={cy} r="2.5" fill={theme === 'light' ? '#fffaf4' : '#0a1428'} />
             </>
           )
         })()}
         {isNoData && (
-          <circle cx={cx} cy={cy} r="3" fill="rgba(255,255,255,.25)" />
+          <circle cx={cx} cy={cy} r="3" fill={theme === 'light' ? '#cbd3dc' : 'rgba(255,255,255,.25)'} />
         )}
 
         {/* min/max scale labels at the two ends of the arc — fills the dead
@@ -417,8 +423,8 @@ function ClockGauge({
           const maxPos = polarToCartesian(startAngle + totalAngle, radius + 16)
           return (
             <>
-              <text x={minPos.x} y={minPos.y} textAnchor="middle" dominantBaseline="middle" fontSize="9" fontFamily="monospace" fill="rgba(255,255,255,.32)">0</text>
-              <text x={maxPos.x} y={maxPos.y} textAnchor="middle" dominantBaseline="middle" fontSize="9" fontFamily="monospace" fill="rgba(255,255,255,.32)">{max}</text>
+              <text x={minPos.x} y={minPos.y} textAnchor="middle" dominantBaseline="middle" fontSize="9" fontFamily="monospace" fill={theme === 'light' ? '#8b95a3' : 'rgba(255,255,255,.32)'}>0</text>
+              <text x={maxPos.x} y={maxPos.y} textAnchor="middle" dominantBaseline="middle" fontSize="9" fontFamily="monospace" fill={theme === 'light' ? '#8b95a3' : 'rgba(255,255,255,.32)'}>{max}</text>
             </>
           )
         })()}
@@ -432,7 +438,7 @@ function ClockGauge({
           textShadow: isNoData ? "none" : `0 0 16px ${tone}88`,
         }}
       >
-        {valueLabel ?? `${animatedValue.toFixed(animatedValue < 10 ? 1 : 0)}${unit}`}
+        {animatedValueLabel ?? `${animatedValue.toFixed(animatedValue < 10 ? 1 : 0)}${unit}`}
       </div>
       <div className="font-mono text-[10px] mt-1 uppercase tracking-widest" style={{ color: C.muted }}>
         {label}
@@ -514,11 +520,11 @@ function Speedometer({
         <circle cx={cx} cy={cy} r="6" fill={tone} style={{ filter: `drop-shadow(0 0 8px ${tone})` }} />
         <circle cx={cx} cy={cy} r="2.5" fill="#0a1428" />
       </svg>
-      <div className="pointer-events-none absolute left-0 right-0 top-[116px] flex flex-col items-center text-center">
+      <div className="pointer-events-none absolute left-0 right-0 top-[124px] flex flex-col items-center text-center">
         <div className="font-display text-xl leading-none" style={{ color: tone, textShadow: `0 0 14px ${tone}88` }}>
           {(value * animatedPct / (pct || 1)).toFixed(value < 10 ? 1 : 0)}{unit}
         </div>
-        <div className="mt-1 font-mono text-[9px] uppercase tracking-widest whitespace-nowrap" style={{ color: C.muted }}>{label}</div>
+        <div className="mt-3 font-mono text-[9px] uppercase tracking-widest whitespace-nowrap" style={{ color: C.muted }}>{label}</div>
       </div>
     </div>
   )
@@ -564,20 +570,20 @@ function ChartTooltip({ active, payload, label, formatter }: any) {
     <div
       className="dashboard-tooltip rounded-lg px-3 py-2.5 shadow-2xl backdrop-blur-md animate-fadeIn"
       style={{
-        background: "#071426",
-        border: "1px solid rgba(67,168,255,.7)",
+        background: "var(--t-card)",
+        border: "1px solid var(--t-accent)",
         boxShadow: "0 10px 28px rgba(15,23,42,.32), 0 0 20px rgba(0,150,255,.18)",
         minWidth: 118,
       }}
     >
       {label && (
-        <div className="font-mono text-[10px] mb-1.5 uppercase tracking-wide" style={{ color: "#b9c9df" }}>{label}</div>
+        <div className="font-mono text-[10px] mb-1.5 uppercase tracking-wide" style={{ color: "var(--t-text-secondary)" }}>{label}</div>
       )}
       {payload.map((p: any, i: number) => (
         <div key={i} className="font-mono text-xs flex items-center gap-2 whitespace-nowrap">
           <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: p.color || p.fill, boxShadow: `0 0 6px ${p.color || p.fill}` }} />
-          <span style={{ color: "#dbeafe" }}>{p.name}:</span>
-          <strong style={{ color: "#ffffff", fontWeight: 700 }}>
+          <span style={{ color: "var(--t-text-secondary)" }}>{p.name}:</span>
+          <strong style={{ color: "var(--t-text)", fontWeight: 700 }}>
             {formatter ? formatter(p.value, p.name) : p.value}
           </strong>
         </div>
@@ -619,6 +625,8 @@ function TreemapCell(props: any) {
 export default function Dashboard() {
   const navigate = useNavigate()
   const { t } = useI18n()
+  const { theme } = useTheme()
+  const { hasPermission } = useAuth()
   const d = t.dashboard
 
   const [data, setData] = useState<OverviewResponse | null>(null)
@@ -626,13 +634,15 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState("12H")
   const [updated, setUpdated] = useState<Date | null>(null)
+  const [server, setServer] = useState<LinuxServerRecord | null>(null)
+  const [serverMetrics, setServerMetrics] = useState<LinuxMetricSnapshot | null>(null)
 
-  const load = async (quiet = false) => {
+  const load = async (quiet = false, forceRefresh = false) => {
     if (!quiet) setLoading(true)
     try {
       setError(null)
       const hours = range === "1H" ? 1 : range === "6H" ? 6 : range === "12H" ? 12 : range === "7D" ? 168 : 24
-      const snapshot = await getOverview(hours)
+      const snapshot = await getOverview(hours, forceRefresh)
       setData(snapshot)
       setUpdated(new Date())
     } catch (e) {
@@ -650,11 +660,35 @@ export default function Dashboard() {
     return () => window.clearInterval(timer)
   }, [range])
 
+  // System Vitals represent the NMS/Linux server itself, not an average of
+  // monitored network devices.
+  useEffect(() => {
+    if (!hasPermission('linux_servers:read')) return
+    let active = true
+    const loadServer = async () => {
+      try {
+        const servers = await listLinuxServers()
+        const selected = servers.find(item => item.enabled && item.status === 'active') ?? servers[0] ?? null
+        if (!selected) { if (active) { setServer(null); setServerMetrics(null) }; return }
+        const metrics = await getLinuxCurrentMetrics(selected.id)
+        if (active) { setServer(selected); setServerMetrics(metrics) }
+      } catch {
+        if (active) { setServer(null); setServerMetrics(null) }
+      }
+    }
+    void loadServer()
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void loadServer() }, 30000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [hasPermission])
+
   const n: NormalizedOverview | null = data?.normalized ?? null
   const rangeLabel = range === "1H" ? "Last 1 hour" : range === "6H" ? "Last 6 hours" : range === "12H" ? "Last 12 hours" : range === "7D" ? "Last 7 days" : "Last 24 hours"
   const devices = data?.devices ?? []
   const summary = data?.summary
   const snmpEnabled = devices.filter((d) => Boolean(d.snmp_version)).length
+  const canDevices = hasPermission('devices:read')
+  const canMonitoringJobs = hasPermission('monitoring_jobs:read')
+  const canAlerts = hasPermission('alerts:read')
 
   const health = {
     online: summary?.health_counts?.online ?? summary?.online_devices ?? 0,
@@ -665,25 +699,22 @@ export default function Dashboard() {
     unknown: summary?.health_counts?.unknown ?? 0,
   }
 
-  const perf = useMemo(
-    () =>
-      devices
-        .map((d) => ({
-          cpu: n?.devices[String(d.id)]?.cpu ?? d.cpu_usage,
-          memory: n?.devices[String(d.id)]?.memory ?? d.memory_usage,
-        }))
-        .filter((x) => x.cpu != null || x.memory != null),
-    [devices, n],
-  )
+  const avgCpu = n?.performance?.avg_cpu ?? 0
+  const avgMem = n?.performance?.avg_memory ?? 0
 
-  const avgCpu = useMemo(() => {
-    const v = perf.map((x) => x.cpu).filter((x): x is number => x != null)
-    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0
-  }, [perf])
-  const avgMem = useMemo(() => {
-    const v = perf.map((x) => x.memory).filter((x): x is number => x != null)
-    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0
-  }, [perf])
+  // Backward-compatible fallback while older API responses/cache entries do
+  // not contain the new range aggregate.
+  const fallbackCpu = devices
+    .map((device) => n?.devices[String(device.id)]?.cpu ?? device.cpu_usage)
+    .filter((value): value is number => value != null && Number.isFinite(value))
+  const fallbackMemory = devices
+    .map((device) => n?.devices[String(device.id)]?.memory ?? device.memory_usage)
+    .filter((value): value is number => value != null && Number.isFinite(value))
+  const displayCpu = serverMetrics?.cpu_percent ?? 0
+  const displayMem = serverMetrics?.memory_percent ?? 0
+  const hasCpuData = serverMetrics?.cpu_percent != null
+  const hasMemoryData = serverMetrics?.memory_percent != null
+  const hasAvailabilityData = Boolean(summary?.total_devices)
 
   /* Traffic history aggregated per minute */
   const chart = useMemo(() => {
@@ -728,6 +759,7 @@ export default function Dashboard() {
   const availability = summary?.total_devices
     ? (health.online / summary.total_devices) * 100
     : 0
+  const historicalAvailability = summary?.historical_availability_pct ?? availability
 
   const healthPie = useMemo(
     () =>
@@ -762,14 +794,14 @@ export default function Dashboard() {
     const currentValues = [currentRx, currentTx].filter((value): value is number => value != null && Number.isFinite(value))
     const currentTraffic = currentValues.length ? currentValues.reduce((sum, value) => sum + value, 0) : null
     return [
-      { metric: "Availability", A: availability, full: 100 },
+      { metric: "Availability", A: historicalAvailability, full: 100 },
       { metric: "Polling", A: pollTotal ? ((n?.polling.successful_attempts ?? 0) / pollTotal) * 100 : 0, full: 100 },
       { metric: "Interfaces Up", A: ifTotal ? ((n?.interface_summary.up ?? 0) / ifTotal) * 100 : 0, full: 100 },
       { metric: "SNMP Enabled", A: total ? (snmpEnabled / total) * 100 : 0, full: 100 },
       { metric: "Health", A: total ? ((health.online + health.warning * 0.5) / total) * 100 : 0, full: 100 },
       { metric: "Traffic", A: currentTraffic == null ? 0 : (currentTraffic / trafficPeak) * 100, full: 100 },
     ]
-  }, [availability, snmpEnabled, summary, n, health, trafficPeak])
+  }, [historicalAvailability, snmpEnabled, summary, n, health, trafficPeak])
 
   const topDevicesData = useMemo(
     () =>
@@ -811,7 +843,7 @@ export default function Dashboard() {
       className="dashboard-page p-4 md:p-6 space-y-5 animate-fadeIn"
       style={{
         background:
-          "radial-gradient(circle at 85% 0%, rgba(0,212,255,.08), transparent 34%), radial-gradient(circle at 0% 100%, rgba(139,92,246,.06), transparent 40%)",
+          "radial-gradient(circle at 85% 0%, color-mix(in srgb, var(--t-accent) 8%, transparent), transparent 34%), radial-gradient(circle at 0% 100%, color-mix(in srgb, var(--t-accent) 6%, transparent), transparent 40%), var(--t-bg)",
       }}
     >
       {/* ── HEADER ── */}
@@ -851,7 +883,7 @@ export default function Dashboard() {
             ))}
           </div>
           <button
-            onClick={() => void load()}
+            onClick={() => void load(false, true)}
             disabled={loading}
             className="font-mono text-xs px-3 py-2 rounded glass-bright transition-all duration-300 hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ color: C.cyan, border: `1px solid ${C.cyan}40` }}
@@ -883,24 +915,24 @@ export default function Dashboard() {
           {/* ── METRIC CARDS ── */}
           <SectionLabel label="Overview" />
           <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-8 gap-3 animate-slideUp">
-            <Metric label={d.totalDevices} number={summary?.total_devices ?? 0} hint={d.inventory} onClick={() => navigate("/device-monitoring")} />
-            <Metric label={d.online} number={summary?.online_devices ?? 0} hint={d.reachable} tone="green" onClick={() => navigate("/device-monitoring")} />
-            <Metric label={d.offline} number={summary?.offline_devices ?? 0} hint={d.unreachable} tone="red" onClick={() => navigate("/device-monitoring")} />
-            <Metric label={d.snmpEnabled} number={snmpEnabled} hint={d.credentialsConfigured} tone="green" onClick={() => navigate("/snmp/devices")} />
-            <Metric label={d.snmpFailed} number={n?.polling.failure ?? 0} hint={rangeLabel} tone="red" onClick={() => navigate("/monitoring-jobs")} />
-            <Metric label={d.criticalAlerts} number={summary?.critical_alerts ?? 0} hint={d.openAcknowledged} tone="red" onClick={() => navigate("/alerts")} />
-            <Metric label={d.warningAlerts} number={(n?.alerts_by_severity.warning ?? 0) + (n?.alerts_by_severity.medium ?? 0)} hint={d.openAcknowledged} tone="amber" onClick={() => navigate("/alerts")} />
-          <Metric label={d.interfacesDown} number={n?.interface_summary.down ?? 0} hint={d.latestSnmpState} tone="red" onClick={() => navigate("/snmp")} />
+            <Metric label={d.totalDevices} number={summary?.total_devices ?? 0} hint={d.inventory} onClick={canDevices ? () => navigate("/device-monitoring") : undefined} />
+            <Metric label={d.online} number={summary?.online_devices ?? 0} hint={d.reachable} tone="green" onClick={canDevices ? () => navigate("/device-monitoring") : undefined} />
+            <Metric label={d.offline} number={summary?.offline_devices ?? 0} hint={d.unreachable} tone="red" onClick={canDevices ? () => navigate("/device-monitoring") : undefined} />
+            <Metric label={d.snmpEnabled} number={snmpEnabled} hint={d.credentialsConfigured} tone="green" onClick={canDevices ? () => navigate("/snmp/devices") : undefined} />
+            <Metric label={d.snmpFailed} number={n?.polling.failure ?? 0} hint={rangeLabel} tone="red" onClick={canMonitoringJobs ? () => navigate("/monitoring-jobs") : undefined} />
+            <Metric label={d.criticalAlerts} number={summary?.critical_alerts ?? 0} hint={d.openAcknowledged} tone="red" onClick={canAlerts ? () => navigate("/alerts") : undefined} />
+            <Metric label={d.warningAlerts} number={(n?.alerts_by_severity.warning ?? 0) + (n?.alerts_by_severity.medium ?? 0)} hint={d.openAcknowledged} tone="amber" onClick={canAlerts ? () => navigate("/alerts") : undefined} />
+          <Metric label={d.interfacesDown} number={n?.interface_summary.down ?? 0} hint={d.latestSnmpState} tone="red" />
           </div>
 
           {/* ═══════════ ROW: 4 CLOCK GAUGES ═══════════ */}
           <Panel title="System Vitals" subtitle="Real-time circular gauges · clock-style readouts" className="system-vitals-panel">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-5 py-2">
               {[
-                { value: availability, label: "Availability", tone: C.green },
-                { value: pollSuccessPct, valueLabel: pollDisplay, label: "Poll Success", tone: C.cyan },
-                { value: avgCpu, label: "Avg CPU", tone: C.amber },
-                { value: avgMem, label: "Avg Memory", tone: C.purple },
+      { value: historicalAvailability, valueLabel: hasAvailabilityData ? undefined : "N/A", label: "Availability", tone: theme === 'light' ? '#e11d48' : C.green },
+                { value: pollSuccessPct, valueLabel: pollDisplay, label: "Poll Success", tone: theme === 'light' ? '#86198f' : C.cyan },
+                { value: displayCpu, valueLabel: hasCpuData ? undefined : "N/A", label: "Avg CPU", tone: theme === 'light' ? '#41b8b5' : C.amber },
+                { value: displayMem, valueLabel: hasMemoryData ? undefined : "N/A", label: "Avg Memory", tone: theme === 'light' ? '#f97316' : C.purple },
               ].map((g) => (
                 <div
                   key={g.label}
@@ -913,6 +945,56 @@ export default function Dashboard() {
                   <ClockGauge value={g.value} valueLabel={g.valueLabel} label={g.label} tone={g.tone} showScale size={190} />
                 </div>
               ))}
+            </div>
+          </Panel>
+
+          <Panel title="Worker & Job Health" subtitle="Background monitoring services" onClick={() => navigate("/monitoring-jobs")}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {[
+                { key: "snmp_polling", fallback: "SNMP Polling Worker" },
+                { key: "realtime_monitor", fallback: "Realtime Monitor" },
+              ].map(({ key, fallback }) => {
+                const service = data?.services?.[key as "snmp_polling" | "realtime_monitor"]
+                const running = Boolean(service?.running)
+                return (
+                  <div key={key} className="rounded-xl p-3" style={{ border: `1px solid ${running ? C.green : C.red}35`, background: `linear-gradient(145deg, ${running ? C.green : C.red}12, transparent 75%)` }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] uppercase tracking-widest" style={{ color: C.muted }}>{service?.label || fallback}</span>
+                      <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: running ? C.green : C.red }}>
+                        <i className="status-dot" style={{ background: running ? C.green : C.red, boxShadow: `0 0 8px ${running ? C.green : C.red}` }} />
+                        {running ? "Running" : "Stopped"}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[10px]" style={{ color: C.muted }}>
+                      <span>JOBS <b style={{ color: "var(--t-text)" }}>{service?.job_count ?? 0}</b></span>
+                      <span>DEVICES <b style={{ color: "var(--t-text)" }}>{service?.device_count ?? 0}</b></span>
+                    </div>
+                    <div className="mt-2 space-y-1 font-mono text-[9px]" style={{ color: C.muted }}>
+                      <div>LAST RUN <b style={{ color: "var(--t-text)" }}>{service?.last_job_finished_at ? clock(service.last_job_finished_at) : "N/A"}</b></div>
+                      <div>LAST FAILURE <b style={{ color: service?.last_job_failure_at ? C.red : "var(--t-text)" }}>{service?.last_job_failure_at ? clock(service.last_job_failure_at) : "None"}</b></div>
+                      <div>RECENT FAILURES <b style={{ color: service?.recent_failure_count ? C.red : "var(--t-text)" }}>{service?.recent_failure_count ?? 0}</b></div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Panel>
+
+          <Panel title="Historical Correlation" subtitle={`${rangeLabel} · alerts, outages and performance evidence`}>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "ALERTS", value: n?.alerts_by_severity ? Object.values(n.alerts_by_severity).reduce((sum, count) => sum + Number(count || 0), 0) : 0, tone: C.red },
+                { label: "OUTAGE-CORRELATED", value: n?.correlation?.correlated_outage_alerts ?? 0, tone: C.orange },
+                { label: "PERF-CORRELATED", value: n?.correlation?.correlated_performance_alerts ?? 0, tone: C.cyan },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl p-3" style={{ border: `1px solid ${item.tone}35`, background: `linear-gradient(145deg, ${item.tone}12, transparent 75%)` }}>
+                  <div className="font-mono text-[9px] tracking-widest" style={{ color: C.muted }}>{item.label}</div>
+                  <div className="mt-2 font-display text-2xl" style={{ color: item.tone }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 font-mono text-[10px]" style={{ color: C.muted }}>
+              Exact same-device timestamp match within ±{n?.correlation?.window_minutes ?? 5} minutes of an alert.
             </div>
           </Panel>
 
@@ -943,23 +1025,21 @@ export default function Dashboard() {
               </div>
             </Panel>
 
-            {/* ═══════════ RADAR — 6-metric health snapshot ═══════════ */}
-            <Panel title="Health Radar" subtitle="Multi-metric snapshot">
-              <ResponsiveContainer width="100%" height={300}>
-                <RadarChart data={radarData} outerRadius="72%">
-                  <defs>
-                    <linearGradient id="radarFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={C.cyan} stopOpacity={0.75} />
-                      <stop offset="100%" stopColor={C.purple} stopOpacity={0.35} />
-                    </linearGradient>
-                  </defs>
-                  <PolarGrid stroke="rgba(0,212,255,.22)" />
-                  <PolarAngleAxis dataKey="metric" tick={{ fill: C.muted, fontSize: 10, fontFamily: "monospace" }} />
-                  <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: C.muted, fontSize: 9 }} stroke="rgba(255,255,255,.1)" />
-                  <Radar name="Health" dataKey="A" stroke={C.cyan} fill="url(#radarFill)" fillOpacity={0.6} strokeWidth={2} animationDuration={1400} />
-                  <Tooltip content={<ChartTooltip formatter={(v: any) => `${Number(v).toFixed(1)}%`} />} />
-                </RadarChart>
-              </ResponsiveContainer>
+            {/* ═══════════ HEALTH — readable scorecard with radar context ═══════════ */}
+            <Panel title="Network Health" subtitle="Six signals that explain the current operating condition">
+              <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {radarData.map((item) => {
+                    const tone = item.A >= 90 ? C.green : item.A >= 70 ? C.amber : C.red
+                    return <div key={item.metric} className="rounded-xl p-3" style={{ border: `1px solid ${tone}35`, background: `linear-gradient(135deg, ${tone}12, transparent)` }}>
+                      <div className="flex items-center justify-between gap-2"><span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.muted }}>{item.metric}</span><span className="h-2 w-2 rounded-full" style={{ background: tone, boxShadow: `0 0 8px ${tone}` }} /></div>
+                      <div className="flex items-end justify-between gap-3 mt-2"><span className="font-display text-xl" style={{ color: tone }}>{fmt(item.A, "%")}</span><span className="font-mono text-[9px]" style={{ color: C.muted }}>{item.A >= 90 ? "Healthy" : item.A >= 70 ? "Watch" : "Needs attention"}</span></div>
+                      <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "var(--t-border-light)" }}><div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, item.A))}%`, background: tone }} /></div>
+                    </div>
+                  })}
+              </div>
+              <div className="mt-4 rounded-lg px-3 py-2 font-mono text-[10px]" style={{ background: "var(--t-surface-soft)", color: C.muted }}>
+                Higher is better. Availability, polling and interface scores show reliability; traffic is normalized against the busiest point in the selected time range.
+              </div>
             </Panel>
 
             {/* ═══════════ RADIAL BAR — device status share ═══════════ */}
@@ -1012,11 +1092,11 @@ export default function Dashboard() {
 
           {/* ═══════════ ROW: Area Traffic + Top Devices ═══════════ */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <Panel title={d.networkTraffic} subtitle={`${d.storedInterfaceSamples} · ${range}`} onClick={() => navigate("/snmp")}>
+            <Panel title={d.networkTraffic} subtitle={`${d.storedInterfaceSamples} · ${range}`}>
               <div className="flex gap-6 mb-3">
                 <div>
                   <div className="font-mono text-[10px]" style={{ color: C.muted }}>{d.rxTraffic}</div>
-                  <div className="font-display text-2xl neon-green">{formatTraffic(n?.traffic.rx_mbps)}</div>
+                  <div className="font-display text-2xl" style={{ color: C.green, textShadow: `0 0 16px ${C.green}66` }}>{formatTraffic(n?.traffic.rx_mbps)}</div>
                 </div>
                 <div>
                   <div className="font-mono text-[10px]" style={{ color: C.muted }}>{d.txTraffic}</div>
@@ -1208,7 +1288,7 @@ export default function Dashboard() {
               </div>
             </Panel>
 
-            <Panel title={d.snmpMonitoring} subtitle="Historical polling attempt outcomes" onClick={() => navigate("/monitoring-jobs")}>
+          <Panel title={d.snmpMonitoring} subtitle="Historical polling attempt outcomes">
               <div className="space-y-3">
                 <BarLine label={d.successfulAttempts} current={n?.polling.successful_attempts ?? 0} total={n?.polling.total_attempts ?? 0} />
                 <BarLine label={d.failedAttempts} current={n?.polling.failed_attempts ?? 0} total={n?.polling.total_attempts ?? 0} tone={C.red} />
@@ -1269,11 +1349,18 @@ export default function Dashboard() {
               className="xl:col-span-2"
             >
               <div className="overflow-x-auto">
-                <table className="w-full text-left">
+                <table className="w-full table-fixed text-left">
+                  <colgroup>
+                    <col className="w-[36%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[34%]" />
+                    <col className="w-[12%]" />
+                  </colgroup>
                   <thead>
                     <tr className="font-mono text-[10px] uppercase" style={{ color: C.muted }}>
                       {[d.device, d.ip, d.type, d.status, d.lastPoll].map((h) => (
-                        <th key={h} className="pb-2 pr-3">{h}</th>
+                        <th key={h} className="px-2 py-2 text-left align-middle">{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -1284,17 +1371,19 @@ export default function Dashboard() {
                         className="font-mono text-xs transition-colors duration-200 hover:bg-cyan-400/5"
                         style={{ borderTop: "1px solid rgba(255,255,255,.06)" }}
                       >
-                        <td className="py-2 pr-3" style={{ color: "var(--t-text, #c8d8ee)" }}>{dv.hostname}</td>
-                        <td className="py-2 pr-3" style={{ color: C.muted }}>{dv.ip_address}</td>
-                        <td className="py-2 pr-3" style={{ color: C.muted }}>{dv.device_type || d.na}</td>
-                        <td className="py-2 pr-3">
-                          <Badge
-                            label={dv.health?.status ?? dv.status}
-                            tone={dv.health?.status === "online" ? "green" : dv.health?.status === "offline" ? "red" : "amber"}
-                          />
-                          {dv.health?.health_reason && <div className="mt-1 text-[9px]" style={{ color: C.muted }}>{dv.health.health_reason}</div>}
+                        <td className="py-2 pr-3 text-left align-middle" style={{ color: "var(--t-text, #c8d8ee)" }}>{dv.hostname}</td>
+                        <td className="py-2 pr-3 text-left align-middle" style={{ color: C.muted }}>{dv.ip_address}</td>
+                        <td className="py-2 pr-3 text-left align-middle" style={{ color: C.muted }}>{dv.device_type || d.na}</td>
+                        <td className="py-2 pr-3 text-left align-middle">
+                          <div className="flex flex-col items-start">
+                            <Badge
+                              label={dv.health?.status ?? dv.status}
+                              tone={dv.health?.status === "online" ? "green" : dv.health?.status === "offline" ? "red" : "amber"}
+                            />
+                            {dv.health?.health_reason && <div className="mt-1 text-[9px]" style={{ color: C.muted }}>{dv.health.health_reason}</div>}
+                          </div>
                         </td>
-                        <td className="py-2" style={{ color: C.muted }}>
+                        <td className="py-2 text-left align-middle" style={{ color: C.muted }}>
                           {clock(n?.devices[String(dv.id)]?.last_poll?.timestamp ?? dv.last_seen)}
                         </td>
                       </tr>
@@ -1303,7 +1392,7 @@ export default function Dashboard() {
                 </table>
                 {!devices.length && <Empty text={d.noDevices} />}
               </div>
-            </Panel>
+          </Panel>
           </div>
         </>
       )}

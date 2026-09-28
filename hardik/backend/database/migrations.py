@@ -172,6 +172,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20260902_0044_syslog_backend_readiness", description="Complete Syslog receiver, parsing, filtering, rules and retention fields"),
     Migration(migration_id="20260910_0045_snmp_scalability_indexes", description="Add composite indexes for SNMP history and active-alert hot queries"),
     Migration(migration_id="20260917_0046_icmp_health_evidence", description="Add durable realtime ICMP attempt and result evidence"),
+    Migration(migration_id="20260922_0047_audit_outcome", description="Track audit event outcome for authentication and security events"),
 )
 
 
@@ -1181,6 +1182,9 @@ def run_migrations(engine: Engine) -> list[str]:
             with engine.begin() as connection:
                 connection.execute(text('ALTER TABLE devices ADD COLUMN IF NOT EXISTS "last_icmp_attempt_at" TIMESTAMP'))
                 connection.execute(text('ALTER TABLE devices ADD COLUMN IF NOT EXISTS "last_icmp_status" VARCHAR(20)'))
+        elif migration.migration_id == "20260922_0047_audit_outcome":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS outcome VARCHAR(20) NOT NULL DEFAULT 'success'"))
         elif migration.migration_id == "20260831_0030_cmdb_reconciliation":
             _ensure_cmdb_reconciliation(engine)
         else:

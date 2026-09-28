@@ -154,7 +154,7 @@ function EditDeviceDialog({
     ip_address: device.ip_address || "",
     model: device.model || "",
     serial_number: device.serial_number || "",
-    firmware_version: device.firmware_version || "",
+    firmware_version: device.firmware_version || device.firmware || "",
     mac_address: device.mac_address || "",
     monitoring_status: device.monitoring_status || false,
   })
@@ -185,17 +185,17 @@ function EditDeviceDialog({
       }}
     >
       <div
-        className="w-full max-w-lg mx-4"
+        className="snmp-device-edit-dialog w-full max-w-lg mx-4"
         style={{
-          background: "rgba(4,14,33,0.98)",
-          border: "1px solid rgba(0,212,255,0.3)",
+          background: "var(--t-card)",
+          border: "1px solid var(--t-border)",
           borderRadius: 12,
         }}
       >
         {/* Header */}
         <div
           className="flex items-center justify-between p-5"
-          style={{ borderBottom: "1px solid rgba(0,212,255,0.15)" }}
+          style={{ borderBottom: "1px solid var(--t-border-light)" }}
         >
           <div>
             <div className="font-display font-bold text-lg tracking-widest neon-cyan">
@@ -203,7 +203,7 @@ function EditDeviceDialog({
             </div>
             <div
               className="font-mono text-xs mt-0.5"
-              style={{ color: "#8899bb" }}
+              style={{ color: "var(--t-muted)" }}
             >
               {device.name || device.hostname || device.ip_address}
             </div>
@@ -261,8 +261,8 @@ function EditDeviceDialog({
                 className="w-full glass-bright rounded px-3 py-2 font-mono text-xs"
                 style={{
                   border: "1px solid rgba(0,212,255,0.25)",
-                  color: "#c8d8ee",
-                  background: "rgba(8,25,55,0.7)",
+                  color: "var(--t-text)",
+                  background: "var(--t-input-bg)",
                 }}
               />
             </div>
@@ -284,7 +284,7 @@ function EditDeviceDialog({
                 style={{
                   border: "1px solid rgba(0,212,255,0.25)",
                   color: "#c8d8ee",
-                  background: "rgba(8,25,55,0.7)",
+                  background: "var(--t-input-bg)",
                 }}
                 required
               />
@@ -307,7 +307,7 @@ function EditDeviceDialog({
                 style={{
                   border: "1px solid rgba(0,212,255,0.25)",
                   color: "#c8d8ee",
-                  background: "rgba(8,25,55,0.7)",
+                  background: "var(--t-input-bg)",
                 }}
               />
             </div>
@@ -329,7 +329,7 @@ function EditDeviceDialog({
                 style={{
                   border: "1px solid rgba(0,212,255,0.25)",
                   color: "#c8d8ee",
-                  background: "rgba(8,25,55,0.7)",
+                  background: "var(--t-input-bg)",
                 }}
               />
             </div>
@@ -351,7 +351,7 @@ function EditDeviceDialog({
                 style={{
                   border: "1px solid rgba(0,212,255,0.25)",
                   color: "#c8d8ee",
-                  background: "rgba(8,25,55,0.7)",
+                  background: "var(--t-input-bg)",
                 }}
               />
             </div>
@@ -374,7 +374,7 @@ function EditDeviceDialog({
                 style={{
                   border: "1px solid rgba(0,212,255,0.25)",
                   color: "#c8d8ee",
-                  background: "rgba(8,25,55,0.7)",
+                  background: "var(--t-input-bg)",
                 }}
               />
             </div>
@@ -405,7 +405,7 @@ function EditDeviceDialog({
 
           <div
             className="flex items-center justify-end gap-3 pt-3"
-            style={{ borderTop: "1px solid rgba(0,212,255,0.15)" }}
+            style={{ borderTop: "1px solid var(--t-border-light)" }}
           >
             <button
               type="button"
@@ -553,7 +553,7 @@ export default function SNMPDevicesPage() {
 
     try {
       await updateDevice(editingDevice.id, formData)
-      refetch() // Refresh the device list
+      await refetch() // Refresh the device list
       setError(null)
     } catch (err) {
       throw err // Let EditDeviceDialog handle the error
@@ -666,7 +666,7 @@ export default function SNMPDevicesPage() {
               style={{
                 border: "1px solid rgba(0,212,255,0.25)",
                 color: "#c8d8ee",
-                background: "rgba(8,25,55,0.7)",
+                background: "var(--t-input-bg)",
               }}
             />
             {search && (
@@ -1105,7 +1105,7 @@ export default function SNMPDevicesPage() {
                   style={{
                     border: "1px solid rgba(0,212,255,0.25)",
                     color: "#c8d8ee",
-                    background: "rgba(8,25,55,0.7)",
+                    background: "var(--t-input-bg)",
                   }}
                 >
                   <option value={25}>25</option>

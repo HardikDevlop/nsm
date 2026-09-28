@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.database.session import get_db
+from backend.dependencies import require_permission
 from backend.services.device_health import derive_device_health
 from backend.models import Device
 from backend.models.snmp import (
@@ -48,7 +49,7 @@ def _get_device_or_404(device_id: int, db: Session) -> Device:
 def get_monitoring_data(
     request: MonitoringDataRequest = Body(...),
     db: Session = Depends(get_db),
-    # _: Any = Depends(require_permission("devices:read")),  # Temporarily disabled for testing
+    _: Any = Depends(require_permission("devices:read")),
 ) -> dict[str, Any]:
     """
     Get latest monitoring data for a device from database (NO live polling).
@@ -409,7 +410,7 @@ def get_monitoring_data_simple(
     include_history: bool = False,
     history_hours: int = 1,
     db: Session = Depends(get_db),
-    # _: Any = Depends(require_permission("devices:read")),  # Temporarily disabled for testing
+    _: Any = Depends(require_permission("devices:read")),
 ) -> dict[str, Any]:
     """
     GET version of monitoring data API (for simple testing).

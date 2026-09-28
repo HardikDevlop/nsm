@@ -19,5 +19,5 @@ test('problem management exposes lifecycle, known error and RCA details', () => 
   assert.match(page, /permanent_fix/)
   assert.match(page, /RCA/)
   assert.match(page, /Not analyzed/)
-  assert.match(api, /reference: string; status: string; probable_root_cause/)
+  assert.match(api, /reference: string[\s\S]*status: string[\s\S]*probable_root_cause/)
 })

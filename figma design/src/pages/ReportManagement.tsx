@@ -31,6 +31,15 @@ function formatDateInput(date: Date) {
   return date.toISOString().slice(0, 10)
 }
 
+function formatDuration(seconds: number | null | undefined) {
+  const totalSeconds = Math.max(0, Math.round(Number(seconds) || 0))
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const remainingSeconds = totalSeconds % 60
+  return `${days}d ${hours}h ${minutes}m ${remainingSeconds}s`
+}
+
 function useDefaultRange(period: string) {
   const end = new Date()
   const start = new Date()
@@ -129,7 +138,7 @@ export default function ReportManagement() {
           Type: r.device_type_name ?? '',
           Protocol: r.protocol,
           Availability: r.availability_pct,
-          DowntimeSeconds: r.downtime_seconds,
+          Downtime: formatDuration(r.downtime_seconds),
           SNMPHealth: r.snmp_health,
           PerformanceScore: r.performance_score ?? '',
           InterfaceCount: r.interface_count ?? '',
@@ -142,7 +151,7 @@ export default function ReportManagement() {
           { Field: 'Period End', Value: summary.period_end },
           { Field: 'Total Devices', Value: summary.total_devices },
           { Field: 'Availability %', Value: summary.availability_pct },
-          { Field: 'Downtime Seconds', Value: summary.downtime_seconds },
+          { Field: 'Downtime', Value: formatDuration(summary.downtime_seconds) },
           { Field: 'SLA Met %', Value: summary.sla_met_pct },
         ])
         XLSX.utils.book_append_sheet(wb, meta, 'Summary')
@@ -233,7 +242,7 @@ export default function ReportManagement() {
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Stat label="Availability" value={`${activeSummary.availability_pct.toFixed(2)}%`} accent={pickColor(activeSummary.availability_pct >= 99 ? 'met' : 'breached')} />
-            <Stat label="Downtime Seconds" value={activeSummary.downtime_seconds.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} accent="#ff6644" />
+            <Stat label="Downtime" value={formatDuration(activeSummary.downtime_seconds)} accent="#ff6644" />
             <Stat label="SNMP Health" value={activeSummary.avg_snmp_health?.toFixed(2) ?? 'N/A'} accent={pickColor(activeSummary.avg_snmp_health && activeSummary.avg_snmp_health >= 85 ? 'healthy' : activeSummary.avg_snmp_health && activeSummary.avg_snmp_health >= 60 ? 'degraded' : 'critical')} />
             <Stat label="SLA Met %" value={`${activeSummary.sla_met_pct.toFixed(2)}%`} accent={pickColor(activeSummary.sla_met_pct >= 99 ? 'met' : 'critical')} />
           </div>
@@ -243,7 +252,7 @@ export default function ReportManagement() {
               <GlassCard key={key} className="p-4">
                 <div className="font-display font-semibold text-base">{section.title}</div>
                 <div className="mt-2 text-2xl font-bold" style={{ color: pickColor(key === 'sla' ? (section.average ?? 0) >= 99 ? 'met' : 'critical' : key === 'snmp_health' ? (section.average ?? 0) >= 85 ? 'healthy' : 'degraded' : 'info') }}>
-                  {section.average != null ? section.average.toFixed(2) : section.count}
+                  {section.average != null ? key === 'downtime' ? formatDuration(section.average) : section.average.toFixed(2) : section.count}
                 </div>
                 <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-muted)' }}>Records: {section.count}</div>
               </GlassCard>
@@ -271,7 +280,7 @@ export default function ReportManagement() {
                       <td className="px-4 py-3">{row.device_type_name ?? 'N/A'}</td>
                       <td className="px-4 py-3">{row.protocol}</td>
                       <td className="px-4 py-3" style={{ color: pickColor(row.availability_pct >= 99 ? 'met' : 'critical') }}>{row.availability_pct.toFixed(2)}%</td>
-                      <td className="px-4 py-3">{row.downtime_seconds.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}s</td>
+                      <td className="px-4 py-3">{formatDuration(row.downtime_seconds)}</td>
                       <td className="px-4 py-3" style={{ color: pickColor(row.snmp_health) }}>{row.snmp_health}{row.snmp_success_rate != null ? ` (${row.snmp_success_rate.toFixed(1)}%)` : ''}</td>
                       <td className="px-4 py-3">{row.performance_score != null ? row.performance_score.toFixed(2) : 'N/A'}</td>
                       <td className="px-4 py-3">{row.interface_count ?? 0}{row.interface_down_count ? ` / down ${row.interface_down_count}` : ''}</td>

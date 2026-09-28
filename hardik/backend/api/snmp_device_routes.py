@@ -3095,9 +3095,9 @@ def list_snmp_devices_optimized(
             else None
         )
         resolved_hostname = _first_non_empty(
+            d.hostname,
             identity_hostname,
             di.sys_name if di else None,
-            d.hostname,
             d.ip_address,
         )
         identity_macs = di.mac_addresses if di and isinstance(di.mac_addresses, list) else []
@@ -3115,12 +3115,14 @@ def list_snmp_devices_optimized(
             "model": d.model,
             "serial_number": d.serial_number,
             "firmware": d.firmware_version,
+            "firmware_version": d.firmware_version,
             "mac_address": resolved_mac,
             "topology_metadata": d.topology_metadata or {},
             "status": d.status,
             "snmp_version": primary_credential.snmp_version if primary_credential else None,
             "snmp_status": snmp_status_val,
             "monitoring_enabled": any(c.enabled for c in configs),
+            "monitoring_status": d.monitoring_status,
             "last_seen": d.last_seen.isoformat() if d.last_seen else None,
             "last_poll_at": max((c.last_poll_at for c in configs if c.last_poll_at), default=None),
             "modules_monitored": modules_monitored,

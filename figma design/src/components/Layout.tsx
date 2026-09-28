@@ -319,7 +319,7 @@ export default function Layout() {
           <NotificationPanel
             alerts={panelAlerts}
             onClose={() => setNotifOpen(false)}
-            onViewAll={() => { setNotifOpen(false); navigate('/alerts') }}
+            onViewAll={(alertId) => { setNotifOpen(false); navigate(alertId ? `/alerts?alert_id=${alertId}` : '/alerts') }}
             onDismiss={handleDismissAlert}
             onClearAll={handleClearAllAlerts}
           />

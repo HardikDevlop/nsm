@@ -39,8 +39,8 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _icmp_db_now() -> datetime:
-    """Canonical UTC instant stored as naive UTC for legacy DateTime columns."""
-    return utc_now().replace(tzinfo=None)
+    """Canonical IST instant stored as naive IST for legacy DateTime columns."""
+    return datetime.now(_IST).replace(tzinfo=None)
 
 
 def _should_advance_last_seen(current: datetime | None, candidate: datetime) -> bool:
@@ -696,15 +696,14 @@ class MonitorEngine:
                     elif db_old_status == "offline":
                         device.downtime_seconds = (device.downtime_seconds or 0) + elapsed
 
-                # ``unknown -> known`` establishes a baseline, rather than a
-                # real up/down transition, so keep it out of the history.
-                if db_old_status != "unknown":
-                    db.add(DeviceStatusHistory(
-                        device_id=device.id,
-                        old_status=db_old_status,
-                        new_status=db_new_status,
-                        change_reason="Realtime ICMP check",
-                    ))
+                # Persist the first verified result too. This gives the UI a
+                # real start time instead of showing only aggregate counters.
+                db.add(DeviceStatusHistory(
+                    device_id=device.id,
+                    old_status=db_old_status,
+                    new_status=db_new_status,
+                    change_reason="Realtime ICMP check (verified baseline)" if db_old_status == "unknown" else "Realtime ICMP check",
+                ))
 
                 device.status = db_new_status
                 device.last_status_change = now

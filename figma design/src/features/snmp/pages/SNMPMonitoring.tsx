@@ -320,7 +320,7 @@ export default function SNMPMonitoring() {
               <span className="font-mono text-xs" style={{ color:'#8899bb' }}>Device:</span>
               <select value={selectedId??''} onChange={e=>setSelected(Number(e.target.value))}
                 className="glass-bright rounded px-2 py-1 font-mono text-xs"
-                style={{ border:'1px solid rgba(0,212,255,0.25)', color:'#c8d8ee', background:'rgba(8,25,55,0.7)' }}>
+                style={{ border:'1px solid var(--t-input-border)', color:'var(--t-text)', background:'var(--t-input-bg)' }}>
                 {devices.map(d=><option key={d.id} value={d.id}>{d.hostname||d.ip_address}</option>)}
               </select>
             </div>

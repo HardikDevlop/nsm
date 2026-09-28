@@ -4,7 +4,7 @@ type Alert = { id: number; type: string; msg: string; time: string }
 type Props = {
   alerts: Alert[]
   onClose: () => void
-  onViewAll?: () => void
+  onViewAll?: (alertId?: number) => void
   onDismiss?: (id: number) => void
   onClearAll?: () => void
 }
@@ -57,7 +57,7 @@ export default function NotificationPanel({
         {alerts.map(a => {
           const s = typeStyle[a.type] ?? typeStyle.info
           return (
-            <div key={a.id} className="rounded-lg p-3 cursor-pointer transition-all hover:scale-[1.01]"
+            <div key={a.id} role="button" tabIndex={0} onClick={() => onViewAll?.(a.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') onViewAll?.(a.id) }} className="rounded-lg p-3 cursor-pointer transition-all hover:scale-[1.01]"
               style={{ background: s.bg, border: `1px solid ${s.color}33` }}>
               <div className="flex items-center justify-between mb-1">
                 <span className="font-mono text-xs font-semibold" style={{ color: s.color }}>{s.label}</span>

@@ -40,6 +40,7 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
   color: var(--t-text) !important;
 }
 .snmp-collector-card table th { background: var(--t-table-header) !important; color: var(--t-text-secondary) !important; }
+.snmp-collector-card table td { color: var(--t-text) !important; }
 .snmp-collector-card table td > div,
 .snmp-collector-card [style*="rgba(8,25,55"] {
   background: var(--t-table-row) !important;
@@ -48,6 +49,18 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
 .snmp-mac-topology { color: var(--t-text); border-color: var(--t-border); }
 .snmp-mac-topology [style*="#667799"],
 .snmp-mac-topology [style*="#8899bb"] { color: var(--t-text-secondary) !important; }
+
+[data-theme="light"] .snmp-collector-card .snmp-mac-mapping {
+  background: var(--t-card) !important;
+  border-color: var(--t-border) !important;
+}
+[data-theme="light"] .snmp-collector-card .snmp-mac-mapping span,
+[data-theme="light"] .snmp-collector-card [style*="#c8d8ee"],
+[data-theme="light"] .snmp-collector-card [style*="#f1f5f9"],
+[data-theme="light"] .snmp-collector-card [style*="#77859b"],
+[data-theme="light"] .snmp-collector-card [style*="#8899bb"] {
+  color: var(--t-text) !important;
+}
 
 [data-theme="light"] .snmp-inventory-table .snmp-inventory-head,
 [data-theme="light"] .snmp-inventory-table [style*="#c8d8ee"],
@@ -980,6 +993,14 @@ a:focus-visible {
   background: transparent !important;
 }
 
+/* Recent devices/activity table: keep every heading and value on the same
+   centered axis, including when legacy table defaults are loaded. */
+.dashboard-page table thead th,
+.dashboard-page table tbody td {
+  text-align: left !important;
+  vertical-align: middle;
+}
+
 .dashboard-page .recharts-wrapper,
 .dashboard-page .recharts-surface {
   overflow: visible;
@@ -1049,14 +1070,14 @@ a:focus-visible {
 
 [data-theme="light"] .dashboard-page {
   background:
-    radial-gradient(circle at 92% 0%, rgba(59,130,246,.1), transparent 30%),
-    linear-gradient(180deg, #f8fbff 0%, #f4f7fb 100%) !important;
+    radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--t-accent) 8%, transparent), transparent 30%),
+    linear-gradient(180deg, var(--t-bg) 0%, color-mix(in srgb, var(--t-bg) 88%, var(--t-card)) 100%) !important;
 }
 
 [data-theme="light"] .dashboard-page .glass {
-  background: rgba(255,255,255,.82);
-  border-color: #b8d2ff;
-  box-shadow: 0 8px 24px rgba(30, 64, 175, .06), inset 0 1px 0 #fff;
+  background: color-mix(in srgb, var(--t-card) 92%, transparent);
+  border-color: color-mix(in srgb, var(--t-accent) 28%, var(--t-border));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--t-text) 6%, transparent), inset 0 1px 0 color-mix(in srgb, var(--t-card) 70%, transparent);
 }
 
 [data-theme="light"] .dashboard-page .glass:hover {
@@ -1081,21 +1102,21 @@ a:focus-visible {
 }
 
 [data-theme="light"] .dashboard-page table thead tr {
-  background: rgba(248, 250, 252, 0.55);
-  border-bottom: 1px solid #dbe7f5;
+  background: color-mix(in srgb, var(--t-table-header) 70%, transparent);
+  border-bottom: 1px solid var(--t-border);
 }
 
 [data-theme="light"] .dashboard-page table tbody tr {
-  background: rgba(255, 255, 255, 0.35) !important;
-  border-top: 1px solid rgba(226, 232, 240, 0.65) !important;
+  background: color-mix(in srgb, var(--t-table-row) 45%, transparent) !important;
+  border-top: 1px solid var(--t-border-light) !important;
 }
 
 [data-theme="light"] .dashboard-page table tbody tr:nth-child(even) {
-  background: rgba(248, 251, 255, 0.5) !important;
+  background: color-mix(in srgb, var(--t-table-row) 62%, transparent) !important;
 }
 
 [data-theme="light"] .dashboard-page table tbody tr:hover {
-  background: rgba(239, 246, 255, 0.72) !important;
+  background: var(--t-table-row-hover) !important;
 }
 
 [data-theme="light"] .dashboard-page table td {
@@ -1164,6 +1185,21 @@ html[data-locale="hi"] .font-mono {
   border: 1px solid var(--t-border-light, rgba(0, 0, 0, 0.1)) !important;
 }
 
+/* Final light-mode surface contract: page shells and reusable panels must
+   follow the selected off-white palette, including pages with legacy styles. */
+[data-theme="light"] body,
+[data-theme="light"] #root,
+[data-theme="light"] main {
+  background-color: var(--t-bg) !important;
+}
+
+[data-theme="light"] .glass,
+[data-theme="light"] .glass-bright,
+[data-theme="light"] .glass-light {
+  background: color-mix(in srgb, var(--t-card) 94%, transparent) !important;
+  border-color: var(--t-border) !important;
+}
+
 [data-theme="light"] .recharts-text {
   fill: var(--t-muted, #666) !important;
 }
@@ -1209,9 +1245,24 @@ html[data-locale="hi"] .font-mono {
 }
 [data-theme="light"] .snmp-devices-page input,
 [data-theme="light"] .snmp-devices-page select {
-  background: #ffffff !important;
-  color: #111827 !important;
-  border-color: #cbd5e1 !important;
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+  border-color: var(--t-border) !important;
+  color-scheme: light;
+}
+[data-theme="light"] .snmp-devices-page input::placeholder {
+  color: var(--t-muted) !important;
+  opacity: .85;
+}
+[data-theme="light"] .snmp-devices-page option {
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .snmp-devices-page .glass input,
+[data-theme="light"] .snmp-devices-page .glass select {
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+  border-color: var(--t-border) !important;
 }
 [data-theme="light"] .snmp-devices-page [style*="rgba(8,25,55"] {
   background: #f8fafc !important;
@@ -1546,23 +1597,23 @@ html[data-locale="hi"] .font-mono {
   stroke: var(--t-border-light, rgba(30, 30, 30, 0.3)) !important;
 }
 [data-theme="light"] .system-vitals-panel {
-  background: #f8fafc !important;
-  border-color: #d9e3f0 !important;
+  background: var(--t-card) !important;
+  border-color: var(--t-border) !important;
   box-shadow: 0 10px 28px rgba(30, 64, 110, .08) !important;
 }
-[data-theme="light"] .system-vitals-grid > div {
+[data-theme="light"] .system-vitals-panel .grid > div {
   position: relative;
-  background: #ffffff;
-  border: 1px solid #e1e8f2;
+  background: var(--t-card);
+  border: 1px solid color-mix(in srgb, var(--t-border) 82%, transparent);
   border-radius: 14px;
   min-height: 270px;
   padding: 22px 12px 16px;
   box-shadow: 0 5px 14px rgba(41, 74, 120, .06);
   transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
 }
-[data-theme="light"] .system-vitals-grid { gap: 18px !important; padding-top: 10px; padding-bottom: 6px; }
+[data-theme="light"] .system-vitals-panel .grid { gap: 18px !important; padding-top: 10px; padding-bottom: 6px; }
 [data-theme="light"] .system-vitals-panel { padding: 22px 24px !important; }
-[data-theme="light"] .system-vitals-grid > div::before {
+[data-theme="light"] .system-vitals-panel .grid > div::before {
   content: "";
   position: absolute;
   top: 0;
@@ -1572,7 +1623,7 @@ html[data-locale="hi"] .font-mono {
   border-radius: 0 0 4px 4px;
   background: #dbe7f7;
 }
-[data-theme="light"] .system-vitals-grid > div:hover {
+[data-theme="light"] .system-vitals-panel .grid > div:hover {
   transform: translateY(-2px);
   border-color: #c5d5ea;
   box-shadow: 0 9px 20px rgba(41, 74, 120, .11);
@@ -1581,3 +1632,13 @@ html[data-locale="hi"] .font-mono {
 [data-theme="light"] .system-vitals-panel .gauge-tick { stroke: #b7c5db !important; }
 [data-theme="light"] .system-vitals-panel .gauge-center { fill: #243b63 !important; }
 [data-theme="light"] .system-vitals-panel .font-mono { color: #526684 !important; }
+
+.snmp-device-edit-dialog input {
+  color: var(--t-text) !important;
+  background: var(--t-input-bg) !important;
+  border-color: var(--t-border) !important;
+}
+.snmp-device-edit-dialog label { color: var(--t-text-secondary) !important; }
+[data-theme="light"] .snmp-device-edit-dialog {
+  box-shadow: 0 18px 50px rgba(30, 64, 110, .18);
+}

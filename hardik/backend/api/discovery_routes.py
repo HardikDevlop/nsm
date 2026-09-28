@@ -1321,6 +1321,7 @@ def device_monitoring_history(
     from backend.database.session import SessionLocal  # type: ignore
     from backend.models import Device, DeviceMetric, DeviceStatusHistory
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
     # ---- 1. Look up the device by IP ----
     with SessionLocal() as db:
@@ -1332,7 +1333,8 @@ def device_monitoring_history(
             raise HTTPException(status_code=404, detail=f"Device {ip} not found")
 
         # ---- 2. Time window for history queries ----
-        since = datetime.utcnow() - timedelta(hours=hours)
+        now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+        since = now_ist - timedelta(hours=hours)
 
         # ---- 3. Status change history (up/down events) ----
         history_rows = (
@@ -1376,16 +1378,30 @@ def device_monitoring_history(
             for m in metric_rows
         ]
 
-        # ---- 5. Compute uptime / downtime summary ----
-        uptime_secs = device.uptime_seconds or 0
-        downtime_secs = device.downtime_seconds or 0
-        # If device is currently online, add time since last status change
-        if device.status == "online" and device.last_status_change:
-            elapsed = (datetime.utcnow() - device.last_status_change).total_seconds()
-            uptime_secs += int(elapsed)
-        elif device.status == "offline" and device.last_status_change:
-            elapsed = (datetime.utcnow() - device.last_status_change).total_seconds()
-            downtime_secs += int(elapsed)
+        # ---- 5. Compute an exact windowed uptime / downtime summary ----
+        # Do not use lifetime counters for a 24h/selected-window report. Walk
+        # status transitions and close the final segment at the current time.
+        window_start = since
+        window_end = now_ist
+        events_asc = sorted(history_rows, key=lambda row: (row.timestamp, row.id))
+        state = (events_asc[0].old_status if events_asc and events_asc[0].old_status else device.status or "unknown").lower()
+        cursor = window_start
+        uptime_secs = 0
+        downtime_secs = 0
+        for event in events_asc:
+            event_time = max(window_start, min(window_end, event.timestamp))
+            seconds = max(0, int((event_time - cursor).total_seconds()))
+            if state in {"online", "up"}:
+                uptime_secs += seconds
+            elif state in {"offline", "down"}:
+                downtime_secs += seconds
+            cursor = event_time
+            state = (event.new_status or "unknown").lower()
+        seconds = max(0, int((window_end - cursor).total_seconds()))
+        if state in {"online", "up"}:
+            uptime_secs += seconds
+        elif state in {"offline", "down"}:
+            downtime_secs += seconds
         total_recorded = uptime_secs + downtime_secs
         availability_pct = round((uptime_secs / total_recorded * 100), 2) if total_recorded > 0 else 0.0
 
@@ -1397,6 +1413,8 @@ def device_monitoring_history(
             "downtime_hours": round(downtime_secs / 3600, 2),
             "availability_pct": availability_pct,
             "total_status_changes": len(history_rows),
+            "up_events": sum(1 for row in history_rows if row.new_status in {"online", "up"}),
+            "down_events": sum(1 for row in history_rows if row.new_status in {"offline", "down"}),
             "total_pings": len(metric_rows),
             "current_status": device.status,
             "last_seen": device.last_seen.isoformat() if device.last_seen else None,

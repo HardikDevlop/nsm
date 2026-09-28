@@ -59,6 +59,7 @@ export default function DeviceMonitoring() {
   const [error, setError] = useState<string | null>(null)
   const [metricPage, setMetricPage] = useState(1)
   const [statusPage, setStatusPage] = useState(1)
+  const [showAvailabilityDetails, setShowAvailabilityDetails] = useState(false)
   const metricPageSize = 25
   const statusPageSize = 25
   const cleanupRef = useRef<(() => void) | null>(null)
@@ -282,6 +283,18 @@ export default function DeviceMonitoring() {
   useEffect(() => { setStatusPage(1) }, [realStatusHistory.length])
 
   const summary = history?.summary
+  const availabilityRows = useMemo(() => {
+    if (!history?.status_history?.length) return []
+    const end = Date.now()
+    const rows = [...history.status_history]
+      .filter(item => item.timestamp)
+      .sort((a, b) => new Date(a.timestamp!).getTime() - new Date(b.timestamp!).getTime())
+    return rows.map((item, index) => {
+      const start = new Date(item.timestamp!).getTime()
+      const next = rows[index + 1]?.timestamp ? new Date(rows[index + 1].timestamp!).getTime() : end
+      return { ...item, state: item.new_status === 'online' ? 'UP' : item.new_status === 'offline' ? 'DOWN' : item.new_status.toUpperCase(), duration: Math.max(0, Math.floor((next - start) / 1000)) }
+    })
+  }, [history])
 
   return (
     <div className="p-3 md:p-4 space-y-3 md:space-y-4">
@@ -356,7 +369,7 @@ export default function DeviceMonitoring() {
             </GlassCard>
 
             {/* Device Overview */}
-            <GlassCard className="p-3 md:p-4">
+            <GlassCard className="p-3 md:p-4 cursor-pointer hover:brightness-105 transition" onClick={() => setShowAvailabilityDetails(true)}>
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">DEVICE OVERVIEW</div>
               <div className="space-y-1.5 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                 <div className="flex justify-between"><span style={{ color: 'var(--t-muted, #8899bb)' }}>Hostname</span><span>{device.hostname}</span></div>
@@ -396,8 +409,9 @@ export default function DeviceMonitoring() {
                     </div>
                   </div>
                   <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
-                    {summary.total_pings} pings • {summary.total_hours}h window
+                    {summary.total_pings} checks • {summary.up_events ?? 0} UP events • {summary.down_events ?? 0} DOWN events • {summary.total_hours}h window
                   </div>
+                  <button type="button" onClick={(event) => { event.stopPropagation(); setShowAvailabilityDetails(true) }} className="font-mono text-[10px] mt-2 uppercase tracking-wider text-left hover:underline" style={{ color: '#00d4ff' }}>VIEW EXACT UP/DOWN TIMELINE →</button>
                   {summary.last_status_change ? (
                     <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
                       Last: {formatTimestamp(summary.last_status_change)}
@@ -463,7 +477,7 @@ export default function DeviceMonitoring() {
             {/* Status Change History */}
             <GlassCard className="p-3 md:p-4">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">STATUS CHANGE HISTORY</div>
-              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · online/offline transitions from database</div>
+              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · verified online/offline transitions from database · {realStatusHistory.length} recorded changes</div>
               {realStatusHistory.length === 0 ? (
                 <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No up/down changes recorded yet.</div>
               ) : (
@@ -494,6 +508,15 @@ export default function DeviceMonitoring() {
               )}
             </GlassCard>
           </div>
+
+          {showAvailabilityDetails && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70" onClick={() => setShowAvailabilityDetails(false)}>
+              <div className="glass rounded-xl p-5 w-full max-w-4xl max-h-[88vh] overflow-hidden shadow-2xl" style={{ border: '1px solid rgba(0,212,255,.3)' }} onClick={e => e.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3 mb-4"><div><h2 className="font-display font-bold text-lg" style={{ color: 'var(--t-text)' }}>Availability Timeline</h2><p className="font-mono text-xs mt-1" style={{ color: 'var(--t-muted)' }}>{device.hostname} · last {summary?.total_hours ?? 24} hours · IST</p></div><button onClick={() => setShowAvailabilityDetails(false)} className="font-mono text-xs" style={{ color: 'var(--t-muted)' }}>CLOSE ✕</button></div>
+                {availabilityRows.length === 0 ? <div className="py-10 text-center font-mono text-xs" style={{ color: 'var(--t-muted)' }}>No ON/OFF periods recorded in this window.</div> : <div className="overflow-auto max-h-[62vh]"><table className="w-full text-left font-mono text-xs"><thead><tr style={{ borderBottom: '1px solid var(--t-border-alpha)' }}>{['Period','ON/OFF','Started (IST)','Ended (IST)','Total duration','Evidence'].map(label => <th key={label} className="px-3 py-3 uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--t-muted)' }}>{label}</th>)}</tr></thead><tbody>{availabilityRows.map((row, index) => { const next = availabilityRows[index + 1]; return <tr key={row.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }}><td className="px-3 py-3" style={{ color: 'var(--t-muted)' }}>#{index + 1}</td><td className="px-3 py-3"><span className="px-2 py-1 rounded" style={{ color: row.state === 'UP' ? '#00ff88' : '#ff3366', background: row.state === 'UP' ? 'rgba(0,255,136,.1)' : 'rgba(255,51,102,.1)' }}>{row.state}</span></td><td className="px-3 py-3 whitespace-nowrap" style={{ color: 'var(--t-text)' }}>{formatTimestamp(row.timestamp)}</td><td className="px-3 py-3 whitespace-nowrap" style={{ color: 'var(--t-muted)' }}>{next ? formatTimestamp(next.timestamp) : 'Current'}</td><td className="px-3 py-3 whitespace-nowrap" style={{ color: 'var(--t-text)' }}>{formatDuration(row.duration)}</td><td className="px-3 py-3" style={{ color: 'var(--t-muted)' }}>{row.reason ?? 'Verified ICMP transition'}</td></tr> })}</tbody></table></div>}
+              </div>
+            </div>
+          )}
 
         </>
       ) : (

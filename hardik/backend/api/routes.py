@@ -155,8 +155,8 @@ def _derived_dashboard_health_counts(db: Session, devices: list[Device]) -> dict
     return counts
 
 
-def audit(db: Session, user_id: int | None, action: str, resource_name: str) -> None:
-    db.add(AuditLog(user_id=user_id, action=action, resource_name=resource_name))
+def audit(db: Session, user_id: int | None, action: str, resource_name: str, outcome: str = "success") -> None:
+    db.add(AuditLog(user_id=user_id, action=action, resource_name=resource_name, outcome=outcome))
     db.commit()
 
 
@@ -196,7 +196,12 @@ def health(db: Session = Depends(get_db)) -> dict[str, object]:
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> Token:
     user = db.query(User).filter(User.email == payload.email).first()
     if not user or not verify_password(payload.password, user.password_hash):
+        audit(db, user.id if user else None, "LOGIN_FAILED", f"auth:{payload.email}", outcome="failure")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if user.status != "active":
+        audit(db, user.id, "LOGIN_BLOCKED", f"auth:{user.email}", outcome="failure")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is not active")
+    audit(db, user.id, "LOGIN_SUCCESS", f"auth:{user.email}")
     return Token(access_token=create_access_token(user.email))
 
 
@@ -454,6 +459,14 @@ def get_report_management_options(db: Session = Depends(get_db), _: User = Depen
     }
 
 
+def _format_duration(seconds: int | float | None) -> str:
+    total = max(0, round(float(seconds or 0)))
+    days, remainder = divmod(total, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{days}d {hours}h {minutes}m {secs}s"
+
+
 @router.get("/reports/management/export")
 def export_report_management(
     format: str = "csv",
@@ -476,6 +489,7 @@ def export_report_management(
     )
     summary, rows = _build_report_rows(db, filters)
     if format == "csv":
+        rows = [dict(row, downtime_seconds=_format_duration(row.get("downtime_seconds"))) for row in rows]
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()) if rows else ["device_id", "hostname"])
         writer.writeheader()
