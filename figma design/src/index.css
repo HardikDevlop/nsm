@@ -189,7 +189,7 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
   color: #172033 !important;
 }
 [data-theme="light"] .snmp-collector-card > .grid.grid-cols-2 > div > div:first-child {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .snmp-collector-card > .grid.grid-cols-2 > div > div:nth-child(2) {
   color: #0f172a !important;
@@ -203,14 +203,14 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
   color: #2563eb !important;
 }
 [data-theme="light"] .snmp-collector-card details pre {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 /* Device details overview still uses the old pale-on-dark inline palette. */
 [data-theme="light"] .snmp-device-details [style*="#c8d8ee"] {
   color: #0f172a !important;
 }
 [data-theme="light"] .snmp-device-details [style*="#8899bb"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .snmp-device-details [style*="#667799"] {
   color: #334155 !important;
@@ -297,7 +297,7 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
   border-color: #cbd5e1 !important;
 }
 [data-theme="light"] .snmp-mac-stat [style*="#667799"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .snmp-mac-mapping {
   background: transparent !important;
@@ -305,7 +305,7 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
 }
 [data-theme="light"] .snmp-mac-mapping [style*="#8899bb"],
 [data-theme="light"] .snmp-mac-mapping [style*="#77859b"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .snmp-mac-topology-canvas {
   background-image:
@@ -331,7 +331,7 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
 }
 [data-theme="light"] .snmp-mac-topology-port [style*="#8899bb"],
 [data-theme="light"] .snmp-mac-topology-port [style*="#667799"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .snmp-mac-topology-details {
   color: #0f172a !important;
@@ -738,7 +738,7 @@ a:focus-visible {
   border-color: #fecdd3 !important;
 }
 [data-theme="light"] .snmp-device-details [style*="#8899bb"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .snmp-capability-tile {
   color: #111827 !important;
@@ -776,8 +776,9 @@ a:focus-visible {
 }
 [data-theme="light"] [style*="#556677"],
 [data-theme="light"] [style*="#667799"],
-[data-theme="light"] [style*="#8899bb"] {
-  color: #475569 !important;
+[data-theme="light"] [style*="#8899bb"],
+[data-theme="light"] [style*="var(--t-muted"] {
+  color: #111827 !important;
 }
 [data-theme="light"] .per-core-usage-tile {
   background: #f8fafc !important;
@@ -1185,6 +1186,153 @@ html[data-locale="hi"] .font-mono {
   border: 1px solid var(--t-border-light, rgba(0, 0, 0, 0.1)) !important;
 }
 
+/* Improve status contrast in the light SNMP Devices table. */
+[data-theme="light"] .snmp-devices-page .status-badge {
+  color: #047857 !important;
+  border-color: rgba(4, 120, 87, .35) !important;
+  background: rgba(4, 120, 87, .08) !important;
+}
+
+[data-theme="light"] .snmp-devices-page .snmp-inventory-table tbody .font-mono[style*="rgb(0, 255, 136)"],
+[data-theme="light"] .snmp-devices-page .snmp-inventory-table tbody .font-mono[style*="#00ff88"] {
+  color: #047857 !important;
+}
+
+/* Improve interfaces monitoring table readability in light theme. */
+[data-theme="light"] .snmp-interface-table th {
+  color: #334155 !important;
+  font-size: 0.82rem !important;
+}
+[data-theme="light"] .snmp-interface-table td {
+  color: #334155 !important;
+  font-size: 0.8rem !important;
+}
+
+/* Improve metrics table readability in light theme. */
+[data-theme="light"] .snmp-interfaces-table th {
+  color: #334155 !important;
+  font-size: 0.82rem !important;
+}
+[data-theme="light"] .snmp-interfaces-table td {
+  color: #334155 !important;
+  font-size: 0.78rem !important;
+}
+
+/* Make interface table values clearly readable. */
+.snmp-interface-table thead th,
+.snmp-interface-table tbody td,
+.snmp-interfaces-table tbody td {
+  color: #111827 !important;
+  font-size: 0.9rem !important;
+  font-weight: 700 !important;
+}
+
+/* Strong contrast for key interface values. */
+.snmp-interface-table tbody td:first-child,
+.snmp-interfaces-table tbody td:first-child {
+  color: #111827 !important;
+  font-weight: 600 !important;
+  font-size: 0.82rem !important;
+}
+
+/* Strong contrast for key interface metrics. */
+[data-theme="light"] .snmp-interface-table tbody td:nth-child(1),
+[data-theme="light"] .snmp-interface-table tbody td:nth-child(4),
+[data-theme="light"] .snmp-interface-table tbody td:nth-child(9),
+[data-theme="light"] .snmp-interfaces-table tbody td:nth-child(1),
+[data-theme="light"] .snmp-interfaces-table tbody td:nth-child(3),
+[data-theme="light"] .snmp-interfaces-table tbody td:nth-child(7) {
+  color: #111827 !important;
+  font-weight: 600 !important;
+  font-size: 0.82rem !important;
+}
+
+/* Improve SNMP module navigation icon contrast in light theme. */
+[data-theme="light"] .snmp-nav-card:not([aria-disabled="true"]) .snmp-nav-icon-svg {
+  stroke: #047857 !important;
+}
+
+/* Improve supported module icon contrast in light theme. */
+[data-theme="light"] .snmp-device-details .snmp-capability-tile[data-supported="true"] svg {
+  stroke: #047857 !important;
+}
+
+/* Improve the Healthy indicator contrast in light theme. */
+[data-theme="light"] .snmp-health-healthy div {
+  color: #047857 !important;
+  background-color: #047857 !important;
+}
+[data-theme="light"] .snmp-health-healthy span {
+  color: #047857 !important;
+}
+[data-theme="light"] .snmp-health-healthy div {
+  box-shadow: 0 0 8px rgba(4, 120, 87, .45) !important;
+}
+
+/* Make ARP table fields easier to read. */
+[data-theme="light"] .snmp-arp-table th {
+  font-size: 0.85rem !important;
+}
+[data-theme="light"] .snmp-arp-table td {
+  font-size: 0.8rem !important;
+}
+
+/* Normalize all positive green indicators across SNMP module pages in light theme. */
+[data-theme="light"] .snmp-module-page [style*="#00ff88"],
+[data-theme="light"] .snmp-device-details [style*="#00ff88"],
+[data-theme="light"] .snmp-module-page [style*="0,255,136"],
+[data-theme="light"] .snmp-device-details [style*="0,255,136"],
+[data-theme="light"] .snmp-module-page [style*="0, 255, 136"],
+[data-theme="light"] .snmp-device-details [style*="0, 255, 136"],
+[data-theme="light"] .snmp-module-page .text-\[\#00ff88\],
+[data-theme="light"] .snmp-device-details .text-\[\#00ff88\],
+[data-theme="light"] .snmp-module-page .text-\[\#00ff88aa\] {
+  color: #047857 !important;
+}
+
+/* Highlight the currently open SNMP module in light theme. */
+[data-theme="light"] .snmp-module-tabs .snmp-active-tab {
+  color: #065f46 !important;
+  background: #bbf7d0 !important;
+  border-color: #059669 !important;
+  font-weight: 700;
+}
+
+/* Improve supported SNMP module tab contrast in light theme. */
+[data-theme="light"] .snmp-module-tabs .snmp-supported-tab {
+  color: #047857 !important;
+  border-color: rgba(4, 120, 87, .35) !important;
+  background: rgba(4, 120, 87, .08) !important;
+}
+
+/* Improve status contrast on SNMP detail and module pages in light theme. */
+[data-theme="light"] .snmp-module-page .snmp-status-badge,
+[data-theme="light"] .snmp-module-shell .snmp-status-badge,
+[data-theme="light"] .snmp-device-details .snmp-status-badge {
+  color: #047857 !important;
+  border-color: rgba(4, 120, 87, .35) !important;
+  background: rgba(4, 120, 87, .08) !important;
+}
+
+[data-theme="light"] .snmp-module-page button[style*="0,255,136"],
+[data-theme="light"] .snmp-module-shell button[style*="0,255,136"] {
+  color: #047857 !important;
+  border-color: rgba(4, 120, 87, .35) !important;
+  background: rgba(4, 120, 87, .08) !important;
+}
+
+[data-theme="light"] .snmp-device-details .status-badge,
+[data-theme="light"] .snmp-module-shell .status-badge {
+  color: #047857 !important;
+  border-color: rgba(4, 120, 87, .35) !important;
+  background: rgba(4, 120, 87, .08) !important;
+}
+
+[data-theme="light"] .snmp-module-shell [style*="#00ff88"],
+[data-theme="light"] .snmp-device-details [style*="#00ff88"] {
+  color: #047857 !important;
+}
+
 /* Final light-mode surface contract: page shells and reusable panels must
    follow the selected off-white palette, including pages with legacy styles. */
 [data-theme="light"] body,
@@ -1281,7 +1429,7 @@ html[data-locale="hi"] .font-mono {
   color: #6d28d9 !important;
 }
 [data-theme="light"] .topology-detail-key {
-  color: #475569 !important;
+  color: #111827 !important;
   font-size: .78rem;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -1295,7 +1443,7 @@ html[data-locale="hi"] .font-mono {
   color: #334155 !important;
 }
 [data-theme="light"] .topology-details-panel [style*="#64748b"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .topology-details-panel input {
   background: #ffffff !important;
@@ -1325,7 +1473,7 @@ html[data-locale="hi"] .font-mono {
 }
 [data-theme="light"] .device-port-map-page [class*="text-[#7f8b88]"],
 [data-theme="light"] .device-port-map-page [class*="text-[#9aa3a0]"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .device-port-map-page .device-front-panel {
   background: linear-gradient(145deg, #ffffff 0%, #f1f5f9 48%, #e2e8f0 100%) !important;
@@ -1361,7 +1509,7 @@ html[data-locale="hi"] .font-mono {
   box-shadow: 0 1px 2px rgba(15, 23, 42, .06);
 }
 [data-theme="light"] .device-port-map-page .device-port-stat [class*="text-[#7f8b88]"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .device-port-map-page .device-port-table-head {
   background: #e2e8f0 !important;
@@ -1391,7 +1539,7 @@ html[data-locale="hi"] .font-mono {
 }
 [data-theme="light"] .manual-topology-page foreignObject > div [class*="text-[#7f8b88]"],
 [data-theme="light"] .manual-topology-page foreignObject > div [class*="text-[#8b9693]"] {
-  color: #475569 !important;
+  color: #111827 !important;
 }
 [data-theme="light"] .manual-topology-page foreignObject > div [class*="text-[#b3f2cd]"] {
   color: #047857 !important;
@@ -1641,4 +1789,37 @@ html[data-locale="hi"] .font-mono {
 .snmp-device-edit-dialog label { color: var(--t-text-secondary) !important; }
 [data-theme="light"] .snmp-device-edit-dialog {
   box-shadow: 0 18px 50px rgba(30, 64, 110, .18);
+}
+/* Final light-theme readability override for all SNMP device detail pages. */
+[data-theme="light"] .snmp-device-details [style*="#8899bb"],
+[data-theme="light"] .snmp-device-details [style*="#667799"],
+[data-theme="light"] .snmp-device-details [style*="#c8d8ee"],
+[data-theme="light"] .snmp-module-shell [style*="#8899bb"],
+[data-theme="light"] .snmp-module-shell [style*="#667799"],
+[data-theme="light"] .snmp-module-shell [style*="#c8d8ee"] {
+  color: #000000 !important;
+}
+/* Force all muted SNMP values to black in light theme, including inline table values. */
+[data-theme="light"] .snmp-device-details table th,
+[data-theme="light"] .snmp-device-details table td,
+[data-theme="light"] .snmp-module-shell table th,
+[data-theme="light"] .snmp-module-shell table td,
+[data-theme="light"] .snmp-module-page table th,
+[data-theme="light"] .snmp-module-page table td,
+[data-theme="light"] .snmp-device-details [style*="#8899bb"],
+[data-theme="light"] .snmp-device-details [style*="#667799"],
+[data-theme="light"] .snmp-device-details [style*="#c8d8ee"],
+[data-theme="light"] .snmp-module-shell [style*="#8899bb"],
+[data-theme="light"] .snmp-module-shell [style*="#667799"],
+[data-theme="light"] .snmp-module-shell [style*="#c8d8ee"],
+[data-theme="light"] .snmp-module-page [style*="#8899bb"],
+[data-theme="light"] .snmp-module-page [style*="#667799"],
+[data-theme="light"] .snmp-module-page [style*="#c8d8ee"] {
+  color: #000000 !important;
+}
+/* Keep dark table headers readable while body values stay black in light theme. */
+[data-theme="light"] .snmp-device-details table thead th,
+[data-theme="light"] .snmp-module-shell table thead th,
+[data-theme="light"] .snmp-module-page table thead th {
+  color: #dbeafe !important;
 }

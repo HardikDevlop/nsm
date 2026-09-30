@@ -36,7 +36,8 @@ export default function SNMPGenericModulePage() {
   const isMacTable = moduleName === 'mac_table'
   const { data: monitoringData, isLoading: isMonitoringLoading, error: monitoringError } = useMonitoringData(id, !isMacTable)
   const { data: macTableData, isLoading: isMacTableLoading, isFetching: isMacTableFetching, error: macTableError, refetch: refetchMacTable } = useModuleData(id, isMacTable ? 'mac_table' : null)
-  const { data: arpTableData, isFetching: isArpTableFetching, refetch: refetchArpTable } = useModuleData(id, isMacTable ? 'arp' : null)
+  const isArp = moduleName === 'arp'
+  const { data: arpTableData, isFetching: isArpTableFetching, refetch: refetchArpTable } = useModuleData(id, (isMacTable || isArp) ? 'arp' : null)
   const dbModule = monitoringData?.modules?.[moduleName]
   const arpEntries = moduleName === 'mac_table'
     ? ((arpTableData?.data?.entries) || [])
@@ -44,6 +45,8 @@ export default function SNMPGenericModulePage() {
 
   const dbCollector = isMacTable
     ? macTableData
+    : isArp
+    ? arpTableData
     : dbModule
     ? {
         collector: moduleName,
@@ -61,8 +64,8 @@ export default function SNMPGenericModulePage() {
     collectors[0]
   const supported = collector?.supported === true
   const title = titleize(config?.label || moduleName)
-  const isLoading = isMacTable ? isMacTableLoading : isMonitoringLoading
-  const error = isMacTable ? macTableError : monitoringError
+  const isLoading = isMacTable ? isMacTableLoading : isArp ? isArpTableFetching && !arpTableData : isMonitoringLoading
+  const error = isMacTable ? macTableError : isArp ? null : monitoringError
 
   return (
     <SNMPModuleShell

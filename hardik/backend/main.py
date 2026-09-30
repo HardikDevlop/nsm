@@ -42,6 +42,8 @@ from backend.services.snmp_polling import get_polling_scheduler, shutdown_pollin
 from backend.snmp.client import shutdown_snmp_workers
 from backend.services.realtime_monitor import get_engine
 from backend.services.ha_scheduler import SchedulerLease
+from backend.services.report_email import register_daily_report_job
+from backend.services.report_schedule import set_report_scheduler, restore_report_schedules
 from backend.cmdb.service import reconcile_cmdb
 from backend.linux_monitoring.scheduler import LinuxMonitoringScheduler
 from logging_config import configure_logging
@@ -97,6 +99,9 @@ async def lifespan(app: FastAPI):
     app.state.scheduler_lease_owned = await asyncio.to_thread(app.state.scheduler_lease.acquire)
     scheduler = await get_polling_scheduler() if app.state.scheduler_lease_owned else None
     app.state.snmp_polling = scheduler
+    set_report_scheduler(scheduler)
+    restore_report_schedules()
+    register_daily_report_job(scheduler)
     lease_task = asyncio.create_task(_supervise_scheduler_lease(app))
     linux_scheduler = LinuxMonitoringScheduler()
     app.state.linux_monitoring_scheduler = linux_scheduler
@@ -132,6 +137,9 @@ async def _supervise_scheduler_lease(app: FastAPI):
             if acquired:
                 try:
                     app.state.snmp_polling = await get_polling_scheduler()
+                    set_report_scheduler(app.state.snmp_polling)
+                    restore_report_schedules()
+                    register_daily_report_job(app.state.snmp_polling)
                     app.state.scheduler_lease_owned = True
                     logger.info("SNMP scheduler lease reacquired; polling started")
                 except Exception:

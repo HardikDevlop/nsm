@@ -1802,7 +1802,44 @@ def get_snmp_arp(device_id: int, limit: int = Query(default=MAX_SNMP_TABLE_ROWS,
     stored_arp = ((stored_cap.capability_detail or {}).get("arp") or {}) if stored_cap else {}
     stored_data = stored_arp.get("data") or {}
     entries = stored_data.get("entries") or []
-    returned_entries = entries[:limit]
+    # ARP snapshots usually contain the bridge interface, while VLAN IDs are
+    # learned by the MAC-table collector. Join both snapshots by MAC + port
+    # so the ARP table can show the real VLAN for entries such as interface 4.
+    mac_snapshot = ((stored_cap.capability_detail or {}).get("mac_table") or {}) if stored_cap else {}
+    mac_entries = ((mac_snapshot.get("data") or {}).get("entries") or [])
+    vlan_by_mac_port: dict[tuple[str, str], list[int]] = {}
+    vlan_by_port: dict[str, list[int]] = {}
+    for group in ((mac_snapshot.get("data") or {}).get("port_groups") or []):
+        port = str(group.get("interface") or group.get("port") or group.get("if_index") or group.get("port_id") or "")
+        if port:
+            vlan_by_port[port] = sorted({int(v) for v in (group.get("vlans") or []) if str(v).isdigit()})
+    # ARP interface indexes can be bridge ports that have no MAC-table group.
+    # Use the authoritative VLAN collector's tagged/untagged/egress port lists.
+    vlan_snapshot = ((stored_cap.capability_detail or {}).get("vlan") or {}) if stored_cap else {}
+    for vlan in ((vlan_snapshot.get("data") or {}).get("vlans") or []):
+        vlan_id = vlan.get("vlan_id")
+        if vlan_id is None:
+            continue
+        for port in set((vlan.get("egress_ports") or []) + (vlan.get("untagged_ports") or []) + (vlan.get("tagged_ports") or [])):
+            vlan_by_port.setdefault(str(port), []).append(int(vlan_id))
+    for port in list(vlan_by_port):
+        vlan_by_port[port] = sorted(set(vlan_by_port[port]))
+    for mac_entry in mac_entries:
+        mac = _normalize_mac(mac_entry.get("mac") or mac_entry.get("mac_address"))
+        port = str(mac_entry.get("interface") or mac_entry.get("port") or mac_entry.get("if_index") or "")
+        vlan = mac_entry.get("vlan_id")
+        if mac and port and vlan is not None:
+            vlan_by_mac_port.setdefault((mac, port), []).append(int(vlan))
+    enriched_entries = []
+    for entry in entries:
+        row = dict(entry)
+        mac = _normalize_mac(row.get("mac") or row.get("mac_address"))
+        port = str(row.get("interface") or row.get("if_index") or row.get("port") or "")
+        vlans = vlan_by_mac_port.get((mac, port), []) or vlan_by_port.get(port, [])
+        if vlans and row.get("vlan_id") is None:
+            row["vlan_id"] = sorted(set(vlans))[0]
+        enriched_entries.append(row)
+    returned_entries = enriched_entries[:limit]
     return {
         "api_version":   "2.0",
         "ip":            device.ip_address,

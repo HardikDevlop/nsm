@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_use_tls: bool = True
     alert_email_recipients: str = ""
+    report_email_enabled: bool = True
+    report_email_recipients: str = ""
+    report_email_hour: int = 11
+    report_email_minute: int = 0
+    report_timezone: str = "Asia/Kolkata"
     snmp_request_timeout: float = 3.0
     snmp_retries: int = 1
     snmp_operation_timeout: float = 120.0

@@ -364,16 +364,16 @@ export default function SNMPMonitoring() {
                 key={nav.label}
                 onClick={() => { if (selectedId) navigate(nav.path(selectedId)) }}
                 disabled={disabled}
-                className="flex flex-col gap-2 p-3 rounded-lg text-left transition-all group"
+                className="snmp-nav-card flex flex-col gap-2 p-3 rounded-lg text-left transition-all group"
                 style={{
                   border: `1px solid ${disabled ? 'rgba(136,153,187,0.15)' : nav.color + '33'}`,
                   background: disabled ? 'rgba(255,255,255,0.02)' : `${nav.color}0d`,
                   cursor: disabled ? 'not-allowed' : 'pointer',
                   opacity: disabled ? 0.45 : 1,
                 }}>
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                <div className="snmp-nav-icon w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                   style={{ background: disabled ? 'rgba(255,255,255,0.05)' : `${nav.color}1a`, border: `1px solid ${disabled ? 'rgba(136,153,187,0.2)' : nav.color + '44'}` }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                  <svg className="snmp-nav-icon-svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                     stroke={disabled ? '#8899bb' : nav.color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <path d={nav.icon} />
                   </svg>

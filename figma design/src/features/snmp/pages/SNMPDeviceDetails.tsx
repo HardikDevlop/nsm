@@ -106,7 +106,7 @@ function CollectorDataCard({ name, collector }: { name: string; collector: any }
           )}
           {rows.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full" style={{ minWidth: 900 }}>
+              <table className="w-full snmp-interfaces-table" style={{ minWidth: 900 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                     {columns.map(col => (
@@ -999,7 +999,7 @@ function StatusBadge({ status, type = 'device' }: { status: string; type?: 'devi
 
   return (
     <span
-      className="font-mono text-[10px] px-2 py-0.5 rounded uppercase"
+      className="status-badge font-mono text-[10px] px-2 py-0.5 rounded uppercase"
       style={{
         background: colors.bg,
         color: colors.text,

@@ -28,7 +28,7 @@ export default function SNMPHealthIndicator({
   const sizes = sizeMap[size]
 
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={`snmp-health-indicator snmp-health-${health} flex items-center gap-2 ${className}`}>
       <div
         className={`${sizes.dot} rounded-full shrink-0`}
         style={{

@@ -14,6 +14,8 @@ import {
 const STATUS_COLORS: Record<string, { text: string; dot: string }> = {
   active:   { text: '#00ff88', dot: 'online'  },
   inactive: { text: '#ff3366', dot: 'offline' },
+  disabled: { text: '#f59e0b', dot: 'offline' },
+  suspended: { text: '#a855f7', dot: 'offline' },
 }
 
 function Avatar({ name }: { name: string }) {
@@ -196,7 +198,7 @@ export default function UserManagement() {
               <tr style={{ borderBottom: '1px solid var(--t-border-light)' }}>
                 {['User', 'Email', 'Role', 'Status', 'Actions'].map(h => (
                   <th key={h} className="px-4 py-3 font-mono text-xs uppercase tracking-wider"
-                    style={{ color: 'var(--t-muted)', background: 'rgba(8,18,40,0.6)' }}>
+                    style={{ color: 'var(--t-text)', background: 'var(--t-table-header)', borderBottom: '1px solid var(--t-border-alpha)' }}>
                     {h}
                   </th>
                 ))}
@@ -205,6 +207,7 @@ export default function UserManagement() {
             <tbody>
               {pagination.paginatedItems.map(user => {
                 const sc = STATUS_COLORS[user.status] ?? { text: 'var(--t-muted, #8899bb)', dot: 'unknown' }
+                const isProtectedAdmin = user.role_name?.toLowerCase() === 'admin'
                 return (
                   <tr key={user.id} className="transition-colors"
                     style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
@@ -233,7 +236,7 @@ export default function UserManagement() {
 
                     {/* Role — inline change */}
                     <td className="px-4 py-3">
-                      <PermissionGuard permission="users:update"
+                      {!isProtectedAdmin && <PermissionGuard permission="users:update"
                         fallback={
                           <span className="font-mono text-xs px-2 py-1 rounded"
                             style={{ background: 'var(--t-accent-alpha)', color: 'var(--t-accent)', border: '1px solid var(--t-accent-border)' }}>
@@ -254,7 +257,7 @@ export default function UserManagement() {
                           <option value="">No Role</option>
                           {roles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
                         </select>
-                      </PermissionGuard>
+                      </PermissionGuard>}
                     </td>
 
                     {/* Status — click to toggle */}
@@ -265,20 +268,24 @@ export default function UserManagement() {
                             <span className={`status-dot ${sc.dot}`} />{user.status}
                           </span>
                         }>
-                        <button onClick={() => void handleToggleStatus(user)}
-                          className="flex items-center gap-1.5 font-mono text-xs transition-opacity hover:opacity-70"
-                          style={{ color: sc.text }}
-                          title={`Click to set ${user.status === 'active' ? 'inactive' : 'active'}`}>
-                          <span className={`status-dot ${sc.dot}`} />
-                          {user.status === 'active' ? 'Active' : 'Inactive'}
-                        </button>
+                        <select
+                          value={user.status}
+                          disabled={isProtectedAdmin}
+                          onChange={e => void updateUser(user.id, { status: e.target.value }).then(load)}
+                          className="rounded-lg px-2 py-1 font-mono text-xs outline-none"
+                          style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: sc.text }}
+                          title={isProtectedAdmin ? 'Administrator status is protected' : 'Change user status'}>
+                          <option value="active">Active</option>
+                          <option value="disabled">Disabled</option>
+                          <option value="suspended">Suspended</option>
+                        </select>
                       </PermissionGuard>
                     </td>
 
                     {/* Actions */}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <PermissionGuard permission="users:update">
+                        {!isProtectedAdmin && <PermissionGuard permission="users:update">
                           <button onClick={() => openEdit(user)} title="Edit user"
                             className="p-1.5 rounded transition-colors"
                             style={{ color: 'var(--t-muted)' }}
@@ -289,8 +296,8 @@ export default function UserManagement() {
                               <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
                             </svg>
                           </button>
-                        </PermissionGuard>
-                        <PermissionGuard permission="users:delete">
+                        </PermissionGuard>}
+                        {!isProtectedAdmin && <PermissionGuard permission="users:delete">
                           <button onClick={() => void handleDelete(user)} title="Delete user"
                             className="p-1.5 rounded transition-colors"
                             style={{ color: 'var(--t-muted)' }}
@@ -300,7 +307,7 @@ export default function UserManagement() {
                               <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
                             </svg>
                           </button>
-                        </PermissionGuard>
+                        </PermissionGuard>}
                       </div>
                     </td>
                   </tr>
@@ -400,7 +407,7 @@ export default function UserManagement() {
                     onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                     onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}>
                     <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
+                    <option value="inactive">Inactive</option><option value="disabled">Disabled</option><option value="suspended">Suspended</option>
                   </select>
                 </FormField>
               </div>

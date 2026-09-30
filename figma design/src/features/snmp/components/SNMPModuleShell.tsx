@@ -64,7 +64,7 @@ export function SNMPModuleShell({
   const interval = config?.interval_seconds ?? 60
 
   return (
-    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+    <div className="snmp-module-shell p-4 md:p-6 space-y-4 md:space-y-5">
       <div className="flex items-center gap-2 font-mono text-xs" style={{ color: '#667799' }}>
         <button type="button" onClick={() => navigate('/snmp/devices')} className="hover:text-cyan-400">SNMP DEVICES</button>
         <span>/</span>

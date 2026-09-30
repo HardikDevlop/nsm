@@ -202,7 +202,7 @@ export function SNMPModuleShell({
               : 'rgba(0,212,255,0.1)';
           return (
             <button key={key} type="button" onClick={() => navigate(`/snmp/devices/${id}${route}`)}
-              className="font-mono text-[11px] sm:text-xs px-2.5 py-2 rounded"
+              className={`snmp-module-tab ${active ? "snmp-active-tab" : ok ? "snmp-supported-tab" : ""} font-mono text-[11px] sm:text-xs px-2.5 py-2 rounded`}
               style={{
                 background: bg,
                 color: fg,

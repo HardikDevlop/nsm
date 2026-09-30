@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from backend.models import AvailabilityOutage, AvailabilityReport, ChangeRequest, ConfigurationItem, CIRelationship, Device, DeviceMetric, DeviceStatusHistory
 
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
-ONLINE, OFFLINE = {"online", "up"}, {"offline", "down"}
+ONLINE, OFFLINE = {"online", "up"}, {"offline", "down", "unreachable"}
 EVIDENCE_GAP_SECONDS = max(1, int(os.getenv("AVAILABILITY_EVIDENCE_GAP_SECONDS", "45")))
 
 def normalize_time(value: datetime) -> datetime:

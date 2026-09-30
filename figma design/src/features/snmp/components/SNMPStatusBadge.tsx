@@ -36,7 +36,7 @@ export default function SNMPStatusBadge({ status, label, size = 'sm' }: SNMPStat
 
   return (
     <span
-      className={`font-mono ${sizeClasses[size]} rounded uppercase font-semibold inline-block`}
+      className={`snmp-status-badge font-mono ${sizeClasses[size]} rounded uppercase font-semibold inline-block`}
       style={{
         color: config.color,
         background: config.bg,

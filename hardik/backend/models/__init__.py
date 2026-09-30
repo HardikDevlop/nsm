@@ -309,6 +309,40 @@ class Report(Base):
     generated_user: Mapped[User | None] = relationship(back_populates="reports")
 
 
+class ReportSchedule(Base):
+    __tablename__ = "report_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    frequency: Mapped[str] = mapped_column(String(20))
+    run_time: Mapped[str] = mapped_column(String(5))
+    timezone: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    report_format: Mapped[str] = mapped_column(String(20), default="csv")
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class GeneratedReport(Base):
+    __tablename__ = "generated_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    schedule_id: Mapped[int | None] = mapped_column(ForeignKey("report_schedules.id", ondelete="SET NULL"), nullable=True, index=True)
+    report_name: Mapped[str] = mapped_column(String(160))
+    format: Mapped[str] = mapped_column(String(20), default="csv")
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime)
+    period_end: Mapped[datetime] = mapped_column(DateTime)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 

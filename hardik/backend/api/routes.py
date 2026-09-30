@@ -1,16 +1,19 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import csv
 import io
+from pathlib import Path
 import logging
 import os
 import signal
 import subprocess
 import time
 from threading import Lock
+from types import SimpleNamespace
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import case, func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -35,6 +38,8 @@ from backend.models import (
     Organization,
     Permission,
     Report,
+    ReportSchedule,
+    GeneratedReport,
     Role,
     Site,
     Threshold,
@@ -62,11 +67,15 @@ from backend.schemas.nms import (
     DeviceRead,
     DeviceStatusHistoryRead,
     ReportManagementFilters,
+    ReportScheduleCreate, ReportScheduleRead, ReportScheduleUpdate, GeneratedReportRead,
     ReportManagementOptionsItem,
     ReportManagementRecord,
     ReportManagementSection,
     ReportManagementSummary,
     ReportManagementDeviceOption,
+    ReportInterfaceDetail,
+    ReportAlertDetail,
+    ReportManagementTrends, ReportTrendAvailabilityPoint, ReportTrendPerformancePoint, ReportTrendBandwidthPoint, ReportTrendAlertPoint, ReportInventory,
     DeviceTypeCreate,
     DeviceTypeRead,
     DeviceTypeUpdate,
@@ -117,6 +126,8 @@ from backend.schemas.nms import (
 from backend.services.discovery import discover_network
 from backend.services.monitoring import run_monitoring_check
 from backend.services.device_health import derive_device_health
+from backend.services.availability import build_intervals
+
 from backend.services.alerting import _notify, create_device_added_alert, create_operational_alert
 from backend.incidents.service import create_incident_from_alert, process_alert_recovery
 from backend.utils.crypto import encrypt_secret
@@ -229,210 +240,26 @@ notification_crud = CRUDRouterMixin(Notification)
 report_crud = CRUDRouterMixin(Report)
 audit_crud = CRUDRouterMixin(AuditLog)
 
-_REPORT_LOOKBACK = {
-    "weekly": timedelta(days=7),
-    "monthly": timedelta(days=30),
-    "yearly": timedelta(days=365),
-}
+from backend.services.report_management import build_report_rows as _build_report_rows
+from backend.services.report_schedule import sync_report_schedule, remove_report_schedule, set_report_scheduler, restore_report_schedules
+from backend.services.report_csv import generate_report_csv
+from backend.services.report_schedule import REPORT_STORAGE_DIR
 
-
-def _report_range(period: str, start_date: datetime | None, end_date: datetime | None) -> tuple[datetime, datetime]:
-    now = datetime.utcnow()
-    if period == "custom":
-        if not start_date or not end_date:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date and end_date are required for custom range")
-        if start_date > end_date:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be before or equal to end_date")
-        return start_date, end_date
-    delta = _REPORT_LOOKBACK.get(period)
-    if not delta:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid period")
-    return now - delta, now
-
-
-def _percent(part: int, total: int) -> float:
-    return round((part / total) * 100, 2) if total else 0.0
-
-
-def _build_report_rows(db: Session, filters: ReportManagementFilters) -> tuple[ReportManagementSummary, list[dict[str, object]]]:
-    from backend.models import DeviceStatusHistory as _DSH
-    from backend.models.snmp import InterfaceStatistic as _IFS, LatestCPU, LatestMemory, PollingHistory
-
-    period_start, period_end = _report_range(filters.period, filters.start_date, filters.end_date)
-
-    query = (
-        db.query(Device)
-        .options(joinedload(Device.site), joinedload(Device.device_type))
-        .filter(Device.deleted_at.is_(None))
-    )
-    if filters.device_type_id is not None:
-        query = query.filter(Device.device_type_id == filters.device_type_id)
-    if filters.device_id is not None:
-        query = query.filter(Device.id == filters.device_id)
-    if filters.site_id is not None:
-        query = query.filter(Device.site_id == filters.site_id)
-
-    devices = query.order_by(Device.hostname.asc()).all()
-    device_ids = [device.id for device in devices]
-
-    history = (
-        db.query(_DSH)
-        .filter(_DSH.timestamp >= period_start, _DSH.timestamp <= period_end, _DSH.device_id.in_(device_ids or [0]))
-        .order_by(_DSH.timestamp.asc())
-        .all()
-    )
-    polling = (
-        db.query(PollingHistory)
-        .filter(PollingHistory.device_id.in_(device_ids or [0]), PollingHistory.created_at >= period_start, PollingHistory.created_at <= period_end)
-        .all()
-    )
-    cpu_rows = (
-        db.query(LatestCPU)
-        .filter(LatestCPU.device_id.in_(device_ids or [0]), LatestCPU.polled_at >= period_start, LatestCPU.polled_at <= period_end)
-        .all()
-    )
-    mem_rows = (
-        db.query(LatestMemory)
-        .filter(LatestMemory.device_id.in_(device_ids or [0]), LatestMemory.polled_at >= period_start, LatestMemory.polled_at <= period_end)
-        .all()
-    )
-    iface_rows = (
-        db.query(_IFS)
-        .filter(_IFS.device_id.in_(device_ids or [0]), _IFS.created_at >= period_start, _IFS.created_at <= period_end)
-        .all()
-    )
-    # InterfaceStatistic contains counters/utilization only.  Port state is
-    # persisted on the real Interface record, so use that table for status.
-    interface_states = (
-        db.query(Interface)
-        .filter(Interface.device_id.in_(device_ids or [0]))
-        .all()
-    )
-
-    history_by_device: dict[int, list] = {}
-    for row in history:
-        history_by_device.setdefault(row.device_id, []).append(row)
-    polling_by_device: dict[int, list] = {}
-    for row in polling:
-        polling_by_device.setdefault(row.device_id, []).append(row)
-    cpu_by_device: dict[int, list] = {}
-    for row in cpu_rows:
-        cpu_by_device.setdefault(row.device_id, []).append(row)
-    mem_by_device: dict[int, list] = {}
-    for row in mem_rows:
-        mem_by_device.setdefault(row.device_id, []).append(row)
-    iface_by_device: dict[int, list] = {}
-    for row in iface_rows:
-        iface_by_device.setdefault(row.device_id, []).append(row)
-    interface_state_by_device: dict[int, list] = {}
-    for row in interface_states:
-        interface_state_by_device.setdefault(row.device_id, []).append(row)
-
-    records: list[ReportManagementRecord] = []
-    protocol_filter = filters.protocol
-    for device in devices:
-        device_hist = history_by_device.get(device.id, [])
-        if protocol_filter == "icmp" and not device_hist:
-            continue
-        if protocol_filter == "snmp" and not (polling_by_device.get(device.id) or cpu_by_device.get(device.id) or mem_by_device.get(device.id) or iface_by_device.get(device.id)):
-            continue
-        uptime = sum(1 for item in device_hist if item.new_status == "online")
-        downtime = sum(1 for item in device_hist if item.new_status == "offline")
-        total_transitions = len(device_hist)
-        availability_pct = _percent(uptime, total_transitions) if total_transitions else _percent(1 if device.status == "online" else 0, 1)
-        snmp_ok = sum(1 for item in polling_by_device.get(device.id, []) if item.status == "success")
-        snmp_total = len(polling_by_device.get(device.id, []))
-        icmp_ok = uptime
-        icmp_total = total_transitions or (1 if device.status else 0)
-        cpu_vals = [row.utilization_percent for row in cpu_by_device.get(device.id, []) if row.utilization_percent is not None]
-        mem_vals = [row.utilization_percent for row in mem_by_device.get(device.id, []) if row.utilization_percent is not None]
-        iface_vals = [row.utilization_percent for row in iface_by_device.get(device.id, []) if row.utilization_percent is not None]
-        state_rows = interface_state_by_device.get(device.id, [])
-        iface_down = sum(1 for row in state_rows if (row.status or "").lower() == "down")
-        avg_cpu = round(sum(cpu_vals) / len(cpu_vals), 2) if cpu_vals else None
-        avg_mem = round(sum(mem_vals) / len(mem_vals), 2) if mem_vals else None
-        avg_iface = round(sum(iface_vals) / len(iface_vals), 2) if iface_vals else None
-        snmp_success_rate = _percent(snmp_ok, snmp_total) if snmp_total else None
-        icmp_success_rate = _percent(icmp_ok, icmp_total) if icmp_total else None
-        performance_score = None
-        score_parts = [v for v in [avg_cpu, avg_mem, avg_iface] if v is not None]
-        if score_parts:
-            performance_score = round(sum(score_parts) / len(score_parts), 2)
-        health_points = 100.0
-        if snmp_success_rate is not None:
-            health_points -= max(0.0, 100.0 - snmp_success_rate) * 0.5
-        if icmp_success_rate is not None:
-            health_points -= max(0.0, 100.0 - icmp_success_rate) * 0.3
-        if iface_down:
-            health_points -= min(30.0, iface_down * 5.0)
-        snmp_health = "healthy" if health_points >= 85 else "degraded" if health_points >= 60 else "critical"
-        sla_status = "met" if availability_pct >= 99.0 and snmp_health != "critical" else "breached"
-        protocol = "snmp" if protocol_filter == "snmp" else "icmp" if protocol_filter == "icmp" else "mixed"
-        records.append(ReportManagementRecord(
-            device_id=device.id,
-            hostname=device.hostname,
-            ip_address=device.ip_address,
-            site_name=device.site.name if device.site else None,
-            device_type_name=device.device_type.name if device.device_type else None,
-            protocol=protocol,
-            availability_pct=availability_pct,
-            downtime_seconds=device.downtime_seconds,
-            snmp_success_rate=snmp_success_rate,
-            icmp_success_rate=icmp_success_rate,
-            snmp_health=snmp_health,
-            performance_score=performance_score,
-            interface_count=(len({row.interface_id for row in iface_by_device.get(device.id, [])}) or len(state_rows) or None),
-            interface_down_count=iface_down or None,
-            avg_cpu_percent=avg_cpu,
-            avg_memory_percent=avg_mem,
-            avg_latency_ms=None,
-            packet_loss_pct=None,
-            sla_status=sla_status,
-            period_start=period_start,
-            period_end=period_end,
-        ))
-
-    availability_pct = round(sum(r.availability_pct for r in records) / len(records), 2) if records else 0.0
-    downtime_seconds = sum(r.downtime_seconds for r in records)
-    snmp_devices = sum(1 for r in records if r.snmp_success_rate is not None)
-    icmp_devices = sum(1 for r in records if r.icmp_success_rate is not None)
-    avg_snmp_health = round(sum(100 if r.snmp_health == "healthy" else 70 if r.snmp_health == "degraded" else 40 for r in records) / len(records), 2) if records else None
-    avg_performance_score = round(sum(r.performance_score for r in records if r.performance_score is not None) / max(1, len([r for r in records if r.performance_score is not None])), 2) if any(r.performance_score is not None for r in records) else None
-    sla_met_pct = _percent(sum(1 for r in records if r.sla_status == "met"), len(records))
-    summary = ReportManagementSummary(
-        filters=filters,
-        period_start=period_start,
-        period_end=period_end,
-        total_devices=len(devices),
-        total_records=len(records),
-        availability_pct=availability_pct,
-        downtime_seconds=downtime_seconds,
-        avg_snmp_health=avg_snmp_health,
-        avg_performance_score=avg_performance_score,
-        sla_met_pct=sla_met_pct,
-        snmp_devices=snmp_devices,
-        icmp_devices=icmp_devices,
-        sections={
-            "availability": ReportManagementSection(title="Availability", count=len(records), average=availability_pct, maximum=max((r.availability_pct for r in records), default=None), minimum=min((r.availability_pct for r in records), default=None)),
-            "downtime": ReportManagementSection(title="Downtime", count=len(records), average=round(downtime_seconds / len(records), 2) if records else None, maximum=max((r.downtime_seconds for r in records), default=None), minimum=min((r.downtime_seconds for r in records), default=None)),
-            "snmp_health": ReportManagementSection(title="SNMP Health", count=snmp_devices, average=avg_snmp_health),
-            "interface": ReportManagementSection(title="Interface/Port", count=sum(r.interface_count or 0 for r in records)),
-            "performance": ReportManagementSection(title="Performance", count=sum(1 for r in records if r.performance_score is not None), average=avg_performance_score),
-            "sla": ReportManagementSection(title="SLA Summary", count=len(records), average=sla_met_pct),
-        },
-        records=records,
-    )
-    export_rows = [r.model_dump() for r in records]
-    return summary, export_rows
-
+def _run_report_management(db: Session, filters: ReportManagementFilters):
+    try:
+        return _build_report_rows(db, filters)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 @router.get("/reports/management")
 def get_report_management(
     device_type_id: int | None = None,
     device_id: int | None = None,
     site_id: int | None = None,
+    device_status: Literal["all", "up", "down", "unreachable"] = "all",
+    alert_severity: Literal["all", "critical", "high", "medium", "low", "warning", "info"] = "all",
     protocol: Literal["all", "snmp", "icmp"] = "all",
-    period: Literal["weekly", "monthly", "yearly", "custom"] = "weekly",
+    period: Literal["today", "yesterday", "weekly", "monthly", "yearly", "custom"] = "today",
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     db: Session = Depends(get_db),
@@ -441,12 +268,81 @@ def get_report_management(
     filters = ReportManagementFilters(
         device_type_id=device_type_id,
         device_id=device_id,
-        site_id=site_id,
+        site_id=site_id, device_status=device_status, alert_severity=alert_severity,
         protocol=protocol, period=period,
         start_date=start_date, end_date=end_date,
     )
-    summary, _ = _build_report_rows(db, filters)
+    summary, _ = _run_report_management(db, filters)
     return summary
+
+
+def _schedule_filter_values(values: dict) -> dict:
+    # Validate only report filters; recurring windows are calculated at runtime.
+    validated = ReportManagementFilters(**values)
+    validated.period = "custom"
+    validated.start_date = None
+    validated.end_date = None
+    return validated.model_dump()
+
+
+@router.get("/reports/schedules", response_model=list[ReportScheduleRead])
+def list_report_schedules(db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+    return db.query(ReportSchedule).order_by(ReportSchedule.id.asc()).all()
+
+
+@router.post("/reports/schedules", response_model=ReportScheduleRead, status_code=status.HTTP_201_CREATED)
+def create_report_schedule(payload: ReportScheduleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:read"))):
+    item = ReportSchedule(**payload.model_dump(exclude={"filters"}), filters=_schedule_filter_values(payload.filters), created_by=current_user.id)
+    db.add(item); db.commit(); db.refresh(item)
+    sync_report_schedule(item); db.commit(); db.refresh(item)
+    return item
+
+
+@router.put("/reports/schedules/{item_id}", response_model=ReportScheduleRead)
+def update_report_schedule(item_id: int, payload: ReportScheduleUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+    item = db.query(ReportSchedule).filter(ReportSchedule.id == item_id).first()
+    if item is None: raise HTTPException(status_code=404, detail="Report schedule not found")
+    values = payload.model_dump(exclude_unset=True)
+    if "filters" in values: values["filters"] = _schedule_filter_values(values["filters"])
+    for key, value in values.items(): setattr(item, key, value)
+    db.commit(); db.refresh(item); sync_report_schedule(item); db.commit(); db.refresh(item)
+    return item
+
+
+@router.delete("/reports/schedules/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_report_schedule(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+    item = db.query(ReportSchedule).filter(ReportSchedule.id == item_id).first()
+    if item is None: raise HTTPException(status_code=404, detail="Report schedule not found")
+    remove_report_schedule(item.id); db.delete(item); db.commit()
+
+
+@router.get("/reports/generated", response_model=list[GeneratedReportRead])
+def list_generated_reports(schedule_id: int | None = None, report_status: str | None = None, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+    query = db.query(GeneratedReport)
+    if schedule_id is not None: query = query.filter(GeneratedReport.schedule_id == schedule_id)
+    if report_status is not None: query = query.filter(GeneratedReport.status == report_status)
+    return query.order_by(GeneratedReport.generated_at.desc(), GeneratedReport.id.desc()).limit(100).all()
+
+
+@router.get("/reports/generated/{item_id}/download")
+def download_generated_report(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+    item = db.query(GeneratedReport).filter(GeneratedReport.id == item_id).first()
+    if item is None: raise HTTPException(status_code=404, detail="Generated report not found")
+    if item.status != "SUCCESS" or not item.file_path: raise HTTPException(status_code=404, detail="Generated report is not available")
+    base = REPORT_STORAGE_DIR.resolve()
+    path = Path(item.file_path).resolve()
+    if base not in path.parents: raise HTTPException(status_code=404, detail="Generated report file is invalid")
+    if not path.is_file(): raise HTTPException(status_code=404, detail="Generated report file not found")
+    return FileResponse(path, media_type="text/csv", filename=path.name)
+
+
+@router.get("/reports/management/email-schedule")
+def get_report_management_email_schedule(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("reports:read")),
+):
+    from backend.services.report_email import report_email_status
+    return report_email_status(db)
 
 
 @router.get("/reports/management/options")
@@ -473,8 +369,10 @@ def export_report_management(
     device_type_id: int | None = None,
     device_id: int | None = None,
     site_id: int | None = None,
+    device_status: Literal["all", "up", "down", "unreachable"] = "all",
+    alert_severity: Literal["all", "critical", "high", "medium", "low", "warning", "info"] = "all",
     protocol: Literal["all", "snmp", "icmp"] = "all",
-    period: Literal["weekly", "monthly", "yearly", "custom"] = "weekly",
+    period: Literal["today", "yesterday", "weekly", "monthly", "yearly", "custom"] = "today",
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     db: Session = Depends(get_db),
@@ -483,20 +381,15 @@ def export_report_management(
     filters = ReportManagementFilters(
         device_type_id=device_type_id,
         device_id=device_id,
-        site_id=site_id,
+        site_id=site_id, device_status=device_status, alert_severity=alert_severity,
         protocol=protocol, period=period,
         start_date=start_date, end_date=end_date,
     )
-    summary, rows = _build_report_rows(db, filters)
+    summary, rows = _run_report_management(db, filters)
     if format == "csv":
-        rows = [dict(row, downtime_seconds=_format_duration(row.get("downtime_seconds"))) for row in rows]
-        buffer = io.StringIO()
-        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()) if rows else ["device_id", "hostname"])
-        writer.writeheader()
-        writer.writerows(rows)
-        buffer.seek(0)
+        content = generate_report_csv(rows)
         filename = f"report-management-{summary.period_start.date()}-{summary.period_end.date()}.csv"
-        return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        return StreamingResponse(iter([content]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export format on backend")
 
 
@@ -649,6 +542,9 @@ def assign_user_role(item_id: int, payload: AssignRoleRequest, db: Session = Dep
 
 @router.patch("/users/{item_id}", response_model=UserRead)
 def update_user(item_id: int, payload: UserUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
+    target = user_crud.get(db, item_id)
+    if target.role and target.role.role_name.lower() == "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator account is protected")
     data = payload.model_dump(exclude_unset=True)
     if "password" in data:
         data["password_hash"] = hash_password(data.pop("password"))
@@ -659,6 +555,9 @@ def update_user(item_id: int, payload: UserUpdate, db: Session = Depends(get_db)
 
 @router.delete("/users/{item_id}")
 def delete_user(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:delete"))):
+    target = user_crud.get(db, item_id)
+    if target.role and target.role.role_name.lower() == "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator account is protected")
     if item_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete your own account")
     result = user_crud.delete(db, item_id)

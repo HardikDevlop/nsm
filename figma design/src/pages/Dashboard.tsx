@@ -925,82 +925,11 @@ export default function Dashboard() {
           <Metric label={d.interfacesDown} number={n?.interface_summary.down ?? 0} hint={d.latestSnmpState} tone="red" />
           </div>
 
-          {/* ═══════════ ROW: 4 CLOCK GAUGES ═══════════ */}
-          <Panel title="System Vitals" subtitle="Real-time circular gauges · clock-style readouts" className="system-vitals-panel">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-5 py-2">
-              {[
-      { value: historicalAvailability, valueLabel: hasAvailabilityData ? undefined : "N/A", label: "Availability", tone: theme === 'light' ? '#e11d48' : C.green },
-                { value: pollSuccessPct, valueLabel: pollDisplay, label: "Poll Success", tone: theme === 'light' ? '#86198f' : C.cyan },
-                { value: displayCpu, valueLabel: hasCpuData ? undefined : "N/A", label: "Avg CPU", tone: theme === 'light' ? '#41b8b5' : C.amber },
-                { value: displayMem, valueLabel: hasMemoryData ? undefined : "N/A", label: "Avg Memory", tone: theme === 'light' ? '#f97316' : C.purple },
-              ].map((g) => (
-                <div
-                  key={g.label}
-                  className="flex flex-col items-center justify-center rounded-2xl px-4 py-6 w-full transition-all duration-300 hover:-translate-y-1"
-                  style={{
-                    background: `linear-gradient(160deg, ${g.tone}12, transparent 75%)`,
-                    border: `1px solid ${g.tone}30`,
-                  }}
-                >
-                  <ClockGauge value={g.value} valueLabel={g.valueLabel} label={g.label} tone={g.tone} showScale size={190} />
-                </div>
-              ))}
-            </div>
-          </Panel>
-
-          <Panel title="Worker & Job Health" subtitle="Background monitoring services" onClick={() => navigate("/monitoring-jobs")}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {[
-                { key: "snmp_polling", fallback: "SNMP Polling Worker" },
-                { key: "realtime_monitor", fallback: "Realtime Monitor" },
-              ].map(({ key, fallback }) => {
-                const service = data?.services?.[key as "snmp_polling" | "realtime_monitor"]
-                const running = Boolean(service?.running)
-                return (
-                  <div key={key} className="rounded-xl p-3" style={{ border: `1px solid ${running ? C.green : C.red}35`, background: `linear-gradient(145deg, ${running ? C.green : C.red}12, transparent 75%)` }}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-[10px] uppercase tracking-widest" style={{ color: C.muted }}>{service?.label || fallback}</span>
-                      <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: running ? C.green : C.red }}>
-                        <i className="status-dot" style={{ background: running ? C.green : C.red, boxShadow: `0 0 8px ${running ? C.green : C.red}` }} />
-                        {running ? "Running" : "Stopped"}
-                      </span>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[10px]" style={{ color: C.muted }}>
-                      <span>JOBS <b style={{ color: "var(--t-text)" }}>{service?.job_count ?? 0}</b></span>
-                      <span>DEVICES <b style={{ color: "var(--t-text)" }}>{service?.device_count ?? 0}</b></span>
-                    </div>
-                    <div className="mt-2 space-y-1 font-mono text-[9px]" style={{ color: C.muted }}>
-                      <div>LAST RUN <b style={{ color: "var(--t-text)" }}>{service?.last_job_finished_at ? clock(service.last_job_finished_at) : "N/A"}</b></div>
-                      <div>LAST FAILURE <b style={{ color: service?.last_job_failure_at ? C.red : "var(--t-text)" }}>{service?.last_job_failure_at ? clock(service.last_job_failure_at) : "None"}</b></div>
-                      <div>RECENT FAILURES <b style={{ color: service?.recent_failure_count ? C.red : "var(--t-text)" }}>{service?.recent_failure_count ?? 0}</b></div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </Panel>
-
-          <Panel title="Historical Correlation" subtitle={`${rangeLabel} · alerts, outages and performance evidence`}>
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { label: "ALERTS", value: n?.alerts_by_severity ? Object.values(n.alerts_by_severity).reduce((sum, count) => sum + Number(count || 0), 0) : 0, tone: C.red },
-                { label: "OUTAGE-CORRELATED", value: n?.correlation?.correlated_outage_alerts ?? 0, tone: C.orange },
-                { label: "PERF-CORRELATED", value: n?.correlation?.correlated_performance_alerts ?? 0, tone: C.cyan },
-              ].map((item) => (
-                <div key={item.label} className="rounded-xl p-3" style={{ border: `1px solid ${item.tone}35`, background: `linear-gradient(145deg, ${item.tone}12, transparent 75%)` }}>
-                  <div className="font-mono text-[9px] tracking-widest" style={{ color: C.muted }}>{item.label}</div>
-                  <div className="mt-2 font-display text-2xl" style={{ color: item.tone }}>{item.value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 font-mono text-[10px]" style={{ color: C.muted }}>
-              Exact same-device timestamp match within ±{n?.correlation?.window_minutes ?? 5} minutes of an alert.
-            </div>
-          </Panel>
+          
 
           {/* ═══════════ ROW: SPEEDOMETERS + SPARKLINES ═══════════ */}
           <SectionLabel label="Performance & Traffic" />
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-stretch">
             <Panel title="Live Traffic" subtitle="RX / TX current load">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
                 {[{ label: "Receive", short: "RX", value: currentRx, tone: C.green, spark: rxSpark }, { label: "Transmit", short: "TX", value: currentTx, tone: C.cyan, spark: txSpark }].map((item) => {
@@ -1320,6 +1249,79 @@ export default function Dashboard() {
               </div>
             </Panel>
           </div>
+
+          {/* ═══════════ ROW: 4 CLOCK GAUGES ═══════════ */}
+          <Panel title="System Vitals" subtitle="Real-time circular gauges · clock-style readouts" className="system-vitals-panel">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-5 py-2">
+              {[
+      { value: historicalAvailability, valueLabel: hasAvailabilityData ? undefined : "N/A", label: "Availability", tone: theme === 'light' ? '#e11d48' : C.green },
+                { value: pollSuccessPct, valueLabel: pollDisplay, label: "Poll Success", tone: theme === 'light' ? '#86198f' : C.cyan },
+                { value: displayCpu, valueLabel: hasCpuData ? undefined : "N/A", label: "Avg CPU", tone: theme === 'light' ? '#41b8b5' : C.amber },
+                { value: displayMem, valueLabel: hasMemoryData ? undefined : "N/A", label: "Avg Memory", tone: theme === 'light' ? '#f97316' : C.purple },
+              ].map((g) => (
+                <div
+                  key={g.label}
+                  className="flex flex-col items-center justify-center rounded-2xl px-4 py-6 w-full transition-all duration-300 hover:-translate-y-1"
+                  style={{
+                    background: `linear-gradient(160deg, ${g.tone}12, transparent 75%)`,
+                    border: `1px solid ${g.tone}30`,
+                  }}
+                >
+                  <ClockGauge value={g.value} valueLabel={g.valueLabel} label={g.label} tone={g.tone} showScale size={190} />
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel title="Worker & Job Health" subtitle="Background monitoring services" onClick={() => navigate("/monitoring-jobs")}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {[
+                { key: "snmp_polling", fallback: "SNMP Polling Worker" },
+                { key: "realtime_monitor", fallback: "Realtime Monitor" },
+              ].map(({ key, fallback }) => {
+                const service = data?.services?.[key as "snmp_polling" | "realtime_monitor"]
+                const running = Boolean(service?.running)
+                return (
+                  <div key={key} className="rounded-xl p-3" style={{ border: `1px solid ${running ? C.green : C.red}35`, background: `linear-gradient(145deg, ${running ? C.green : C.red}12, transparent 75%)` }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] uppercase tracking-widest" style={{ color: C.muted }}>{service?.label || fallback}</span>
+                      <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: running ? C.green : C.red }}>
+                        <i className="status-dot" style={{ background: running ? C.green : C.red, boxShadow: `0 0 8px ${running ? C.green : C.red}` }} />
+                        {running ? "Running" : "Stopped"}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[10px]" style={{ color: C.muted }}>
+                      <span>JOBS <b style={{ color: "var(--t-text)" }}>{service?.job_count ?? 0}</b></span>
+                      <span>DEVICES <b style={{ color: "var(--t-text)" }}>{service?.device_count ?? 0}</b></span>
+                    </div>
+                    <div className="mt-2 space-y-1 font-mono text-[9px]" style={{ color: C.muted }}>
+                      <div>LAST RUN <b style={{ color: "var(--t-text)" }}>{service?.last_job_finished_at ? clock(service.last_job_finished_at) : "N/A"}</b></div>
+                      <div>LAST FAILURE <b style={{ color: service?.last_job_failure_at ? C.red : "var(--t-text)" }}>{service?.last_job_failure_at ? clock(service.last_job_failure_at) : "None"}</b></div>
+                      <div>RECENT FAILURES <b style={{ color: service?.recent_failure_count ? C.red : "var(--t-text)" }}>{service?.recent_failure_count ?? 0}</b></div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Panel>
+
+          <Panel title="Historical Correlation" subtitle={`${rangeLabel} · alerts, outages and performance evidence`}>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "ALERTS", value: n?.alerts_by_severity ? Object.values(n.alerts_by_severity).reduce((sum, count) => sum + Number(count || 0), 0) : 0, tone: C.red },
+                { label: "OUTAGE-CORRELATED", value: n?.correlation?.correlated_outage_alerts ?? 0, tone: C.orange },
+                { label: "PERF-CORRELATED", value: n?.correlation?.correlated_performance_alerts ?? 0, tone: C.cyan },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl p-3" style={{ border: `1px solid ${item.tone}35`, background: `linear-gradient(145deg, ${item.tone}12, transparent 75%)` }}>
+                  <div className="font-mono text-[9px] tracking-widest" style={{ color: C.muted }}>{item.label}</div>
+                  <div className="mt-2 font-display text-2xl" style={{ color: item.tone }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 font-mono text-[10px]" style={{ color: C.muted }}>
+              Exact same-device timestamp match within ±{n?.correlation?.window_minutes ?? 5} minutes of an alert.
+            </div>
+          </Panel>
 
           {/* ═══════════ ROW: Network Info + Recent Table ═══════════ */}
           <SectionLabel label="Topology & Recent Activity" />

@@ -246,7 +246,7 @@ function deviceAccent(kind: DeviceKind, index = 0) {
     CORE_SWITCH: "#36c2b4",
     SWITCH: "#61c98d",
     ROUTER: "#e39a55",
-    FIREWALL: "#d9646a",
+    FIREWALL: "#a98cf0",
     SERVER: "#9b8afb",
     NVR: "#d4a95c",
     CAMERA: "#e4c45b",
@@ -721,7 +721,7 @@ function workspaceChanged(left: Workspace, right: Workspace) {
 
 function statusColor(status?: string) {
   const value = status?.toUpperCase()
-  if (value === "VERIFIED") return "#61c98d"
+  if (value === "VERIFIED" || value === "MANUAL") return "#61c98d"
   if (value === "PORT_MISMATCH") return "#ff4d5e"
   if (value === "UNEXPECTED" || value === "DISCONNECTED") return "#d9646a"
   if (value === "DEVICE_OFFLINE") return "#78827e"
@@ -1695,81 +1695,14 @@ export default function ManualTopology() {
       fromPortSource: sourceInterface?.source ?? "manual_fallback",
       toPortSource: targetInterface?.source ?? "manual_fallback",
       label: `${source.port} - ${targetPort}`,
-      status: "VERIFYING",
+      status: "MANUAL",
     }
     const next = { ...workspace, links: [...workspace.links, createdLink] }
     setWorkspace(next)
     setSelectedLinkId(createdLink.id)
     resetConnection()
-    toast.success("Connection saved. Verifying physical connectivity...")
+    toast.success("Connection saved.")
     void save(next)
-      .then((saved) => {
-        const id = saved?.id ?? snapshotId
-        if (!id) return null
-        return reconcileManualTopology(id).then((result) => {
-          const response = result as typeof result & {
-            live?: {
-              links?: Array<Record<string, unknown>>
-              devices?: unknown[]
-              evidence_available?: boolean
-            }
-          }
-          const liveLinks = response.live?.links ?? []
-          const sourceDevice = workspace.devices.find(
-            (device) => device.id === source.deviceId,
-          )
-          const targetDevice = workspace.devices.find(
-            (device) => device.id === targetDeviceId,
-          )
-          const observation = comparePhysicalConnection(createdLink, workspace.devices, liveLinks)
-          const status = observation.status
-          if (status === "PORT_MISMATCH") {
-            setVerificationAlert({
-              title: "WRONG PHYSICAL CONNECTION",
-              message: "The selected ports do not match the live physical connection.",
-              expected: `${sourceDevice?.name || source.deviceId} / ${source.port} ↔ ${targetDevice?.name || targetDeviceId} / ${targetPort}`,
-              actual: `${observation.source_device} / ${observation.source_port} ↔ ${observation.target_device} / ${observation.target_port}`,
-            })
-          } else setVerificationAlert(null)
-          setWorkspace((current) => ({
-            ...current,
-            links: current.links.map((link) =>
-              link.id === createdLink.id ? { ...link, status } : link,
-            ),
-          }))
-          setChanges(result.changes ?? [])
-          setActualWorkspace(normalizeWorkspace({
-            devices: workspace.devices,
-            links: response.live?.links ?? [],
-          }))
-          if (status === "VERIFIED")
-            toast.success(
-              `Physical connectivity verified${
-                observation.evidence_source
-                  ? ` · Evidence: ${observation.evidence_source}`
-                  : ""
-              }`,
-            )
-          else if (status === "DEVICE_OFFLINE")
-            toast.error("Physical verification unavailable — device offline")
-          else if (status === "PORT_MISMATCH")
-            toast.error(
-              "Wrong physical connection: selected ports do not match live wiring",
-            )
-          else if (status === "DISCONNECTED")
-            toast.error("No matching physical connection found")
-          else toast.error("Physical connectivity could not be verified")
-        })
-      })
-      .catch(() => {
-        setWorkspace((current) => ({
-          ...current,
-          links: current.links.map((link) =>
-            link.id === createdLink.id ? { ...link, status: "UNKNOWN" } : link,
-          ),
-        }))
-        toast.error("Physical connectivity could not be verified")
-      })
   }
   const autoLayout = () => {
     const next = {
@@ -2507,7 +2440,7 @@ export default function ManualTopology() {
   const linkTone = (status?: string) =>
     ({
       VERIFIED: "#61c98d",
-      VERIFYING: "#9b8afb",
+      MANUAL: "#61c98d",
       PORT_MISMATCH: "#ff4d5e",
       DISCONNECTED: "#d9646a",
       UNEXPECTED: "#d9646a",
@@ -3002,7 +2935,7 @@ export default function ManualTopology() {
           </div>
         </div>
       )}
-      {changes.length > 0 && (
+      {false && changes.length > 0 && (
         <div className="mt-3 rounded-lg border border-[#d4a95c66] bg-[#241f14] px-3 py-2" role="status">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
             <span className="font-mono uppercase tracking-[.16em] text-[#d4a95c]">⚠ TOPOLOGY ALERT</span>
@@ -4149,13 +4082,6 @@ export default function ManualTopology() {
                       VIEW TARGET PORT
                     </button>
                     <button
-                      className="tool"
-                      onClick={() => void openSelectedLinkDifference()}
-                      disabled={differenceLoading}
-                    >
-                      {differenceLoading ? "CHECKING..." : "VIEW DIFFERENCE"}
-                    </button>
-                    <button
                       className="tool border-[#d9646a66] text-[#d9646a]"
                       onClick={removeSelected}
                     >
@@ -4631,7 +4557,7 @@ export default function ManualTopology() {
           </div>
         </div>
       </div>
-      {selectedChange && (
+      {false && selectedChange && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4"
           onClick={() => setSelectedChange(null)}
@@ -4857,7 +4783,7 @@ export default function ManualTopology() {
           {previewPath && <path d={previewPath} fill="none" stroke="#3b82f6" strokeWidth="2" strokeDasharray="5 5" opacity=".9" pointerEvents="none" />}
           {unexpectedLinks.map((link) => { const path = actualPath(link); return path ? <g key={`unexpected-${link.id}`} onClick={() => { setSelectedChange(changes[0] ?? null); setSelectedLinkId(link.id); setSelectedId(null) }}><path d={path} fill="none" stroke="#d9646a" strokeWidth="2" strokeDasharray="7 5" opacity=".9" /><circle cx={actualWorkspace.devices.find((d) => d.id === link.from)?.x} cy={actualWorkspace.devices.find((d) => d.id === link.from)?.y} r="3" fill="#d9646a" /></g> : null })}
           {canvasLinks.map((link) => { const path = linkPath(link); return path ? <g key={link.id} onClick={() => { setSelectedLinkId(link.id); setSelectedId(null); const change = changes.find((item) => item.status === "pending") ?? null; if (change) setSelectedChange(change) }}><path d={path} fill="none" stroke="transparent" strokeWidth="18" /><path d={path} fill="none" stroke={statusColor(link.status)} strokeWidth={selectedLinkId === link.id ? "2.4" : "1.5"} strokeDasharray={link.status === "UNEXPECTED" || link.status === "UNKNOWN" ? "6 5" : undefined} /><circle cx={canvasWorkspace.devices.find((d) => d.id === link.from)?.x} cy={canvasWorkspace.devices.find((d) => d.id === link.from)?.y} r="3" fill={statusColor(link.status)} />{selectedLinkId === link.id && (link.routingPoints ?? []).map((p, i) => <circle key={i} cx={p.x} cy={p.y} r="6" fill="#111517" stroke="#3b82f6" onPointerDown={(e) => { e.stopPropagation(); setRoutingDrag({ linkId: link.id, index: i }) }} />)}</g> : null })}
-          {canvasDevices.map((device) => <g key={device.id} transform={`translate(${device.x - 50},${device.y - 40})`} onPointerDown={(e) => { e.stopPropagation(); if (view === "actual") return; dragMoved.current = false; dragStartWorkspace.current = workspace; const p = point(e as unknown as ReactPointerEvent<SVGSVGElement>); if (p) setDrag({ id: device.id, ox: device.x - p.x, oy: device.y - p.y }); setSelectedId(device.id); setSelectedLinkId(null) }} onPointerMove={(e) => moveDevice(e, device.id)} onClick={() => { if (!dragMoved.current) setDetailsOpen(true) }} className="cursor-grab"><circle cx="50" cy="28" r="21" fill={`${device.tone}18`} stroke={selectedId === device.id ? "#e5e7e7" : `${device.tone}99`} strokeWidth={selectedId === device.id ? "2" : "1"} /><svg x="26" y="4" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke={device.status?.toLowerCase() === "offline" ? "#78827e" : device.tone} strokeWidth="2">{glyph(device.type)}</svg><text x="50" y="62" textAnchor="middle" fill="#e5e7e7" fontSize="10" fontWeight="600">{device.name.slice(0, 18)}</text><text x="50" y="74" textAnchor="middle" fill="#9aa3a0" fontSize="8" fontFamily="monospace">{(device.ipAddress || device.subtitle || "").slice(0, 20)}</text><circle cx="86" cy="61" r="3" fill={device.status?.toLowerCase() === "offline" ? "#d9646a" : "#61c98d"} />{(selectedId === device.id || connectMode) && <g transform="translate(-10,88)">{portsFor(device).slice(0, 8).map((port, i) => <g key={port} onPointerDown={(e) => e.stopPropagation()} onClick={() => selectPort(device.id, port)}><rect x={(i % 2) * 62} y={Math.floor(i / 2) * 18} width="58" height="15" rx="3" fill="#111517" stroke="#293532" /><circle cx={(i % 2) * 62 + 8} cy={Math.floor(i / 2) * 18 + 7} r="2" fill={device.portSources?.[port] === "manual_fallback" ? "#9aa3a0" : device.portStatuses?.[port]?.toLowerCase() === "down" ? "#d9646a" : "#61c98d"} /><text x={(i % 2) * 62 + 14} y={Math.floor(i / 2) * 18 + 10} fill="#9aa3a0" fontSize="7" fontFamily="monospace">{port.slice(0, 9)}{device.portSources?.[port] === "manual_fallback" ? " · MANUAL" : ""}</text></g>)}</g>}</g>)}
+          {canvasDevices.map((device) => <g key={device.id} transform={`translate(${device.x - 50},${device.y - 40})`} onPointerDown={(e) => { e.stopPropagation(); if (view === "actual") return; dragMoved.current = false; dragStartWorkspace.current = workspace; const p = point(e as unknown as ReactPointerEvent<SVGSVGElement>); if (p) setDrag({ id: device.id, ox: device.x - p.x, oy: device.y - p.y }); setSelectedId(device.id); setSelectedLinkId(null) }} onPointerMove={(e) => moveDevice(e, device.id)} onClick={() => { if (!dragMoved.current) setDetailsOpen(true) }} className="cursor-grab"><circle cx="50" cy="28" r="21" fill={`${renderedToneFor(device)}18`} stroke={selectedId === device.id ? "#e5e7e7" : `${renderedToneFor(device)}99`} strokeWidth={selectedId === device.id ? "2" : "1"} /><svg x="26" y="4" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke={renderedToneFor(device)} strokeWidth="2">{glyph(device.type)}</svg><text x="50" y="62" textAnchor="middle" fill="#e5e7e7" fontSize="10" fontWeight="600">{device.name.slice(0, 18)}</text><text x="50" y="74" textAnchor="middle" fill="#9aa3a0" fontSize="8" fontFamily="monospace">{(device.ipAddress || device.subtitle || "").slice(0, 20)}</text><circle cx="86" cy="61" r="3" fill={healthStatusFor(device) === "offline" ? "#d9646a" : "#61c98d"} />{(selectedId === device.id || connectMode) && <g transform="translate(-10,88)">{portsFor(device).slice(0, 8).map((port, i) => <g key={port} onPointerDown={(e) => e.stopPropagation()} onClick={() => selectPort(device.id, port)}><rect x={(i % 2) * 62} y={Math.floor(i / 2) * 18} width="58" height="15" rx="3" fill="#111517" stroke="#293532" /><circle cx={(i % 2) * 62 + 8} cy={Math.floor(i / 2) * 18 + 7} r="2" fill={device.portSources?.[port] === "manual_fallback" ? "#9aa3a0" : device.portStatuses?.[port]?.toLowerCase() === "down" ? "#d9646a" : "#61c98d"} /><text x={(i % 2) * 62 + 14} y={Math.floor(i / 2) * 18 + 10} fill="#9aa3a0" fontSize="7" fontFamily="monospace">{port.slice(0, 9)}{device.portSources?.[port] === "manual_fallback" ? " · MANUAL" : ""}</text></g>)}</g>}</g>)}
         </svg>
         {selectedLink && view !== "actual" && <div className="absolute bottom-3 left-14 z-20 flex max-w-[calc(100%-240px)] flex-wrap items-center gap-1 rounded border border-white/[.12] bg-[#111517] p-1"><span className="px-2 font-mono text-[9px] text-[#9aa3a0]">{selectedLink.fromPort ?? "source"} → {selectedLink.toPort ?? "target"}</span><button className="tool" onClick={addBend}>+ Bend</button><button className="tool" onClick={resetRoute}>Reset Route</button><button className="tool" onClick={() => { const link = workspace.links.find((item) => item.id === selectedLinkId); if (link?.routingPoints?.length) updateWorkspace({ ...workspace, links: workspace.links.map((item) => item.id === link.id ? { ...item, routingPoints: link.routingPoints?.slice(0, -1) } : item) }) }}>Remove Bend</button><button className="tool" onClick={() => removeSelected()}>Delete Link</button></div>}
         <div className="absolute bottom-3 right-3 h-24 w-40 rounded border border-white/[.12] bg-[#111517] p-1"><MiniMap workspace={{ devices: canvasDevices, links: canvasLinks }} viewport={viewport} /></div>

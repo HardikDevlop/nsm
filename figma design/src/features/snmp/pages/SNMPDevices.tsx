@@ -95,7 +95,7 @@ function StatusBadge({
 
   return (
     <span
-      className="font-mono text-[10px] px-2 py-0.5 rounded uppercase"
+      className="status-badge font-mono text-[10px] px-2 py-0.5 rounded uppercase"
       style={{
         background: colors.bg,
         color: colors.text,

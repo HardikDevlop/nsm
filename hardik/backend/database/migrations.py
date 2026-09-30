@@ -173,6 +173,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20260910_0045_snmp_scalability_indexes", description="Add composite indexes for SNMP history and active-alert hot queries"),
     Migration(migration_id="20260917_0046_icmp_health_evidence", description="Add durable realtime ICMP attempt and result evidence"),
     Migration(migration_id="20260922_0047_audit_outcome", description="Track audit event outcome for authentication and security events"),
+    Migration(migration_id="20260929_0048_report_schedules", description="Persist scheduled Report Management definitions"),
+    Migration(migration_id="20260929_0049_generated_reports", description="Persist generated scheduled report history"),
 )
 
 
@@ -1185,6 +1187,15 @@ def run_migrations(engine: Engine) -> list[str]:
         elif migration.migration_id == "20260922_0047_audit_outcome":
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS outcome VARCHAR(20) NOT NULL DEFAULT 'success'"))
+        elif migration.migration_id == "20260929_0048_report_schedules":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS report_schedules (id SERIAL PRIMARY KEY, name VARCHAR(160) NOT NULL, enabled BOOLEAN NOT NULL DEFAULT FALSE, frequency VARCHAR(20) NOT NULL, run_time VARCHAR(5) NOT NULL, timezone VARCHAR(80), report_format VARCHAR(20) NOT NULL DEFAULT 'csv', filters JSON NOT NULL DEFAULT '{}', created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, last_run_at TIMESTAMP, next_run_at TIMESTAMP, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL)"""))
+                connection.execute(text('CREATE INDEX IF NOT EXISTS ix_report_schedules_enabled ON report_schedules (enabled)'))
+        elif migration.migration_id == "20260929_0049_generated_reports":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS generated_reports (id SERIAL PRIMARY KEY, schedule_id INTEGER REFERENCES report_schedules(id) ON DELETE SET NULL, report_name VARCHAR(160) NOT NULL, format VARCHAR(20) NOT NULL, status VARCHAR(20) NOT NULL, period_start TIMESTAMP NOT NULL, period_end TIMESTAMP NOT NULL, generated_at TIMESTAMP NOT NULL, file_path VARCHAR(500), file_size INTEGER, error_message VARCHAR(500))"""))
+                connection.execute(text('CREATE INDEX IF NOT EXISTS ix_generated_reports_schedule ON generated_reports (schedule_id)'))
+                connection.execute(text('CREATE INDEX IF NOT EXISTS ix_generated_reports_generated_at ON generated_reports (generated_at DESC)'))
         elif migration.migration_id == "20260831_0030_cmdb_reconciliation":
             _ensure_cmdb_reconciliation(engine)
         else:

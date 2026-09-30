@@ -1,5 +1,4 @@
 import GlassCard from "../../../components/GlassCard"
-import MacPortTopology2D from "./MacPortTopology2D"
 import {
   formatBytes,
   formatSpeed,
@@ -94,6 +93,17 @@ export default function SNMPCollectorDataCard({
   const config = getModuleConfig(name)
   const color = collector?.supported ? config?.color || "#00d4ff" : "#ff3366"
   const rows = findRows(collector?.data)
+  // ARP users need the VLAN identity, not the bridge interface index.
+  const displayRows = name === "arp"
+    ? rows.map((row: any) => {
+        const next = { ...row }
+        delete next.interface
+        delete next.if_index
+        delete next.port
+        if (!("vlan_id" in next)) next.vlan_id = null
+        return next
+      })
+    : rows
   const configuredSummaryFields = config?.summaryFields
   const summary = getSummaryItems(collector?.data)
     .filter(
@@ -102,9 +112,9 @@ export default function SNMPCollectorDataCard({
     )
     .filter(([, value]) => !isEmptyValue(value))
   const columns =
-    rows.length > 0
+    displayRows.length > 0
       ? Array.from(
-          new Set(rows.flatMap((row) => Object.keys(row || {}))),
+          new Set(displayRows.flatMap((row) => Object.keys(row || {}))),
         ).slice(0, 12)
       : []
   const selfMacs = new Set(
@@ -302,9 +312,7 @@ export default function SNMPCollectorDataCard({
       {collector?.supported ? (
         <>
           {portGroups.length > 0 && (
-            <>
-              <MacPortTopology2D groups={enrichedPortGroups} />
-              <div className="overflow-x-auto p-4 sm:p-5">
+            <>              <div className="overflow-x-auto p-4 sm:p-5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <div
@@ -448,7 +456,7 @@ export default function SNMPCollectorDataCard({
           )}
           {rows.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full" style={{ minWidth: 900 }}>
+              <table className="w-full snmp-arp-table" style={{ minWidth: 900 }}>
                 <thead>
                   <tr
                     style={{ borderBottom: "1px solid rgba(0,212,255,0.08)" }}
@@ -468,7 +476,7 @@ export default function SNMPCollectorDataCard({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row, index) => (
+                  {displayRows.map((row, index) => (
                     <tr
                       key={index}
                       style={{ borderBottom: "1px solid rgba(0,212,255,0.04)" }}

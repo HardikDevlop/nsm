@@ -126,7 +126,7 @@ function friendlyApiMessage(status: number, detail: string): string {
     ) {
       return "Please provide the required device information."
     }
-    return "Please provide the required device information."
+    return normalized || "The request could not be processed."
   }
   if (status === 404) return "Device not found."
   if (status === 409) return "This item is already being processed."
@@ -806,10 +806,97 @@ export interface ReportManagementFilters {
   device_type_id?: number | null
   device_id?: number | null
   site_id?: number | null
+  device_status?: "all" | "up" | "down" | "unreachable"
+  alert_severity?: "all" | "critical" | "high" | "medium" | "low" | "warning" | "info"
   protocol?: "all" | "snmp" | "icmp"
-  period?: "weekly" | "monthly" | "yearly" | "custom"
+  period?: "today" | "yesterday" | "weekly" | "monthly" | "yearly" | "custom"
   start_date?: string | null
   end_date?: string | null
+}
+
+export interface ReportSchedule {
+  id: number
+  name: string
+  enabled: boolean
+  frequency: 'daily' | 'weekly' | 'monthly'
+  run_time: string
+  timezone?: string | null
+  report_format: 'csv'
+  filters: ReportManagementFilters
+  created_at: string
+  updated_at: string
+  last_run_at?: string | null
+  next_run_at?: string | null
+}
+
+export interface GeneratedReport {
+  id: number
+  schedule_id?: number | null
+  report_name: string
+  format: string
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED'
+  period_start: string
+  period_end: string
+  generated_at: string
+  file_size?: number | null
+  error_message?: string | null
+}
+
+export async function getReportSchedules() { return requestJson<ReportSchedule[]>('/reports/schedules') }
+export async function createReportSchedule(payload: Omit<ReportSchedule, 'id' | 'created_at' | 'updated_at' | 'last_run_at' | 'next_run_at'>) { return requestJson<ReportSchedule>('/reports/schedules', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function updateReportSchedule(id: number, payload: Partial<Omit<ReportSchedule, 'id' | 'created_at' | 'updated_at'>>) { return requestJson<ReportSchedule>(`/reports/schedules/${id}`, { method: 'PUT', body: JSON.stringify(payload) }) }
+export async function deleteReportSchedule(id: number) { await requestJson<void>(`/reports/schedules/${id}`, { method: 'DELETE' }) }
+export async function getGeneratedReports() { return requestJson<GeneratedReport[]>('/reports/generated') }
+export async function downloadGeneratedReport(id: number) {
+  const token = await ensureAuth()
+  const response = await fetch(buildUrl(`/reports/generated/${id}/download`), { headers: { Authorization: `Bearer ${token}` } })
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+  return { blob: await response.blob(), filename: response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/)?.[1] ?? `generated-report-${id}.csv` }
+}
+
+export interface ReportEmailScheduleStatus {
+  enabled: boolean
+  schedule: string
+  timezone: string
+  report_period: "yesterday"
+  format: "xlsx"
+  recipient_count: number
+  smtp_configured: boolean
+}
+
+export async function getReportManagementEmailSchedule(): Promise<ReportEmailScheduleStatus> {
+  return requestJson<ReportEmailScheduleStatus>("/reports/management/email-schedule")
+}
+
+export interface ReportInterfaceDetail {
+  interface_id: number
+  name?: string | null
+  admin_status?: string | null
+  operational_status?: string | null
+  speed?: string | null
+  avg_utilization_pct?: number | null
+  max_utilization_pct?: number | null
+  p95_utilization_pct?: number | null
+  avg_inbound_mbps?: number | null
+  avg_outbound_mbps?: number | null
+  avg_error_rate_pct?: number | null
+  current_status?: string | null
+}
+
+export interface ReportInventory {
+  hostname?: string | null
+  ip_address?: string | null
+  mac_address?: string | null
+  device_type?: string | null
+  vendor?: string | null
+  model?: string | null
+  serial_number?: string | null
+  os_version?: string | null
+  firmware_version?: string | null
+  site?: string | null
+  snmp_version?: string | null
+  first_discovered_at?: string | null
+  last_seen_at?: string | null
 }
 
 export interface ReportManagementRecord {
@@ -819,8 +906,13 @@ export interface ReportManagementRecord {
   site_name?: string | null
   device_type_name?: string | null
   protocol: string
-  availability_pct: number
+  availability_pct: number | null
   downtime_seconds: number
+  outage_count: number
+  longest_outage_seconds: number
+  last_outage_time?: string | null
+  last_recovery_time?: string | null
+  current_status: string
   snmp_success_rate?: number | null
   icmp_success_rate?: number | null
   snmp_health: string
@@ -831,9 +923,50 @@ export interface ReportManagementRecord {
   avg_memory_percent?: number | null
   avg_latency_ms?: number | null
   packet_loss_pct?: number | null
+  max_cpu_percent?: number | null
+  p95_cpu_percent?: number | null
+  max_memory_percent?: number | null
+  p95_memory_percent?: number | null
+  max_latency_ms?: number | null
+  p95_latency_ms?: number | null
+  avg_packet_loss_pct?: number | null
+  max_packet_loss_pct?: number | null
+  interface_details: ReportInterfaceDetail[]
+  interface_details_total: number
+  interface_details_truncated: boolean
+  alert_details: ReportAlertDetail[]
+  alert_details_total: number
+  alert_details_truncated: boolean
+  inventory: ReportInventory
+  alert_count: number
+  critical_alert_count: number
+  warning_alert_count: number
+  active_alert_count: number
+  resolved_alert_count: number
+  alert_mttr_seconds?: number | null
+  sla_target_percent?: number | null
+  sla_variance_percent?: number | null
+  allowed_downtime_seconds?: number | null
+  sla_breach_seconds?: number | null
   sla_status: string
   period_start: string
   period_end: string
+}
+
+export interface ReportAlertDetail {
+  alert_id: number
+  device_id?: number | null
+  device_name?: string | null
+  site_name?: string | null
+  severity: string
+  title: string
+  description?: string | null
+  created_at?: string | null
+  acknowledged_at?: string | null
+  acknowledged_by?: number | null
+  resolved_at?: string | null
+  duration_seconds?: number | null
+  status: string
 }
 
 export interface ReportManagementSection {
@@ -844,21 +977,55 @@ export interface ReportManagementSection {
   minimum?: number | null
 }
 
+export interface ReportTrendAvailabilityPoint { bucket: string; availability_percent: number | null }
+export interface ReportTrendPerformancePoint { bucket: string; cpu_avg: number | null; memory_avg: number | null; latency_avg_ms: number | null }
+export interface ReportTrendBandwidthPoint { bucket: string; rx_mbps: number | null; tx_mbps: number | null }
+export interface ReportTrendAlertPoint { bucket: string; total: number; critical: number; warning: number; info: number }
+export interface ReportManagementTrends {
+  bucket_granularity: 'hourly' | 'daily' | 'monthly'
+  availability: ReportTrendAvailabilityPoint[]
+  performance: ReportTrendPerformancePoint[]
+  bandwidth: ReportTrendBandwidthPoint[]
+  alerts: ReportTrendAlertPoint[]
+}
+
 export interface ReportManagementSummary {
   filters: ReportManagementFilters
   period_start: string
   period_end: string
   total_devices: number
   total_records: number
-  availability_pct: number
+  availability_pct: number | null
   downtime_seconds: number
   avg_snmp_health?: number | null
   avg_performance_score?: number | null
   sla_met_pct: number
+  sla_configured_devices: number
+  sla_met_devices: number
+  sla_breached_devices: number
+  sla_unknown_devices: number
   snmp_devices: number
   icmp_devices: number
+  up_devices: number
+  down_devices: number
+  unreachable_devices: number
+  total_alerts: number
+  critical_alerts: number
+  total_outages: number
+  warning_alerts: number
+  info_alerts: number
+  active_alerts: number
+  resolved_alerts: number
+  acknowledged_alerts: number
+  alert_mttr_seconds?: number | null
+  most_affected_device_id?: number | null
+  most_affected_device_name?: string | null
+  alert_details: ReportAlertDetail[]
+  alert_details_total: number
+  alert_details_truncated: boolean
   sections: Record<string, ReportManagementSection>
   records: ReportManagementRecord[]
+  trends: ReportManagementTrends
 }
 
 function appendQueryParams(
@@ -1687,8 +1854,8 @@ export async function listPermissions(
   module?: string,
 ): Promise<PermissionRecord[]> {
   const path = module
-    ? `/permissions?module=${encodeURIComponent(module)}`
-    : "/permissions"
+    ? `/permissions?module=${encodeURIComponent(module)}&limit=500`
+    : "/permissions?limit=500"
   return requestJson<PermissionRecord[]>(path)
 }
 
