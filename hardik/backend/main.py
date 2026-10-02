@@ -1,6 +1,13 @@
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+import uuid
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from backend.errors import NMSException, error_payload
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -162,6 +169,31 @@ settings = get_settings()
 configure_logging()
 install_db_timing(engine)
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request.state.request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    response = await call_next(request)
+    response.headers["x-request-id"] = request.state.request_id
+    return response
+
+@app.exception_handler(NMSException)
+async def nms_exception_handler(request: Request, exc: NMSException):
+    return JSONResponse(status_code=exc.status_code, content={"error": error_payload(exc, request.state.request_id)})
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail if isinstance(exc.detail, str) else "The request could not be completed."
+    return JSONResponse(status_code=exc.status_code, content={"error": {"code": "HTTP_ERROR", "message": detail, "retryable": exc.status_code >= 500, "request_id": request.state.request_id}, "detail": detail})
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content={"error": {"code": "VALIDATION_ERROR", "message": "Please check the highlighted fields and try again.", "detail": "One or more submitted values are invalid.", "suggestion": "Correct the input values and submit again.", "retryable": False, "request_id": request.state.request_id}})
+
+@app.exception_handler(Exception)
+async def unexpected_exception_handler(request: Request, exc: Exception):
+    logger.exception("unhandled_request_error request_id=%s path=%s", request.state.request_id, request.url.path)
+    return JSONResponse(status_code=500, content={"error": {"code": "INTERNAL_ERROR", "message": "An unexpected server error occurred.", "suggestion": "Please try again. If the problem continues, contact an administrator with the request ID.", "retryable": True, "request_id": request.state.request_id}})
 app.middleware("http")(request_timing_middleware)
 
 app.add_middleware(

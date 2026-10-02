@@ -69,7 +69,7 @@ const NAV_LABELS: Record<string, string> = {
 export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
   const { theme, colors } = useTheme()
   const { locale } = useI18n()
-  const { hasPermission, user, logout } = useAuth()
+  const { hasPermission, authorityLevel, isSuperAdmin, user, logout } = useAuth()
   const branding = useBranding()
   const isDark = theme === 'dark'
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
@@ -86,9 +86,9 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
 
   // Filter nav items by permission
   const visibleNav = useMemo(() => nav.filter(item => {
-    if (item.admin && user?.role_name?.toLowerCase() !== 'admin') return false
+    if (item.admin && !isSuperAdmin && authorityLevel < 80) return false
     return item.to !== '/servers' && hasPermission(item.permission)
-  }), [hasPermission, user?.role_name])
+  }), [authorityLevel, hasPermission, isSuperAdmin])
 
   useEffect(() => {
     const summary = window.sessionStorage.getItem('nms.dashboard.summary.v1')

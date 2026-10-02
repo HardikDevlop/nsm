@@ -23,6 +23,8 @@ class BrandingRead(BaseModel):
 # ---------------------------------------------------------------- Roles / RBAC
 class RoleBase(BaseModel):
     role_name: str
+    authority_level: int = 0
+    is_assignable: bool = True
 
 
 class RoleCreate(RoleBase):
@@ -31,12 +33,15 @@ class RoleCreate(RoleBase):
 
 class RoleUpdate(BaseModel):
     role_name: str | None = None
+    authority_level: int | None = None
+    is_assignable: bool | None = None
 
 
 class RoleRead(RoleBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    is_system_role: bool
 
 
 class PermissionBase(BaseModel):
@@ -82,7 +87,7 @@ class UserBase(BaseModel):
     name: str
     email: EmailStr
     role_id: int | None = None
-    status: str = "active"
+    status: Literal["active", "disabled", "suspended"] = "active"
 
 
 class UserCreate(UserBase):
@@ -94,7 +99,12 @@ class UserUpdate(BaseModel):
     email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=6)
     role_id: int | None = None
-    status: str | None = None
+    max_concurrent_sessions: int | None = Field(default=None, ge=1, le=10)
+
+
+class UserStatusUpdate(BaseModel):
+    status: Literal["active", "disabled", "suspended"]
+    suspended_until: datetime | None = None
 
 
 class UserRead(BaseModel):
@@ -106,9 +116,24 @@ class UserRead(BaseModel):
     email: EmailStr
     role_id: int | None = None
     role_name: str | None = None
+    authority_level: int = 0
     permissions: list[str] = []
     status: str
     created_at: datetime
+    max_concurrent_sessions: int = 1
+
+
+class UserSessionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    session_id: str
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    revoke_reason: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    active: bool = False
 
 
 # ---------------------------------------------------------------- Organizations

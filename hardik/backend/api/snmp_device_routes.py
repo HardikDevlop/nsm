@@ -54,7 +54,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload, load_only
 
 from backend.database.session import SessionLocal, get_db
-from backend.dependencies import require_permission
+from backend.dependencies import get_current_user, require_permission
+from backend.auth.authorization import can_access_site, get_accessible_site_ids
 from backend.models import Device, DeviceCredential, Event, Vendor, DeviceType
 from backend.models.identity import DeviceCapabilities, DeviceIdentity
 from backend.models.snmp import DeviceInterface, LatestInterface
@@ -63,7 +64,25 @@ from backend.utils.time import as_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1", tags=["SNMP Device Monitoring"])
+def _require_site_scope(
+    device_id: int | None = None,
+    interface_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> None:
+    """Enforce site scope for authenticated SNMP device/interface routes."""
+    resolved_device_id = device_id
+    if resolved_device_id is None and interface_id is not None:
+        interface = db.query(DeviceInterface).filter(DeviceInterface.id == interface_id).first()
+        resolved_device_id = interface.device_id if interface else None
+    if resolved_device_id is None:
+        return
+    device = db.query(Device).filter(Device.id == resolved_device_id, Device.deleted_at.is_(None)).first()
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Device {resolved_device_id} not found")
+
+
+router = APIRouter(prefix="/api/v1", tags=["SNMP Device Monitoring"], dependencies=[Depends(_require_site_scope)])
 MAX_SNMP_TABLE_ROWS = 500
 
 
@@ -2165,7 +2184,7 @@ def get_snmp_polling_stats(device_id: int, db: Session = Depends(get_db), _: Any
 
 
 @router.get("/snmp/topology")
-def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool = Query(default=False), db: Session = Depends(get_db), _: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
+def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool = Query(default=False), db: Session = Depends(get_db), current_user: Any = Depends(require_permission("devices:read"))) -> dict[str, Any]:
     topology_observations = 0
     topology_candidates = 0
     topology_duplicates = 0
@@ -2190,6 +2209,9 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
     )
     if device_id:
         devices_q = devices_q.filter(Device.id == device_id)
+    accessible_site_ids = get_accessible_site_ids(current_user)
+    if accessible_site_ids is not None:
+        devices_q = devices_q.filter(Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False)
     all_devices = devices_q.limit(200).all()
     all_device_ids = [device.id for device in all_devices]
     capability_map = {
@@ -3021,7 +3043,7 @@ def list_snmp_devices_optimized(
     sort_by: str = Query(default="id"),
     sort_order: str = Query(default="asc"),
     db: Session = Depends(get_db),
-    _: Any = Depends(require_permission("devices:read")),
+    current_user: Any = Depends(require_permission("devices:read")),
 ) -> dict[str, Any]:
     """Optimized paginated device list with all info needed for the device list page."""
     from backend.models.identity import DeviceIdentity
@@ -3050,6 +3072,9 @@ def list_snmp_devices_optimized(
         )
         .filter(Device.deleted_at.is_(None))
     )
+    accessible_site_ids = get_accessible_site_ids(current_user)
+    if accessible_site_ids is not None:
+        query = query.filter(Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False)
 
     # Show every active device. Some discovery/import flows create the device
     # row before credentials are attached; those devices must remain visible.

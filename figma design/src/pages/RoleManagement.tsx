@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import { useAuth } from '../components/AuthContext'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listRoles, createRole, updateRole, deleteRole,
@@ -57,7 +58,17 @@ export default function RoleManagement() {
   const [showModal,      setShowModal]      = useState(false)
   const [editingRole,    setEditingRole]    = useState<RoleRecord | null>(null)
   const [modalName,      setModalName]      = useState('')
+  const [modalAuthority, setModalAuthority] = useState('10')
+  const { authorityLevel, canManageAuthority, isSuperAdmin } = useAuth()
   const [modalSaving,    setModalSaving]    = useState(false)
+
+  function roleLevel(role: RoleRecord) {
+    return typeof role.authority_level === 'number' && Number.isFinite(role.authority_level) ? role.authority_level : null
+  }
+  function canManageRole(role: RoleRecord) {
+    const level = roleLevel(role)
+    return level !== null && canManageAuthority(level) && role.is_system_role !== true
+  }
 
   /* ── load ──────────────────────────────────────────────────────────────── */
   const load = useCallback(async () => {
@@ -113,7 +124,7 @@ export default function RoleManagement() {
 
   /* ── save permissions ──────────────────────────────────────────────────── */
   async function handleSavePerms() {
-    if (!selectedRole) return
+    if (!selectedRole || !canManageRole(selectedRole)) { toast.error('You cannot modify this role'); return }
     setSavingPerms(true)
     try {
       const updated = await setRolePermissions(selectedRole.id, Array.from(selectedIds))
@@ -131,6 +142,7 @@ export default function RoleManagement() {
   function openCreate() {
     setEditingRole(null)
     setModalName('')
+    setModalAuthority(authorityLevel > 0 ? String(Math.max(1, authorityLevel - 1)) : '10')
     setShowModal(true)
   }
 
@@ -138,6 +150,7 @@ export default function RoleManagement() {
     e.stopPropagation()
     setEditingRole(role)
     setModalName(role.role_name)
+    setModalAuthority(roleLevel(role) === null ? '' : String(roleLevel(role)))
     setShowModal(true)
   }
 
@@ -145,16 +158,19 @@ export default function RoleManagement() {
   async function handleModalSubmit() {
     const name = modalName.trim()
     if (!name) { toast.warning('Role name cannot be empty'); return }
+    const level = Number(modalAuthority)
+    if (!Number.isInteger(level) || level <= 0 || level >= authorityLevel) { toast.warning('Role authority must be lower than your authority'); return }
+    if (editingRole && !canManageRole(editingRole)) { toast.error('You cannot modify this role'); return }
     setModalSaving(true)
     try {
       if (editingRole) {
-        await updateRole(editingRole.id, { role_name: name })
+        await updateRole(editingRole.id, { role_name: name, authority_level: level })
         toast.success(`Role "${name}" updated`)
         /* refresh selected role if it was the edited one */
         if (selectedRole?.id === editingRole.id)
           setSelectedRole(prev => prev ? { ...prev, role_name: name } : prev)
       } else {
-        await createRole({ role_name: name })
+        await createRole({ role_name: name, authority_level: level })
         toast.success(`Role "${name}" created`)
       }
       setShowModal(false)
@@ -168,6 +184,7 @@ export default function RoleManagement() {
   /* ── delete role ───────────────────────────────────────────────────────── */
   async function handleDelete(role: RoleRecord, e: React.MouseEvent) {
     e.stopPropagation()
+    if (!canManageRole(role)) { toast.error('You cannot delete this role'); return }
     const ok = await confirmDanger({
       title:       `Delete "${role.role_name}"?`,
       text:        'All users with this role will lose their permissions. This cannot be undone.',
@@ -262,9 +279,14 @@ export default function RoleManagement() {
                     style={{ color: isSelected ? 'var(--t-accent)' : 'var(--t-text)' }}>
                     {role.role_name}
                   </span>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ color: 'var(--t-muted)', background: 'var(--t-border-light)' }}>AUTH {roleLevel(role) ?? '—'}</span>
+                    {role.is_system_role && <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ color: '#f59e0b', background: 'rgba(245,158,11,.12)' }}>SYSTEM</span>}
+                    <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ color: role.is_assignable === false ? '#ff3366' : '#00ff88', background: 'var(--t-border-light)' }}>{role.is_assignable === false ? 'NOT ASSIGNABLE' : 'ASSIGNABLE'}</span>
+                  </div>
                   <div className="flex gap-1 shrink-0">
                     <PermissionGuard permission="roles:update">
-                      <button onClick={e => openEdit(role, e)} title="Edit role name"
+                      {canManageRole(role) && <button onClick={e => openEdit(role, e)} title="Edit role name"
                         className="p-1.5 rounded transition-colors"
                         style={{ color: 'var(--t-muted)' }}
                         onMouseEnter={e => { e.currentTarget.style.color = 'var(--t-accent)' }}
@@ -273,10 +295,10 @@ export default function RoleManagement() {
                           <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                           <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
                         </svg>
-                      </button>
+                      </button>}
                     </PermissionGuard>
                     <PermissionGuard permission="roles:delete">
-                      <button onClick={e => handleDelete(role, e)} title="Delete role"
+                      {canManageRole(role) && <button onClick={e => handleDelete(role, e)} title="Delete role"
                         className="p-1.5 rounded transition-colors"
                         style={{ color: 'var(--t-muted)' }}
                         onMouseEnter={e => { e.currentTarget.style.color = '#ff3366' }}
@@ -284,7 +306,7 @@ export default function RoleManagement() {
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                           <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
                         </svg>
-                      </button>
+                      </button>}
                     </PermissionGuard>
                   </div>
                 </div>
@@ -308,7 +330,7 @@ export default function RoleManagement() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={toggleAll}
+                  <button onClick={toggleAll} disabled={!canManageRole(selectedRole)}
                     className="rounded-lg px-3 py-1.5 font-mono text-xs transition-all"
                     style={{
                       background: selectedIds.size === allPerms.length ? 'var(--t-accent-alpha)' : 'var(--t-border-light, rgba(255,255,255,0.04))',
@@ -318,7 +340,7 @@ export default function RoleManagement() {
                     {selectedIds.size === allPerms.length ? 'DESELECT ALL' : 'SELECT ALL'}
                   </button>
                   <PermissionGuard permission="roles:update">
-                    <button onClick={handleSavePerms} disabled={savingPerms}
+                    <button onClick={handleSavePerms} disabled={savingPerms || !canManageRole(selectedRole)}
                       className="rounded-lg px-4 py-1.5 font-mono text-xs font-semibold transition-all disabled:opacity-50 flex items-center gap-2"
                       style={{ background: 'var(--t-accent)', color: '#fff', border: '1px solid var(--t-accent-border)' }}>
                       {savingPerms
@@ -329,6 +351,8 @@ export default function RoleManagement() {
                   </PermissionGuard>
                 </div>
               </div>
+
+              {!canManageRole(selectedRole) && <div className="rounded-lg px-3 py-2.5 mb-4 font-mono text-[11px]" style={{ background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.25)', color: '#ffaa00' }}>This role is protected or outside your authority. Permissions are read-only.</div>}
 
               <div className="rounded-lg px-3 py-2.5 mb-4 font-mono text-[11px]" style={{ background: 'rgba(0,212,255,0.05)', border: '1px solid rgba(0,212,255,0.15)', color: 'var(--t-muted)' }}>
                 <span style={{ color: 'var(--t-accent)' }}>READ</span> = view data ·{' '}
@@ -387,7 +411,7 @@ export default function RoleManagement() {
                       {/* module header — click to toggle whole module */}
                       <button
                         type="button"
-                        onClick={() => toggleModule(mod)}
+                        onClick={() => canManageRole(selectedRole) && toggleModule(mod)} disabled={!canManageRole(selectedRole)}
                         className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-all"
                         style={{ borderBottom: '1px solid var(--t-border-alpha)' }}>
                         <div className="flex items-center gap-2 min-w-0">
@@ -440,8 +464,8 @@ export default function RoleManagement() {
                               <button
                                 key={perm.id}
                                 type="button"
-                                onClick={() => togglePerm(perm.id)}
-                                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left transition-all"
+                                onClick={() => canManageRole(selectedRole) && togglePerm(perm.id)} disabled={!canManageRole(selectedRole)}
+                                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left transition-all disabled:opacity-50"
                                 style={{
                                   background: checked ? `${col}18` : 'rgba(255,255,255,0.02)',
                                   border: `1px solid ${checked ? col + '55' : 'var(--t-border-alpha)'}`,
@@ -525,6 +549,8 @@ export default function RoleManagement() {
               onFocus={e  => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
               onBlur={e   => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}
             />
+            <label className="font-mono text-xs block mb-1.5" style={{ color: 'var(--t-muted)' }}>AUTHORITY LEVEL</label>
+            <input type="number" min="1" max={Math.max(1, authorityLevel - 1)} value={modalAuthority} onChange={e => setModalAuthority(e.target.value)} disabled={!!editingRole && !canManageRole(editingRole)} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none mb-5" style={{ background: 'var(--t-border-light)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }} />
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowModal(false)}
                 className="rounded-lg px-4 py-2 font-mono text-xs transition-all hover:opacity-80"

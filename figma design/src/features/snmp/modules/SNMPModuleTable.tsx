@@ -131,20 +131,20 @@ function SNMPModuleTable<T>({
         );
       }
       case 'bytes':
-        return <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{formatBytes(value)}</span>;
+        return <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{formatBytes(value)}</span>;
       case 'percent': {
         const pct = Number(value);
         const color = pct >= 90 ? '#ff3366' : pct >= 75 ? '#ffaa00' : '#00d4ff';
         return <span className="font-mono text-xs font-semibold" style={{ color }}>{pct.toFixed(1)}%</span>;
       }
       case 'timestamp':
-        return <span className="font-mono text-[10px]" style={{ color: '#8899bb' }}>{value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}</span>;
+        return <span className="font-mono text-[10px]" style={{ color: 'var(--t-muted, #8899bb)' }}>{value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '—'}</span>;
       case 'number':
-        return <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{value !== null && value !== undefined ? String(value) : '—'}</span>;
+        return <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{value !== null && value !== undefined ? String(value) : '—'}</span>;
       case 'custom':
-        return <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{value !== null && value !== undefined ? String(value) : '—'}</span>;
+        return <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{value !== null && value !== undefined ? String(value) : '—'}</span>;
       default:
-        return <span className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{value !== null && value !== undefined ? String(value) : '—'}</span>;
+        return <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{value !== null && value !== undefined ? String(value) : '—'}</span>;
     }
   };
 
@@ -171,7 +171,7 @@ function SNMPModuleTable<T>({
   if (filteredRows.length === 0) {
     return (
       <GlassCard className={className}>
-        <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>
+        <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-muted, #8899bb)' }}>
           {emptyMessage}
         </div>
       </GlassCard>
@@ -189,7 +189,7 @@ function SNMPModuleTable<T>({
               onChange={(e) => setSearch(e.target.value)}
               placeholder={searchPlaceholder}
               className="w-full glass-bright rounded px-3 py-2 font-mono text-xs"
-              style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)' }}
+              style={{ border: '1px solid rgba(0,212,255,0.25)', color: 'var(--t-text, #c8d8ee)', background: 'var(--t-input-bg, rgba(8,25,55,0.7))' }}
             />
           </div>
         </form>
@@ -204,8 +204,8 @@ function SNMPModuleTable<T>({
                   onClick={() => col.sortable && handleSort(col.key)}
                   className={`text-left px-4 py-2.5 font-mono text-xs sticky top-0 select-none ${col.sortable ? 'cursor-pointer' : ''}`}
                   style={{
-                    color: '#8899bb',
-                    background: 'rgba(8,25,55,0.95)',
+                    color: 'var(--t-muted, #8899bb)',
+                    background: 'var(--t-table-header, var(--t-border-light, rgba(8,25,55,0.95)))',
                     userSelect: 'none',
                   }}
                 >
@@ -244,7 +244,7 @@ function SNMPModuleTable<T>({
       </div>
       {showPagination && totalPages > 1 && (
         <div className="p-4 flex flex-col sm:flex-row items-center justify-between gap-3" style={{ borderTop: '1px solid rgba(0,212,255,0.1)' }}>
-          <div className="font-mono text-xs" style={{ color: '#8899bb' }}>
+          <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
             Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, filteredRows.length)} of {filteredRows.length}
           </div>
           <div className="flex items-center gap-2">
@@ -252,7 +252,7 @@ function SNMPModuleTable<T>({
               value={pageSize}
               onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
               className="glass-bright rounded px-2 py-1 font-mono text-xs"
-              style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)' }}>
+              style={{ border: '1px solid rgba(0,212,255,0.25)', color: 'var(--t-text, #c8d8ee)', background: 'var(--t-input-bg, rgba(8,25,55,0.7))' }}>
               <option value={25}>25</option>
               <option value={50}>50</option>
               <option value={75}>75</option>
@@ -263,7 +263,7 @@ function SNMPModuleTable<T>({
               style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff', opacity: page === 1 ? 0.4 : 1 }}>
               PREV
             </button>
-            <span className="font-mono text-xs px-2" style={{ color: '#c8d8ee' }}>
+            <span className="font-mono text-xs px-2" style={{ color: 'var(--t-text, #c8d8ee)' }}>
               Page {page} / {totalPages}
             </span>
             <button onClick={() => handlePageChange(page + 1)} disabled={page === totalPages}

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440
     credential_encryption_key: str = ""
     backend_cors_origins: str = "http://localhost:3000,http://localhost:5173"
+    trusted_proxy_ips: str = ""
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
@@ -54,6 +55,10 @@ class Settings(BaseSettings):
     branding_application_name: str = "NMS"
     branding_logo_url: str = ""
     branding_allowed_themes: str = "light,dark"
+
+    @property
+    def trusted_proxies(self) -> set[str]:
+        return {item.strip() for item in self.trusted_proxy_ips.split(",") if item.strip()}
 
     @property
     def cors_origins(self) -> list[str]:

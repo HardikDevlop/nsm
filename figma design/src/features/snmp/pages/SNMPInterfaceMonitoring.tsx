@@ -161,7 +161,7 @@ export default function SNMPInterfaceMonitoring() {
               No interface rows yet. Start interface monitoring or use REFRESH after SNMP credentials are verified.
             </div>
           ) : (
-          <table className="w-full snmp-interface-table" style={{ minWidth: 1100 }}>
+          <table className="w-full snmp-readable-table snmp-collector-data-table snmp-interface-table" style={{ minWidth: 1100 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                 {[
@@ -179,7 +179,7 @@ export default function SNMPInterfaceMonitoring() {
                   <th
                     key={col.key}
                     className="text-left px-4 py-2.5 font-mono text-xs sticky top-0 select-none"
-                    style={{ color: '#8899bb', background: 'rgba(8,25,55,0.95)', userSelect: 'none' }}
+                    style={{ color: '#111827', background: 'transparent', opacity: 1, userSelect: 'none' }}
                   >
                     {col.label}
                   </th>
@@ -199,7 +199,7 @@ export default function SNMPInterfaceMonitoring() {
                       background: index % 2 === 0 ? 'transparent' : 'rgba(0,212,255,0.01)',
                     }}
                   >
-                    <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>
+                    <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: 'var(--t-text, #111827)', opacity: 1 }}>
                       {iface.name ?? `Interface ${iface.ifIndex}`}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs truncate max-w-[200px]" style={{ color: '#8899bb' }}>

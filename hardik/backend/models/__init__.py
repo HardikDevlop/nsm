@@ -30,6 +30,14 @@ role_permissions = Table(
 )
 
 
+user_sites = Table(
+    "user_sites",
+    Base.metadata,
+    Column("user_id", ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("site_id", ForeignKey("sites.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 def utc_now() -> datetime:
     # PostgreSQL TIMESTAMP columns are naive; store application timestamps in IST.
     return datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
@@ -40,6 +48,9 @@ class Role(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     role_name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    authority_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_system_role: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_assignable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     users: Mapped[list["User"]] = relationship(back_populates="role")
     permissions: Mapped[list["Permission"]] = relationship(
@@ -74,12 +85,36 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="active")
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    max_concurrent_sessions: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     role: Mapped[Role | None] = relationship(back_populates="users")
     alerts_acknowledged: Mapped[list["Alert"]] = relationship(back_populates="acknowledged_user")
     reports: Mapped[list["Report"]] = relationship(back_populates="generated_user")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
+    sites: Mapped[list["Site"]] = relationship(secondary=user_sites, back_populates="users")
+    sessions: Mapped[list["UserSession"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    login_method: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class Organization(Base):
@@ -108,6 +143,7 @@ class Site(Base):
 
     organization: Mapped[Organization] = relationship(back_populates="sites")
     devices: Mapped[list["Device"]] = relationship(back_populates="site")
+    users: Mapped[list[User]] = relationship(secondary=user_sites, back_populates="sites")
 
 
 class Vendor(Base):
@@ -352,6 +388,20 @@ class AuditLog(Base):
     resource_name: Mapped[str] = mapped_column(String(160))
     outcome: Mapped[str] = mapped_column(String(20), default="success", server_default="success")
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    actor_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    resource_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    resource_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    site_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    request_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    old_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    new_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     user: Mapped[User | None] = relationship(back_populates="audit_logs")
 

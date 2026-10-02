@@ -1,4 +1,4 @@
-"""Seed default RBAC data: permissions for every module, three base roles,
+"""Seed default RBAC data: permissions for every module, four base roles,
 and the default admin account (admin@gmail.com / admin123)."""
 
 from sqlalchemy.orm import Session
@@ -172,26 +172,32 @@ def seed_rbac(db: Session) -> None:
     # must not cause startup seeding to recreate it.
     fresh_roles = not role_map
 
-    def ensure_role(name: str, codes: set[str] | None) -> Role:
+    def ensure_role(name: str, codes: set[str] | None, authority_level: int, is_system_role: bool, is_assignable: bool) -> Role:
         role = role_map.get(name)
         if role is None:
-            role = Role(role_name=name)
+            role = Role(role_name=name, authority_level=authority_level, is_system_role=is_system_role, is_assignable=is_assignable)
             db.add(role)
             role_map[name] = role
             if codes is None:
                 role.permissions = all_permissions
             else:
                 role.permissions = [perm for code, perm in existing.items() if code in codes]
+        else:
+            role.authority_level = authority_level
+            role.is_system_role = is_system_role
+            role.is_assignable = is_assignable
         return role
 
-    admin_role = ensure_role("Admin", None)
+    super_admin_role = ensure_role("Super Admin", None, 100, True, False)
+    super_admin_role.permissions = all_permissions
+    admin_role = ensure_role("Admin", None, 80, False, True)
     # Keep Admin aligned with the full permission catalog on every seed run.
     # Without this, older databases can miss newer module permissions even
     # though the Admin role already exists.
     admin_role.permissions = all_permissions
     if fresh_roles:
-        ensure_role("Operator", OPERATOR_CODES)
-        ensure_role("Viewer", VIEWER_CODES)
+        ensure_role("Operator", OPERATOR_CODES, 50, False, True)
+        ensure_role("Viewer", VIEWER_CODES, 10, False, True)
     db.flush()
 
     # 3. Default admin user
@@ -206,8 +212,12 @@ def seed_rbac(db: Session) -> None:
                 status="active",
             )
         )
-    elif admin.role_id is None:
-        admin.role_id = admin_role.id
+    else:
+        # The existing administrator is the initial protected Super Admin.
+        # This is idempotent and never changes the password during startup.
+        admin.role_id = super_admin_role.id
+        admin.status = "active"
+        admin.max_concurrent_sessions = 3
     db.commit()
 
 

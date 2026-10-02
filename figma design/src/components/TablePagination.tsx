@@ -14,6 +14,7 @@ type TablePaginationProps = {
   totalItems: number
   onPageChange: (page: number) => void
   onPageSizeChange: (pageSize: number) => void
+  pageSizes?: number[]
 }
 
 export default function TablePagination({
@@ -25,6 +26,7 @@ export default function TablePagination({
   totalItems,
   onPageChange,
   onPageSizeChange,
+  pageSizes = [25, 50, 75, 100],
 }: TablePaginationProps) {
   return (
     <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3" style={{ borderTop: '1px solid var(--t-border-alpha)' }}>
@@ -38,7 +40,7 @@ export default function TablePagination({
           className="rounded px-2 py-1 font-mono text-xs"
           style={selectStyle}
         >
-          {[25, 50, 75, 100].map(size => (
+          {pageSizes.map(size => (
             <option key={size} value={size}>{size} per page</option>
           ))}
         </select>

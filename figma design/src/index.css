@@ -98,6 +98,23 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
 .snmp-interface-table thead th {
   color: var(--t-text-secondary) !important;
 }
+.snmp-interface-table thead th,
+.snmp-interface-table thead td {
+  background: var(--t-table-header) !important;
+  border-color: var(--t-border) !important;
+}
+.snmp-interface-table tbody tr {
+  background: var(--t-table-row) !important;
+  border-color: var(--t-border-light) !important;
+}
+.snmp-interface-table tbody tr:nth-child(even) {
+  background: var(--t-table-row-hover) !important;
+}
+.snmp-interface-table tbody td[style*="#8899bb"],
+.snmp-interface-table tbody td[style*="#c8d8ee"],
+.snmp-interface-table tbody td[style*="#667799"] {
+  color: var(--t-text) !important;
+}
 [data-theme="light"] .snmp-interface-table thead th {
   background: var(--t-table-header) !important;
 }
@@ -1822,4 +1839,297 @@ html[data-locale="hi"] .font-mono {
 [data-theme="light"] .snmp-module-shell table thead th,
 [data-theme="light"] .snmp-module-page table thead th {
   color: #dbeafe !important;
+}
+
+/* Final light-theme readability pass for every SNMP module. A number of
+   legacy module cards still carry inline console-palette colors; normalize
+   only structural text/surfaces while leaving status/accent colors intact. */
+[data-theme="light"] .snmp-module-page [style*="#c8d8ee"],
+[data-theme="light"] .snmp-module-page [style*="#8899bb"],
+[data-theme="light"] .snmp-module-page [style*="#667799"],
+[data-theme="light"] .snmp-module-page [style*="#556677"],
+[data-theme="light"] .snmp-module-page [style*="#445566"] {
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .snmp-module-page [style*="rgba(8,25,55"],
+[data-theme="light"] .snmp-module-page [style*="rgba(2,8,18"] {
+  background: var(--t-card) !important;
+  border-color: var(--t-border) !important;
+}
+[data-theme="light"] .snmp-module-page table th {
+  color: var(--t-text-secondary) !important;
+  background: var(--t-table-header) !important;
+}
+[data-theme="light"] .snmp-module-page table td {
+  color: var(--t-text) !important;
+}
+[data-theme="light"] .snmp-module-page input,
+[data-theme="light"] .snmp-module-page select,
+[data-theme="light"] .snmp-module-page textarea {
+  color: var(--t-text) !important;
+  background: var(--t-input-bg) !important;
+}
+
+/* Consistent typography across every SNMP data table. */
+.snmp-module-page table th,
+.snmp-module-page table td,
+.snmp-module-page table th button,
+.snmp-module-page table td button {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+.snmp-module-page table th {
+  font-weight: 600 !important;
+  letter-spacing: .01em;
+}
+.snmp-module-page table td {
+  font-weight: 400 !important;
+}
+.snmp-module-page > .glass-card table + *,
+.snmp-module-page table ~ div {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+/* Cover legacy SNMP detail/collector tables that are not rendered inside the
+   module-table wrapper (ARP, MAC, interfaces, inventory and topology). */
+[data-theme="light"] .snmp-collector-card table th,
+[data-theme="light"] .snmp-collector-card table td,
+[data-theme="light"] .snmp-device-details table th,
+[data-theme="light"] .snmp-device-details table td,
+[data-theme="light"] .snmp-module-page table th,
+[data-theme="light"] .snmp-module-page table td {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+[data-theme="light"] .snmp-collector-card table th,
+[data-theme="light"] .snmp-device-details table th,
+[data-theme="light"] .snmp-module-page table th {
+  color: var(--t-text-secondary) !important;
+  background: var(--t-table-header) !important;
+}
+[data-theme="light"] .snmp-collector-card table td,
+[data-theme="light"] .snmp-device-details table td,
+[data-theme="light"] .snmp-module-page table td {
+  color: var(--t-text) !important;
+}
+
+/* High-contrast headings for every named SNMP legacy table in light mode. */
+[data-theme="light"] table[class*="snmp-"] th,
+[data-theme="light"] table[class*="snmp-"] td,
+[data-theme="light"] .snmp-module-page table th,
+[data-theme="light"] .snmp-module-page table td,
+[data-theme="light"] .snmp-collector-card table th,
+[data-theme="light"] .snmp-collector-card table td,
+[data-theme="light"] .snmp-device-details table th,
+[data-theme="light"] .snmp-device-details table td {
+  color: #111827 !important;
+  opacity: 1 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 13px !important;
+  text-shadow: none !important;
+}
+[data-theme="light"] table[class*="snmp-"] th,
+[data-theme="light"] .snmp-module-page table th,
+[data-theme="light"] .snmp-collector-card table th,
+[data-theme="light"] .snmp-device-details table th {
+  background: var(--t-table-header) !important;
+  font-weight: 600 !important;
+}
+
+
+/* SNMP table headers: transparent surface with high-contrast text. */
+[data-theme="light"] .snmp-collector-data-table thead th,
+[data-theme="light"] .snmp-interface-table thead th,
+[data-theme="light"] .snmp-arp-table thead th {
+  background: transparent !important;
+  color: #111827 !important;
+  opacity: 1 !important;
+}
+
+/* Unconditional final contrast rule: theme state must not affect table
+   heading visibility. */
+.snmp-interface-table thead th,
+.snmp-interfaces-table thead th,
+.snmp-arp-table thead th,
+.snmp-collector-data-table thead th {
+  background: transparent !important;
+  color: #000000 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+.snmp-interface-table tbody td,
+.snmp-interfaces-table tbody td,
+.snmp-arp-table tbody td,
+.snmp-collector-data-table tbody td {
+  color: #000000 !important;
+  opacity: 1 !important;
+}
+
+
+/* Match the readable Routing/SNMPDynamicTable style across all legacy
+   Interfaces, ARP, MAC, Inventory and Topology tables. */
+.snmp-readable-table thead th {
+  background: transparent !important;
+  color: #111827 !important;
+  opacity: 1 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+  text-shadow: none !important;
+}
+.snmp-readable-table tbody td {
+  color: #111827 !important;
+  opacity: 1 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+
+/* Final theme-aware override: never use a fixed dark/light table color. */
+.snmp-readable-table thead th,
+.snmp-interface-table thead th,
+.snmp-interfaces-table thead th,
+.snmp-arp-table thead th,
+.snmp-collector-data-table thead th {
+  background: var(--t-table-header) !important;
+  color: var(--t-text-secondary) !important;
+}
+.snmp-readable-table tbody td,
+.snmp-interface-table tbody td,
+.snmp-interfaces-table tbody td,
+.snmp-arp-table tbody td,
+.snmp-collector-data-table tbody td {
+  color: var(--t-text) !important;
+}
+
+/* Dark mode must override legacy fixed-black table rules. */
+[data-theme="dark"] .snmp-readable-table thead th,
+[data-theme="dark"] .snmp-interface-table thead th,
+[data-theme="dark"] .snmp-interfaces-table thead th,
+[data-theme="dark"] .snmp-arp-table thead th,
+[data-theme="dark"] .snmp-collector-data-table thead th {
+  background: var(--t-table-header) !important;
+  color: #cbd5e1 !important;
+}
+[data-theme="dark"] .snmp-readable-table tbody td,
+[data-theme="dark"] .snmp-interface-table tbody td,
+[data-theme="dark"] .snmp-interfaces-table tbody td,
+[data-theme="dark"] .snmp-arp-table tbody td,
+[data-theme="dark"] .snmp-collector-data-table tbody td {
+  color: var(--t-text) !important;
+  opacity: 1 !important;
+}
+[data-theme="dark"] .snmp-readable-table tbody tr:nth-child(even),
+[data-theme="dark"] .snmp-interface-table tbody tr:nth-child(even) {
+  background: var(--t-table-row-hover) !important;
+}
+
+/* Light-mode inventory table: remove legacy pale-on-light header colors. */
+[data-theme="light"] .snmp-inventory-table thead th,
+[data-theme="light"] .snmp-inventory-table thead td {
+  background: var(--t-table-header) !important;
+  color: #475569 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+[data-theme="light"] .snmp-inventory-table tbody td {
+  color: #172033 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+[data-theme="light"] .snmp-inventory-table tbody tr {
+  background: var(--t-table-row) !important;
+  border-color: var(--t-border-light) !important;
+}
+[data-theme="light"] .snmp-inventory-table tbody tr:nth-child(even) {
+  background: #f3f6fa !important;
+}
+
+/* Collector inventory/ARP tables use the same legacy header palette. */
+[data-theme="light"] .snmp-collector-data-table thead th,
+[data-theme="light"] .snmp-arp-table thead th {
+  background: var(--t-table-header) !important;
+  color: #475569 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+[data-theme="light"] .snmp-collector-data-table tbody td,
+[data-theme="light"] .snmp-arp-table tbody td {
+  color: #172033 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+
+/* Highest-specificity fix for the Inventory collector header. */
+html[data-theme="light"] .snmp-collector-card .snmp-collector-data-table thead th,
+html[data-theme="light"] .snmp-collector-card .snmp-arp-table thead th {
+  color: #334155 !important;
+  background: #e8eef5 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+  -webkit-text-fill-color: #334155 !important;
+}
+html[data-theme="light"] .snmp-collector-card .snmp-collector-data-table tbody td,
+html[data-theme="light"] .snmp-collector-card .snmp-arp-table tbody td {
+  color: #172033 !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: #172033 !important;
+}
+
+/* Global SNMP readability contract for every module page. These selectors
+   intentionally sit last so legacy inline/palette rules cannot hide labels. */
+html[data-theme="light"] .snmp-module-page table thead th,
+html[data-theme="light"] .snmp-module-page table thead td,
+html[data-theme="light"] .snmp-collector-card table thead th,
+html[data-theme="light"] .snmp-collector-card table thead td,
+html[data-theme="light"] .snmp-device-details table thead th,
+html[data-theme="light"] .snmp-device-details table thead td {
+  color: #334155 !important;
+  background: #e8eef5 !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: #334155 !important;
+  text-shadow: none !important;
+}
+html[data-theme="light"] .snmp-module-page table tbody td,
+html[data-theme="light"] .snmp-collector-card table tbody td,
+html[data-theme="light"] .snmp-device-details table tbody td {
+  color: #172033 !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: #172033 !important;
+  text-shadow: none !important;
+}
+html[data-theme="light"] .snmp-module-page table tbody tr,
+html[data-theme="light"] .snmp-collector-card table tbody tr,
+html[data-theme="light"] .snmp-device-details table tbody tr {
+  background: #fcfaf7 !important;
+  border-color: #ded8ce !important;
+}
+html[data-theme="light"] .snmp-module-page table tbody tr:nth-child(even),
+html[data-theme="light"] .snmp-collector-card table tbody tr:nth-child(even),
+html[data-theme="light"] .snmp-device-details table tbody tr:nth-child(even) {
+  background: #f3f6fa !important;
+}
+html[data-theme="dark"] .snmp-module-page table thead th,
+html[data-theme="dark"] .snmp-module-page table thead td,
+html[data-theme="dark"] .snmp-collector-card table thead th,
+html[data-theme="dark"] .snmp-collector-card table thead td,
+html[data-theme="dark"] .snmp-device-details table thead th,
+html[data-theme="dark"] .snmp-device-details table thead td {
+  color: #cbd5e1 !important;
+  background: #111c2e !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: #cbd5e1 !important;
+  text-shadow: none !important;
+}
+html[data-theme="dark"] .snmp-module-page table tbody td,
+html[data-theme="dark"] .snmp-collector-card table tbody td,
+html[data-theme="dark"] .snmp-device-details table tbody td {
+  color: #e6edf7 !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: #e6edf7 !important;
+  text-shadow: none !important;
 }

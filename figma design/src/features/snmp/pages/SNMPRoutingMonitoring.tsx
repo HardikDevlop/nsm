@@ -23,7 +23,19 @@ export default function SNMPRoutingMonitoring() {
     )
   }
 
-  const routes = (data as any[]) || []
+  const response = data as any
+  const rawRoutes = Array.isArray(response)
+    ? response
+    : Array.isArray(response?.data?.routes)
+      ? response.data.routes
+      : Array.isArray(response?.routes)
+        ? response.routes
+        : []
+  const routes = rawRoutes.map((route: any) => ({
+    ...route,
+    type: route.type ?? route.route_type,
+    last_updated: route.last_updated ?? response?.timestamp ?? response?.data?.timestamp,
+  }))
 
   return (
     <SNMPModuleShell module="routing" title="Routing Monitoring" showMonitoringControls={true}>

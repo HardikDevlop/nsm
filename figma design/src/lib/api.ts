@@ -116,7 +116,7 @@ export function invalidateNmsGetCache() {
 function friendlyApiMessage(status: number, detail: string): string {
   const normalized = detail.trim()
   if (status === 401)
-    return "Invalid email or password, or your session has expired."
+    return "Your session has expired or the credentials are invalid. Please sign in again."
   if (status === 403)
     return "You do not have permission to perform this action."
   if (status === 400) {
@@ -131,8 +131,10 @@ function friendlyApiMessage(status: number, detail: string): string {
   if (status === 404) return "Device not found."
   if (status === 409) return "This item is already being processed."
   if (status === 422) return "The submitted data is incomplete or invalid."
+  if (status === 502 || status === 503 || status === 504)
+    return "The service is temporarily unavailable. Please retry in a moment."
   if (status >= 500)
-    return "Something went wrong on the server. Please try again."
+    return "An unexpected server error occurred. Please try again."
   return normalized || "Request failed."
 }
 
@@ -185,6 +187,23 @@ export async function login(email: string, password: string): Promise<string> {
 }
 
 /** Clear auth state. */
+export async function serverLogout(): Promise<void> {
+  // Capture the token before local logout clears it. Using requestJson here
+  // raced with apiLogout() and left the server-side session active.
+  const token = authToken || window.localStorage.getItem("nms_access_token")
+  try {
+    if (token) {
+      await fetch(buildUrl("/auth/logout"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        keepalive: true,
+      })
+    }
+  } finally {
+    logout()
+  }
+}
+
 export function logout() {
   authToken = null
   authPromise = null
@@ -253,11 +272,14 @@ export async function requestJson<T>(
         try {
           const body = (await response.json()) as {
             detail?: string | { message?: string }
+            error?: { code?: string; message?: string; detail?: string; suggestion?: string; request_id?: string }
           }
-          detail =
-            typeof body.detail === "string"
-              ? body.detail
-              : (body.detail?.message ?? "")
+          if (body.error) {
+            const safe = [body.error.message, body.error.detail, body.error.suggestion].filter(Boolean).join(' ')
+            detail = safe || body.error.code || ''
+          } else {
+            detail = typeof body.detail === "string" ? body.detail : (body.detail?.message ?? "")
+          }
         } catch {
           /* non-JSON error */
         }
@@ -669,6 +691,7 @@ export interface DeviceTypeRecord {
   name: string
   description?: string | null
   created_at: string
+  max_concurrent_sessions?: number
 }
 
 export interface DeviceMetricRecord {
@@ -1772,6 +1795,8 @@ export async function clearAllAlerts(): Promise<{ cleared: number }> {
 
 // ── RBAC: Auth / Me ──
 
+export type UserStatus = "active" | "disabled" | "suspended"
+
 export interface UserRecord {
   id: number
   uuid: string
@@ -1779,6 +1804,7 @@ export interface UserRecord {
   email: string
   role_id: number | null
   role_name: string | null
+  authority_level?: number | null
   permissions: string[]
   status: string
   created_at: string
@@ -1793,6 +1819,9 @@ export async function getMe(): Promise<UserRecord> {
 export interface RoleRecord {
   id: number
   role_name: string
+  authority_level?: number | null
+  is_system_role?: boolean
+  is_assignable?: boolean
 }
 
 export interface PermissionRecord {
@@ -1814,13 +1843,14 @@ export async function listRoles(): Promise<RoleRecord[]> {
 
 export async function createRole(data: {
   role_name: string
+  authority_level?: number
 }): Promise<RoleRecord> {
   return requestJson("/roles", { method: "POST", body: JSON.stringify(data) })
 }
 
 export async function updateRole(
   id: number,
-  data: { role_name?: string },
+  data: { role_name?: string; authority_level?: number },
 ): Promise<RoleRecord> {
   return requestJson(`/roles/${id}`, {
     method: "PATCH",
@@ -1861,6 +1891,61 @@ export async function listPermissions(
 
 // ── RBAC: Users ──
 
+export interface UserSiteAssignments {
+  site_ids: number[]
+}
+
+export interface UserSessionRecord {
+  session_id: string
+  created_at: string
+  last_seen_at: string
+  expires_at: string
+  revoked_at: string | null
+  revoke_reason: string | null
+  ip_address: string | null
+  user_agent: string | null
+  active: boolean
+}
+
+export interface UserActivityResponse {
+  items: Array<Record<string, unknown>>
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function listUserSessions(id: number): Promise<UserSessionRecord[]> {
+  return requestJson<UserSessionRecord[]>(`/users/${id}/sessions`)
+}
+
+export async function revokeUserSession(id: number, sessionId: string): Promise<{ detail: string }> {
+  return requestJson(`/users/${id}/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" })
+}
+
+export async function revokeAllUserSessions(id: number): Promise<{ revoked: number }> {
+  return requestJson(`/users/${id}/sessions/revoke-all`, { method: "POST" })
+}
+
+export async function listUserActivity(id: number, params: Record<string, string | number | undefined> = {}): Promise<UserActivityResponse> {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)) })
+  return requestJson<UserActivityResponse>(`/users/${id}/activity${query.toString() ? `?${query}` : ""}`)
+}
+
+export async function getUserSites(id: number): Promise<UserSiteAssignments> {
+  return requestJson<UserSiteAssignments>(`/users/${id}/sites`)
+}
+
+export async function replaceUserSites(
+  id: number,
+  site_ids: number[],
+): Promise<UserSiteAssignments> {
+  return requestJson<UserSiteAssignments>(`/users/${id}/sites`, {
+    method: "PUT",
+    body: JSON.stringify({ site_ids }),
+  })
+}
+
 export async function listUsers(): Promise<UserRecord[]> {
   return requestJson<UserRecord[]>("/users")
 }
@@ -1888,6 +1973,17 @@ export async function updateUser(
   return requestJson(`/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(data),
+  })
+}
+
+export async function updateUserStatus(
+  id: number,
+  status: UserStatus,
+  suspendedUntil?: string,
+): Promise<UserRecord> {
+  return requestJson(`/users/${id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status, ...(suspendedUntil ? { suspended_until: new Date(suspendedUntil).toISOString() } : {}) }),
   })
 }
 
@@ -3821,13 +3917,71 @@ export interface AuditLogRecord {
   action: string
   resource_name: string
   timestamp: string
+  source_ip?: string | null
+  user_agent?: string | null
+  outcome?: string | null
 }
 
+export interface AuditLogFilters {
+  user_id?: number
+  action?: string
+  outcome?: string
+  resource_type?: string
+  resource_id?: number
+  source_ip?: string
+  start_date?: string
+  end_date?: string
+  limit?: number
+  offset?: number
+}
+
+export interface AuditLogPage {
+  items: AuditLogRecord[]
+  total: number
+}
+
+export function listAuditLogs(): Promise<AuditLogRecord[]>
+export function listAuditLogs(userId: number): Promise<AuditLogRecord[]>
+export function listAuditLogs(params: AuditLogFilters & { include_total: true }): Promise<AuditLogPage>
 export async function listAuditLogs(
-  userId?: number,
-): Promise<AuditLogRecord[]> {
-  const query = userId == null ? "" : `?user_id=${userId}`
-  return requestJson<AuditLogRecord[]>(`/audit-logs${query}`)
+  params?: AuditLogFilters | number,
+): Promise<AuditLogRecord[] | AuditLogPage> {
+  // Preserve the original listAuditLogs() and listAuditLogs(userId) signatures.
+  const filters: AuditLogFilters = typeof params === "number"
+    ? { user_id: params }
+    : (params ?? {})
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== null && value !== "")
+      query.set(key, String(value))
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : ""
+  return requestJson<AuditLogRecord[] | AuditLogPage>(`/audit-logs${suffix}`)
+}
+
+export interface AuditLogSummary {
+  total_activities: number
+  successful_actions: number
+  failed_actions: number
+  login_success: number
+  login_failed: number
+  account_locked: number
+  user_status_changes: number
+}
+
+export interface AuditLogSummaryParams {
+  start_date?: string
+  end_date?: string
+}
+
+export async function getAuditLogSummary(
+  params: AuditLogSummaryParams = {},
+): Promise<AuditLogSummary> {
+  const query = new URLSearchParams()
+  if (params.start_date !== undefined) query.set("start_date", params.start_date)
+  if (params.end_date !== undefined) query.set("end_date", params.end_date)
+  const suffix = query.toString() ? `?${query.toString()}` : ""
+  return requestJson<AuditLogSummary>(`/audit-logs/summary${suffix}`)
 }
 
 export async function recordPageView(page: string): Promise<void> {

@@ -420,7 +420,12 @@ export default function ReportManagement() {
   setExporting(format)
 
   try {
-    const stamp = `${summary.period_start.slice(0, 10)}_to_${summary.period_end.slice(0, 10)}`
+    // Always export from a fresh response for the currently selected filters.
+    // This prevents an older all-devices summary from being downloaded when
+    // the user changes the device dropdown before clicking Export.
+    const exportSummary = await getReportManagement(filters)
+    const sourceSummary = exportSummary
+    const stamp = `${sourceSummary.period_start.slice(0, 10)}_to_${sourceSummary.period_end.slice(0, 10)}`
 
     const displayDate = (value?: string | null) =>
       value ? new Date(value).toLocaleString('en-IN') : ''
@@ -429,7 +434,7 @@ export default function ReportManagement() {
     // SAFE FLAT EXPORT DATA
     // --------------------------------------------------
 
-    const flatRows = summary.records
+    const flatRows = sourceSummary.records
       .map((r) => ({
         'Device Name': r.hostname ?? '',
 
@@ -716,7 +721,7 @@ export default function ReportManagement() {
     const summaryRows = [
       {
         Field: 'Report Period',
-        Value: `${summary.period_start} to ${summary.period_end}`,
+        Value: `${sourceSummary.period_start} to ${sourceSummary.period_end}`,
       },
       {
         Field: 'Generated At',
@@ -740,54 +745,54 @@ export default function ReportManagement() {
       },
       {
         Field: 'Total Devices',
-        Value: summary.total_devices ?? 0,
+        Value: sourceSummary.total_devices ?? 0,
       },
       {
         Field: 'Up Devices',
-        Value: summary.up_devices ?? 0,
+        Value: sourceSummary.up_devices ?? 0,
       },
       {
         Field: 'Down Devices',
-        Value: summary.down_devices ?? 0,
+        Value: sourceSummary.down_devices ?? 0,
       },
       {
         Field: 'Unreachable Devices',
-        Value: summary.unreachable_devices ?? 0,
+        Value: sourceSummary.unreachable_devices ?? 0,
       },
       {
         Field: 'Average Availability',
-        Value: summary.availability_pct ?? '',
+        Value: sourceSummary.availability_pct ?? '',
       },
       {
         Field: 'Total Alerts',
-        Value: summary.total_alerts ?? 0,
+        Value: sourceSummary.total_alerts ?? 0,
       },
       {
         Field: 'Critical Alerts',
-        Value: summary.critical_alerts ?? 0,
+        Value: sourceSummary.critical_alerts ?? 0,
       },
       {
         Field: 'Alert MTTR',
         Value:
-          summary.alert_mttr_seconds != null
-            ? formatDuration(summary.alert_mttr_seconds)
+          sourceSummary.alert_mttr_seconds != null
+            ? formatDuration(sourceSummary.alert_mttr_seconds)
             : '',
       },
       {
         Field: 'SLA Met',
-        Value: summary.sla_met_devices ?? 0,
+        Value: sourceSummary.sla_met_devices ?? 0,
       },
       {
         Field: 'SLA Breached',
-        Value: summary.sla_breached_devices ?? 0,
+        Value: sourceSummary.sla_breached_devices ?? 0,
       },
       {
         Field: 'SLA Unknown',
-        Value: summary.sla_unknown_devices ?? 0,
+        Value: sourceSummary.sla_unknown_devices ?? 0,
       },
       {
         Field: 'Inventory Assets',
-        Value: summary.inventory_total_assets ?? 0,
+        Value: sourceSummary.inventory_total_assets ?? 0,
       },
     ].map((row) => ({
       ...row,

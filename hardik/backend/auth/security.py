@@ -18,10 +18,13 @@ def verify_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
 
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, jti: str | None = None) -> str:
     settings = get_settings()
     expires_at = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
-    return jwt.encode({"sub": subject, "exp": expires_at}, settings.secret_key, algorithm=ALGORITHM)
+    claims = {"sub": subject, "exp": expires_at}
+    if jti:
+        claims["jti"] = jti
+    return jwt.encode(claims, settings.secret_key, algorithm=ALGORITHM)
 
 
 def decode_access_token(token: str) -> str | None:
@@ -32,3 +35,11 @@ def decode_access_token(token: str) -> str | None:
         return None
     subject = payload.get("sub")
     return subject if isinstance(subject, str) else None
+
+
+def decode_access_token_claims(token: str) -> dict | None:
+    settings = get_settings()
+    try:
+        return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+    except JWTError:
+        return None

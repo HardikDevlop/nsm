@@ -81,10 +81,10 @@ export default function SNMPDynamicTable<T extends Record<string, any>>({
         onChange={event => { setSearch(event.target.value); setPage(1) }}
         placeholder={searchPlaceholder}
         className="w-full glass-bright rounded px-3 py-2 font-mono text-xs"
-        style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)' }}
+        style={{ border: '1px solid rgba(0,212,255,0.25)', color: 'var(--t-text, #c8d8ee)', background: 'var(--t-input-bg, rgba(8,25,55,0.7))' }}
       />
       {filtered.length === 0 ? (
-        <div className="font-mono text-xs p-6 text-center" style={{ color: '#8899bb' }}>{emptyMessage}</div>
+        <div className="font-mono text-xs p-6 text-center" style={{ color: 'var(--t-text-secondary, #8899bb)' }}>{emptyMessage}</div>
       ) : (
         <>
           <div className="overflow-x-auto">
@@ -93,7 +93,7 @@ export default function SNMPDynamicTable<T extends Record<string, any>>({
                 <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                   {columns.map(col => (
                     <th key={col.key} className="text-left px-4 py-2.5 font-mono text-xs sticky top-0"
-                      style={{ color: '#8899bb', background: 'rgba(8,25,55,0.95)' }}>
+                      style={{ color: 'var(--t-text-secondary, #8899bb)', background: 'var(--t-table-header, rgba(8,25,55,0.95))' }}>
                       {col.sortable ? (
                         <button type="button" onClick={() => toggleSort(col.key)} className="flex items-center gap-1">
                           {col.label}
@@ -108,7 +108,7 @@ export default function SNMPDynamicTable<T extends Record<string, any>>({
                 {visible.map((row, index) => (
                   <tr key={String(row.id ?? row.interface_id ?? index)} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
                     {columns.map(col => (
-                      <td key={col.key} className="px-4 py-3 font-mono text-xs" style={{ color: '#c8d8ee' }}>
+                      <td key={col.key} className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>
                         {col.render ? col.render(row) : fallbackValue(row, col.key)}
                       </td>
                     ))}
@@ -117,7 +117,7 @@ export default function SNMPDynamicTable<T extends Record<string, any>>({
               </tbody>
             </table>
           </div>
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-xs" style={{ color: '#8899bb' }}>
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-xs" style={{ color: 'var(--t-text-secondary, #8899bb)' }}>
             <span>Showing {startItem}-{endItem} of {filtered.length}</span>
             <div className="flex items-center gap-2">
               <select
@@ -125,7 +125,7 @@ export default function SNMPDynamicTable<T extends Record<string, any>>({
                 onChange={() => undefined}
                 disabled
                 className="px-3 py-1 rounded opacity-70"
-                style={{ border: '1px solid rgba(0,212,255,0.2)', background: 'rgba(8,25,55,0.7)', color: '#c8d8ee' }}
+                style={{ border: '1px solid rgba(0,212,255,0.2)', background: 'var(--t-input-bg, rgba(8,25,55,0.7))', color: 'var(--t-text, #c8d8ee)' }}
               >
                 {[25, 50, 75, 100].map(size => (
                   <option key={size} value={size}>{size} per page</option>

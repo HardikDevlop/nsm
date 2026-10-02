@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from backend.database.session import get_db
 from backend.dependencies import require_permission
+from backend.auth.authorization import can_access_site
 from backend.services.device_health import derive_device_health
 from backend.models import Device
 from backend.models.snmp import (
@@ -35,12 +36,12 @@ class MonitoringDataRequest(BaseModel):
     history_hours: int = 1  # Hours of history to include
 
 
-def _get_device_or_404(device_id: int, db: Session) -> Device:
+def _get_device_or_404(device_id: int, db: Session, current_user: Any | None = None) -> Device:
     device = db.query(Device).filter(
         Device.id == device_id,
         Device.deleted_at.is_(None),
     ).first()
-    if not device:
+    if not device or (current_user is not None and not can_access_site(current_user, device.site_id)):
         raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
     return device
 
@@ -49,7 +50,7 @@ def _get_device_or_404(device_id: int, db: Session) -> Device:
 def get_monitoring_data(
     request: MonitoringDataRequest = Body(...),
     db: Session = Depends(get_db),
-    _: Any = Depends(require_permission("devices:read")),
+    current_user: Any = Depends(require_permission("devices:read")),
 ) -> dict[str, Any]:
     """
     Get latest monitoring data for a device from database (NO live polling).
@@ -71,7 +72,7 @@ def get_monitoring_data(
     - Capabilities (which modules are supported)
     - Optional: Historical data (if include_history=true)
     """
-    device = _get_device_or_404(request.device_id, db)
+    device = _get_device_or_404(request.device_id, db, current_user)
     
     result = {
         "device_id": request.device_id,

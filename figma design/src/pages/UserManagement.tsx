@@ -1,21 +1,40 @@
+import Swal from 'sweetalert2'
 import { useEffect, useState, useCallback } from 'react'
 import GlassCard from '../components/GlassCard'
 import { PermissionGuard } from '../components/PermissionGuard'
+import { useAuth } from '../components/AuthContext'
 import TablePagination from '../components/TablePagination'
 import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
-  listUsers, createUser, updateUser, deleteUser, assignUserRole,
-  listRoles,
-  type UserRecord, type RoleRecord,
+  listUsers, createUser, updateUser, deleteUser, assignUserRole, updateUserStatus,
+  listRoles, listSites, getUserSites, replaceUserSites,
+  type UserRecord, type RoleRecord, type UserStatus,
 } from '../lib/api'
 
 /* ── helpers ────────────────────────────────────────────────────────────── */
 const STATUS_COLORS: Record<string, { text: string; dot: string }> = {
   active:   { text: '#00ff88', dot: 'online'  },
-  inactive: { text: '#ff3366', dot: 'offline' },
   disabled: { text: '#f59e0b', dot: 'offline' },
-  suspended: { text: '#a855f7', dot: 'offline' },
+  blocked:  { text: '#ff3366', dot: 'offline' },
+  locked:   { text: '#a855f7', dot: 'offline' },
+}
+
+const STATUS_LABELS: Record<UserStatus, string> = {
+  active: 'Active',
+  disabled: 'Disabled',
+  suspended: 'Suspended',
+  
+}
+
+function targetAuthority(user: UserRecord): number | null {
+  const level = (user as UserRecord & { authority_level?: number | null }).authority_level
+  return typeof level === 'number' && Number.isFinite(level) ? level : null
+}
+
+function roleAuthority(role: RoleRecord): number | null {
+  const level = (role as RoleRecord & { authority_level?: number | null }).authority_level
+  return typeof level === 'number' && Number.isFinite(level) ? level : null
 }
 
 function Avatar({ name }: { name: string }) {
@@ -35,6 +54,13 @@ export default function UserManagement() {
   const [showModal,   setShowModal]   = useState(false)
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null)
   const [modalSaving, setModalSaving] = useState(false)
+  const [siteModalUser, setSiteModalUser] = useState<UserRecord | null>(null)
+  const [sites, setSites] = useState<Array<{ id: number; name: string }>>([])
+  const [assignedSiteIds, setAssignedSiteIds] = useState<Set<number>>(new Set())
+  const [sitesLoading, setSitesLoading] = useState(false)
+  const [sitesSaving, setSitesSaving] = useState(false)
+  const [sitesError, setSitesError] = useState('')
+  const { user: currentUser, authorityLevel, isSuperAdmin, canManageAuthority } = useAuth()
 
   /* form state */
   const [fName,     setFName]     = useState('')
@@ -55,7 +81,11 @@ export default function UserManagement() {
     setLoading(false)
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+    const timer = window.setInterval(() => { void load() }, 10000)
+    return () => window.clearInterval(timer)
+  }, [load])
 
   /* ── open modal ──────────────────────────────────────────────────────── */
   function openCreate() {
@@ -87,7 +117,6 @@ export default function UserManagement() {
         const payload: Parameters<typeof updateUser>[1] = {
           name:    fName.trim(),
           email:   fEmail.trim(),
-          status:  fStatus,
           role_id: fRoleId,
         }
         if (fPassword) payload.password = fPassword
@@ -128,12 +157,38 @@ export default function UserManagement() {
     }
   }
 
-  /* ── toggle status ────────────────────────────────────────────────────── */
-  async function handleToggleStatus(user: UserRecord) {
-    const next = user.status === 'active' ? 'inactive' : 'active'
+  /* ── status actions ───────────────────────────────────────────────────── */
+  async function handleStatusChange(user: UserRecord, status: UserStatus) {
+    if (status === user.status && status !== 'suspended') return
+    let suspendedUntil: string | undefined
+    if (status === 'suspended') {
+      const dates = await Swal.fire({
+        title: 'Suspension period',
+        html: '<label>From <input id="suspend-from" type="datetime-local" class="swal2-input"></label><label>Until <input id="suspend-until" type="datetime-local" class="swal2-input"></label>',
+        showCancelButton: true,
+        confirmButtonText: 'Continue',
+        preConfirm: () => {
+          const from = (document.getElementById('suspend-from') as HTMLInputElement)?.value
+          const until = (document.getElementById('suspend-until') as HTMLInputElement)?.value
+          if (!from || !until || new Date(until) <= new Date(from)) { Swal.showValidationMessage('Select a valid From and Until time'); return false }
+          return { from, until }
+        },
+      })
+      if (!dates.isConfirmed) return
+      suspendedUntil = dates.value.until
+    }
+    const action = status === 'active' ? 'Activate' : status === 'disabled' ? 'Disable' : 'Suspend'
+    if (status !== 'active') {
+      const ok = await confirmDanger({
+        title: `${action} ${user.name}?`,
+        text: status === 'suspended' ? `Confirm suspension of ${user.name} for the selected date range.` : `This will set the account status to ${STATUS_LABELS[status]}.`,
+        confirmText: action,
+      })
+      if (!ok) return
+    }
     try {
-      await updateUser(user.id, { status: next })
-      toast.info(`${user.name} is now ${next}`)
+      await updateUserStatus(user.id, status, suspendedUntil)
+      toast.info(`${user.name} is now ${STATUS_LABELS[status]}`)
       await load()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Status update failed')
@@ -151,6 +206,12 @@ export default function UserManagement() {
       toast.error(e instanceof Error ? e.message : 'Role assignment failed')
     }
   }
+
+  const assignableRoles = roles.filter(role => {
+    const level = roleAuthority(role)
+    const assignable = (role as RoleRecord & { is_assignable?: boolean }).is_assignable
+    return assignable !== false && level !== null && (isSuperAdmin ? level < 100 : canManageAuthority(level))
+  })
 
   const pagination = useTablePagination(users)
 
@@ -207,7 +268,12 @@ export default function UserManagement() {
             <tbody>
               {pagination.paginatedItems.map(user => {
                 const sc = STATUS_COLORS[user.status] ?? { text: 'var(--t-muted, #8899bb)', dot: 'unknown' }
-                const isProtectedAdmin = user.role_name?.toLowerCase() === 'admin'
+                const targetLevel = targetAuthority(user)
+                const canManage = currentUser?.id !== user.id && (
+                  isSuperAdmin
+                    ? targetLevel !== null && targetLevel < 100
+                    : canManageAuthority(targetLevel)
+                )
                 return (
                   <tr key={user.id} className="transition-colors"
                     style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
@@ -236,7 +302,7 @@ export default function UserManagement() {
 
                     {/* Role — inline change */}
                     <td className="px-4 py-3">
-                      {!isProtectedAdmin && <PermissionGuard permission="users:update"
+                      {canManage && <PermissionGuard permission="users:update"
                         fallback={
                           <span className="font-mono text-xs px-2 py-1 rounded"
                             style={{ background: 'var(--t-accent-alpha)', color: 'var(--t-accent)', border: '1px solid var(--t-accent-border)' }}>
@@ -255,37 +321,43 @@ export default function UserManagement() {
                           onFocus={e  => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                           onBlur={e   => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}>
                           <option value="">No Role</option>
-                          {roles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
+                          {assignableRoles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
                         </select>
                       </PermissionGuard>}
                     </td>
 
-                    {/* Status — click to toggle */}
+                    {/* Status */}
                     <td className="px-4 py-3">
-                      <PermissionGuard permission="users:update"
-                        fallback={
-                          <span className="flex items-center gap-1.5 font-mono text-xs" style={{ color: sc.text }}>
-                            <span className={`status-dot ${sc.dot}`} />{user.status}
-                          </span>
-                        }>
-                        <select
-                          value={user.status}
-                          disabled={isProtectedAdmin}
-                          onChange={e => void updateUser(user.id, { status: e.target.value }).then(load)}
-                          className="rounded-lg px-2 py-1 font-mono text-xs outline-none"
-                          style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: sc.text }}
-                          title={isProtectedAdmin ? 'Administrator status is protected' : 'Change user status'}>
-                          <option value="active">Active</option>
-                          <option value="disabled">Disabled</option>
-                          <option value="suspended">Suspended</option>
-                        </select>
-                      </PermissionGuard>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 font-mono text-xs"
+                          style={{ color: sc.text, background: `${sc.text}1a`, border: `1px solid ${sc.text}55` }}>
+                          <span className={`status-dot ${sc.dot}`} />
+                          {STATUS_LABELS[user.status as UserStatus] ?? user.status}
+                        </span>
+                        {canManage && <PermissionGuard permission="users:update">
+                          <select
+                            value={user.status}
+                            onChange={e => void handleStatusChange(user, e.target.value as UserStatus)}
+                            className="rounded-lg px-2 py-1 font-mono text-xs outline-none"
+                            style={{ background: 'var(--t-border-light, rgba(255,255,255,0.04))', border: '1px solid var(--t-border-alpha)', color: sc.text }}
+                            title="Change user status">
+                            {(Object.keys(STATUS_LABELS) as UserStatus[]).map(status => (
+                              <option key={status} value={status}>{STATUS_LABELS[status]}</option>
+                            ))}
+                          </select>
+                        </PermissionGuard>}
+                        {isSuperAdmin && user.status === 'suspended' && (
+                          <button type="button" onClick={() => void handleStatusChange(user, 'suspended')} className="rounded px-2 py-1 font-mono text-[10px]" style={{ color: '#a855f7', border: '1px solid #a855f755' }} title="Apply a new suspension period">
+                            Re-suspend
+                          </button>
+                        )}
+                      </div>
                     </td>
 
                     {/* Actions */}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        {!isProtectedAdmin && <PermissionGuard permission="users:update">
+                        {canManage && <PermissionGuard permission="users:update">
                           <button onClick={() => openEdit(user)} title="Edit user"
                             className="p-1.5 rounded transition-colors"
                             style={{ color: 'var(--t-muted)' }}
@@ -297,7 +369,14 @@ export default function UserManagement() {
                             </svg>
                           </button>
                         </PermissionGuard>}
-                        {!isProtectedAdmin && <PermissionGuard permission="users:delete">
+                        {canManage && <PermissionGuard permission="users:update">
+                          <button onClick={() => void openSiteModal(user)} title="Manage sites"
+                            className="px-2 py-1 rounded font-mono text-[10px] transition-colors"
+                            style={{ color: 'var(--t-accent)', border: '1px solid var(--t-accent-border)', background: 'var(--t-accent-alpha)' }}>
+                            Sites
+                          </button>
+                        </PermissionGuard>}
+                        {canManage && <PermissionGuard permission="users:delete">
                           <button onClick={() => void handleDelete(user)} title="Delete user"
                             className="p-1.5 rounded transition-colors"
                             style={{ color: 'var(--t-muted)' }}
@@ -334,6 +413,29 @@ export default function UserManagement() {
           />
         )}
       </GlassCard>
+
+      {siteModalUser && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => !sitesSaving && setSiteModalUser(null)}>
+          <div className="glass rounded-xl p-6 w-full max-w-md shadow-2xl" style={{ border: '1px solid rgba(0,212,255,0.25)' }} onClick={e => e.stopPropagation()}>
+            <h3 className="font-display font-bold text-lg mb-1" style={{ color: 'var(--t-accent)' }}>Manage Sites</h3>
+            <p className="font-mono text-xs mb-4" style={{ color: 'var(--t-muted)' }}>Assign sites for {siteModalUser.name}. Empty selection removes all assignments.</p>
+            {sitesLoading ? <div className="py-8 text-center font-mono text-xs" style={{ color: 'var(--t-muted)' }}>Loading sites…</div> : sitesError ? <div className="rounded-lg p-3 font-mono text-xs" style={{ color: '#ff3366', background: 'rgba(255,51,102,.08)', border: '1px solid rgba(255,51,102,.3)' }}>{sitesError}</div> : (
+              <div className="max-h-64 overflow-y-auto space-y-2">
+                {sites.length === 0 ? <div className="py-6 text-center font-mono text-xs" style={{ color: 'var(--t-muted)' }}>No accessible sites available.</div> : sites.map(site => (
+                  <label key={site.id} className="flex items-center gap-3 rounded-lg px-3 py-2 cursor-pointer" style={{ background: 'var(--t-border-light)', border: '1px solid var(--t-border-alpha)' }}>
+                    <input type="checkbox" checked={assignedSiteIds.has(site.id)} onChange={() => setAssignedSiteIds(prev => { const next = new Set(prev); next.has(site.id) ? next.delete(site.id) : next.add(site.id); return next })} />
+                    <span className="font-mono text-sm" style={{ color: 'var(--t-text)' }}>{site.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2 justify-end mt-6">
+              <button onClick={() => setSiteModalUser(null)} disabled={sitesSaving} className="rounded-lg px-4 py-2.5 font-mono text-xs" style={{ background: 'var(--t-border-light)', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>Cancel</button>
+              <button onClick={() => void saveSiteAssignments()} disabled={sitesLoading || sitesSaving || !!sitesError} className="rounded-lg px-5 py-2.5 font-mono text-xs font-semibold disabled:opacity-50" style={{ background: 'var(--t-accent)', color: '#fff' }}>{sitesSaving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Create / Edit modal ──────────────────────────────────────────── */}
       {showModal && (
@@ -396,10 +498,11 @@ export default function UserManagement() {
                     onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                     onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}>
                     <option value="">No Role</option>
-                    {roles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
+                    {assignableRoles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
                   </select>
                 </FormField>
 
+                {!editingUser && (
                 <FormField label="STATUS">
                   <select value={fStatus} onChange={e => setFStatus(e.target.value)}
                     className="w-full rounded-lg px-3 py-2.5 font-mono text-sm outline-none cursor-pointer"
@@ -407,9 +510,10 @@ export default function UserManagement() {
                     onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
                     onBlur={e  => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}>
                     <option value="active">Active</option>
-                    <option value="inactive">Inactive</option><option value="disabled">Disabled</option><option value="suspended">Suspended</option>
+                    <option value="disabled">Disabled</option>
                   </select>
                 </FormField>
+                )}
               </div>
             </div>
 

@@ -1,9 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import csv
 import io
+import ipaddress
 from pathlib import Path
 import logging
+import uuid
 import os
 import signal
 import subprocess
@@ -12,17 +14,19 @@ from threading import Lock
 from types import SimpleNamespace
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import case, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, load_only
 
-from backend.auth.security import create_access_token, hash_password, verify_password
+from backend.auth.security import create_access_token, decode_access_token_claims, hash_password, verify_password
+from backend.auth.authorization import can_access_site, can_assign_role, can_create_role, can_manage_permission_definition, can_modify_role, can_manage_user, can_view_audit_actor, can_view_security_audit, get_accessible_site_ids, get_authority_level, is_super_admin
 from backend.database.session import get_db
 from backend.database.migrations import get_migration_status
-from backend.dependencies import get_current_user, require_permission, require_any_permission
+from backend.dependencies import bearer_scheme, get_current_user, require_permission, require_any_permission
 from backend.models import (
     Alert,
     AuditLog,
@@ -44,6 +48,7 @@ from backend.models import (
     Site,
     Threshold,
     User,
+    UserSession,
     Vendor,
 )
 from backend.repositories.crud import CRUDRouterMixin
@@ -117,12 +122,14 @@ from backend.schemas.nms import (
     ThresholdUpdate,
     Token,
     UserCreate,
-    UserRead,
+    UserRead, UserSessionRead,
+    UserStatusUpdate,
     UserUpdate,
     VendorCreate,
     VendorRead,
     VendorUpdate,
 )
+from backend.services.audit import record_audit_event
 from backend.services.discovery import discover_network
 from backend.services.monitoring import run_monitoring_check
 from backend.services.device_health import derive_device_health
@@ -171,6 +178,37 @@ def audit(db: Session, user_id: int | None, action: str, resource_name: str, out
     db.commit()
 
 
+def _client_ip(request: Request) -> str | None:
+    peer = request.client.host if request.client else None
+    trusted = get_settings().trusted_proxies
+    if peer and peer in trusted:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            candidate = forwarded.split(",", 1)[0].strip()
+            try:
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                pass
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            try:
+                ipaddress.ip_address(real_ip.strip())
+                return real_ip.strip()
+            except ValueError:
+                pass
+    return peer
+
+
+def _audit_request_context(request: Request) -> dict[str, str | None]:
+    return {
+        "request_method": request.method,
+        "request_path": request.url.path,
+        "source_ip": _client_ip(request),
+        "user_agent": request.headers.get("user-agent"),
+    }
+
+
 def _user_read(user: User) -> UserRead:
     role_name = user.role.role_name if user.role else None
     permissions = [perm.code for perm in user.role.permissions] if user.role else []
@@ -181,9 +219,11 @@ def _user_read(user: User) -> UserRead:
         email=user.email,
         role_id=user.role_id,
         role_name=role_name,
+        authority_level=user.role.authority_level if user.role else 0,
         permissions=permissions,
         status=user.status,
         created_at=user.created_at,
+        max_concurrent_sessions=user.max_concurrent_sessions,
     )
 
 
@@ -204,16 +244,81 @@ def health(db: Session = Depends(get_db)) -> dict[str, object]:
 
 
 @router.post("/auth/login", response_model=Token)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> Token:
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> Token:
     user = db.query(User).filter(User.email == payload.email).first()
-    if not user or not verify_password(payload.password, user.password_hash):
-        audit(db, user.id if user else None, "LOGIN_FAILED", f"auth:{payload.email}", outcome="failure")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if user is None:
+        record_audit_event(db, action="LOGIN_FAILED", resource_type="user", outcome="failure", failure_reason="invalid_credentials", **_audit_request_context(request))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if user.status == "locked":
+        locked_until = user.locked_until
+        if locked_until is not None and locked_until.tzinfo is not None: locked_until = locked_until.replace(tzinfo=None)
+        if locked_until is not None and locked_until > now:
+            record_audit_event(db, actor=user, action="LOGIN_FAILED", resource_type="user", resource_id=user.id, target_user_id=user.id, outcome="failure", failure_reason="account_unavailable", **_audit_request_context(request))
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        user.status, user.failed_login_attempts, user.locked_until = "active", 0, None
+        db.commit()
     if user.status != "active":
-        audit(db, user.id, "LOGIN_BLOCKED", f"auth:{user.email}", outcome="failure")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is not active")
-    audit(db, user.id, "LOGIN_SUCCESS", f"auth:{user.email}")
-    return Token(access_token=create_access_token(user.email))
+        record_audit_event(db, actor=user, action="LOGIN_FAILED", resource_type="user", resource_id=user.id, target_user_id=user.id, outcome="failure", failure_reason="account_unavailable", **_audit_request_context(request))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if not verify_password(payload.password, user.password_hash):
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= 5:
+            user.status, user.locked_until = "locked", now + timedelta(minutes=15)
+        db.commit()
+        record_audit_event(db, actor=user, action="LOGIN_FAILED", resource_type="user", resource_id=user.id, target_user_id=user.id, outcome="failure", failure_reason="invalid_credentials", **_audit_request_context(request))
+        if user.status == "locked": record_audit_event(db, actor=user, action="ACCOUNT_LOCKED", resource_type="user", resource_id=user.id, target_user_id=user.id, outcome="failure", failure_reason="five_failed_attempts", **_audit_request_context(request))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    # Expired sessions must never consume a concurrent-session slot.
+    db.query(UserSession).filter(
+        UserSession.user_id == user.id,
+        UserSession.revoked_at.is_(None),
+        UserSession.expires_at <= now,
+    ).update({"revoked_at": now, "revoke_reason": "expired"}, synchronize_session=False)
+    # If the same browser reconnects after a dropped logout request, replace
+    # its old session instead of locking the user out at the session limit.
+    client_ip = request.client.host if request.client else None
+    client_agent = request.headers.get("user-agent")
+    if client_ip and client_agent:
+        db.query(UserSession).filter(
+            UserSession.user_id == user.id,
+            UserSession.revoked_at.is_(None),
+            UserSession.ip_address == client_ip,
+            UserSession.user_agent == client_agent,
+        ).update({"revoked_at": now, "revoke_reason": "replaced_login"}, synchronize_session=False)
+    active = db.query(UserSession).filter(UserSession.user_id == user.id, UserSession.revoked_at.is_(None), UserSession.expires_at > now).count()
+    # The protected Super Admin account always has three concurrent slots,
+    # including accounts created before the session-limit migration.
+    if is_super_admin(user):
+        user.max_concurrent_sessions = 3
+        limit = 3
+    else:
+        limit = max(1, min(10, user.max_concurrent_sessions or 1))
+    # Super Admin is never blocked by the concurrent-session guard.
+    if not is_super_admin(user) and active >= limit:
+        record_audit_event(db, actor=user, action="SESSION_LIMIT_REACHED", resource_type="user", resource_id=user.id, target_user_id=user.id, outcome="failure", failure_reason="maximum_active_sessions", **_audit_request_context(request))
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Maximum active sessions reached.")
+    user.failed_login_attempts, user.locked_until, user.last_login_at = 0, None, datetime.now(timezone.utc)
+    session_id = uuid.uuid4().hex
+    expires = now + timedelta(minutes=get_settings().access_token_expire_minutes)
+    db.add(UserSession(session_id=session_id, user_id=user.id, created_at=now, last_seen_at=now, expires_at=expires, ip_address=request.client.host if request.client else None, user_agent=request.headers.get("user-agent"), login_method="password"))
+    db.commit()
+    record_audit_event(db, actor=user, action="LOGIN_SUCCESS", resource_type="user", resource_id=user.id, target_user_id=user.id, outcome="success", metadata={"session_id": session_id}, **_audit_request_context(request))
+    return Token(access_token=create_access_token(user.email, jti=session_id))
+
+
+@router.post("/auth/logout")
+def logout(credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme), current_user: User = Depends(get_current_user), db: Session = Depends(get_db), request: Request = None):
+    claims = decode_access_token_claims(credentials.credentials) if credentials else None
+    session_id = claims.get("jti") if claims else None
+    if session_id:
+        session = db.query(UserSession).filter(UserSession.session_id == session_id, UserSession.user_id == current_user.id).first()
+        if session and session.revoked_at is None:
+            session.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            session.revoke_reason = "logout"
+            db.commit()
+            record_audit_event(db, actor=current_user, action="LOGOUT", resource_type="user", resource_id=current_user.id, target_user_id=current_user.id, outcome="success", metadata={"session_id": session_id}, **_audit_request_context(request))
+    return {"detail": "Logged out"}
 
 
 @router.get("/auth/me", response_model=UserRead)
@@ -245,6 +350,15 @@ from backend.services.report_schedule import sync_report_schedule, remove_report
 from backend.services.report_csv import generate_report_csv
 from backend.services.report_schedule import REPORT_STORAGE_DIR
 
+def _validate_report_scope(current_user: User, db: Session, device_id: int | None, site_id: int | None) -> None:
+    if site_id is not None and not can_access_site(current_user, site_id):
+        raise HTTPException(status_code=404, detail="Report scope not found")
+    if device_id is not None:
+        device = db.query(Device).filter(Device.id == device_id, Device.deleted_at.is_(None)).first()
+        if device is None or not can_access_site(current_user, device.site_id):
+            raise HTTPException(status_code=404, detail="Report scope not found")
+
+
 def _run_report_management(db: Session, filters: ReportManagementFilters):
     try:
         return _build_report_rows(db, filters)
@@ -263,8 +377,9 @@ def get_report_management(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("reports:read")),
+    current_user: User = Depends(require_permission("reports:read")),
 ):
+    _validate_report_scope(current_user, db, device_id, site_id)
     filters = ReportManagementFilters(
         device_type_id=device_type_id,
         device_id=device_id,
@@ -346,11 +461,17 @@ def get_report_management_email_schedule(
 
 
 @router.get("/reports/management/options")
-def get_report_management_options(db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
-    devices = db.query(Device).filter(Device.deleted_at.is_(None)).order_by(Device.hostname.asc()).all()
+def get_report_management_options(db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:read"))):
+    accessible_site_ids = get_accessible_site_ids(current_user)
+    devices_query = db.query(Device).filter(Device.deleted_at.is_(None))
+    sites_query = db.query(Site).filter(Site.deleted_at.is_(None))
+    if accessible_site_ids is not None:
+        devices_query = devices_query.filter(Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False)
+        sites_query = sites_query.filter(Site.id.in_(accessible_site_ids) if accessible_site_ids else False)
+    devices = devices_query.order_by(Device.hostname.asc()).all()
     return {
         "device_types": [ReportManagementOptionsItem(id=row.id, name=row.name) for row in db.query(DeviceType).filter(DeviceType.deleted_at.is_(None)).order_by(DeviceType.name.asc()).all()],
-        "sites": [ReportManagementOptionsItem(id=row.id, name=row.name) for row in db.query(Site).filter(Site.deleted_at.is_(None)).order_by(Site.name.asc()).all()],
+        "sites": [ReportManagementOptionsItem(id=row.id, name=row.name) for row in sites_query.order_by(Site.name.asc()).all()],
         "devices": [ReportManagementDeviceOption(id=d.id, hostname=d.hostname, ip_address=d.ip_address, device_type_id=d.device_type_id, site_id=d.site_id, status=d.status) for d in devices],
     }
 
@@ -376,8 +497,9 @@ def export_report_management(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("reports:read")),
+    current_user: User = Depends(require_permission("reports:read")),
 ):
+    _validate_report_scope(current_user, db, device_id, site_id)
     filters = ReportManagementFilters(
         device_type_id=device_type_id,
         device_id=device_id,
@@ -393,14 +515,38 @@ def export_report_management(
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export format on backend")
 
 
+def _is_protected_super_admin_role(role: Role | None) -> bool:
+    return bool(role and role.role_name == "Super Admin" and role.authority_level == 100 and role.is_system_role and not role.is_assignable)
+
+
+def _is_protected_super_admin_user(user: User | None) -> bool:
+    return bool(user and _is_protected_super_admin_role(user.role))
+
+
+def _reject_protected_role(role: Role | None) -> None:
+    if _is_protected_super_admin_role(role):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+
+def _reject_protected_user(user: User | None) -> None:
+    if _is_protected_super_admin_user(user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+
 # ---------------------------------------------------------------- Roles
 @router.get("/roles", response_model=list[RoleRead])
 def list_roles(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("roles:read"))):
-    return role_crud.list(db, skip, limit)
+    return (db.query(Role)
+        .filter(~((Role.role_name == "Super Admin") & (Role.authority_level == 100) & (Role.is_system_role.is_(True)) & (Role.is_assignable.is_(False))))
+        .order_by(Role.id).offset(skip).limit(min(limit, 500)).all())
 
 
 @router.post("/roles", response_model=RoleRead, status_code=status.HTTP_201_CREATED)
 def create_role(payload: RoleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("roles:create"))):
+    if payload.role_name.strip() == "Super Admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Protected role cannot be created")
+    if not can_create_role(current_user, payload.authority_level):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot create a role at this authority level")
     item = role_crud.create(db, payload)
     audit(db, current_user.id, "CREATE", "roles")
     return item
@@ -408,11 +554,19 @@ def create_role(payload: RoleCreate, db: Session = Depends(get_db), current_user
 
 @router.get("/roles/{item_id}", response_model=RoleRead)
 def get_role(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("roles:read"))):
-    return role_crud.get(db, item_id)
+    role = role_crud.get(db, item_id)
+    _reject_protected_role(role)
+    return role
 
 
 @router.patch("/roles/{item_id}", response_model=RoleRead)
 def update_role(item_id: int, payload: RoleUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("roles:update"))):
+    target = role_crud.get(db, item_id)
+    _reject_protected_role(target)
+    if not can_modify_role(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to modify this role")
+    if payload.authority_level is not None and not can_create_role(current_user, payload.authority_level):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot raise a role to this authority level")
     item = role_crud.update(db, item_id, payload)
     audit(db, current_user.id, "UPDATE", "roles")
     return item
@@ -420,6 +574,10 @@ def update_role(item_id: int, payload: RoleUpdate, db: Session = Depends(get_db)
 
 @router.delete("/roles/{item_id}")
 def delete_role(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("roles:delete"))):
+    target = role_crud.get(db, item_id)
+    _reject_protected_role(target)
+    if not can_modify_role(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to delete this role")
     result = role_crud.delete(db, item_id)
     audit(db, current_user.id, "DELETE", "roles")
     return result
@@ -427,12 +585,17 @@ def delete_role(item_id: int, db: Session = Depends(get_db), current_user: User 
 
 @router.get("/roles/{item_id}/permissions", response_model=RoleWithPermissions)
 def get_role_permissions(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("roles:read"))):
-    return role_crud.get(db, item_id)
+    role = role_crud.get(db, item_id)
+    _reject_protected_role(role)
+    return role
 
 
 @router.put("/roles/{item_id}/permissions", response_model=RoleWithPermissions)
 def assign_role_permissions(item_id: int, payload: PermissionIds, db: Session = Depends(get_db), current_user: User = Depends(require_permission("roles:update"))):
     role = role_crud.get(db, item_id)
+    _reject_protected_role(role)
+    if not can_modify_role(current_user, role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to modify this role")
     permissions = db.query(Permission).filter(Permission.id.in_(payload.permission_ids)).all()
     if len(permissions) != len(set(payload.permission_ids)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="One or more permission IDs are invalid")
@@ -446,6 +609,9 @@ def assign_role_permissions(item_id: int, payload: PermissionIds, db: Session = 
 @router.post("/roles/{item_id}/permissions/{permission_id}", response_model=RoleWithPermissions)
 def add_role_permission(item_id: int, permission_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("roles:update"))):
     role = role_crud.get(db, item_id)
+    _reject_protected_role(role)
+    if not can_modify_role(current_user, role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to modify this role")
     permission = permission_crud.get(db, permission_id)
     if permission not in role.permissions:
         role.permissions.append(permission)
@@ -458,6 +624,9 @@ def add_role_permission(item_id: int, permission_id: int, db: Session = Depends(
 @router.delete("/roles/{item_id}/permissions/{permission_id}", response_model=RoleWithPermissions)
 def remove_role_permission(item_id: int, permission_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("roles:update"))):
     role = role_crud.get(db, item_id)
+    _reject_protected_role(role)
+    if not can_modify_role(current_user, role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to modify this role")
     permission = permission_crud.get(db, permission_id)
     if permission in role.permissions:
         role.permissions.remove(permission)
@@ -478,6 +647,8 @@ def list_permissions(module: str | None = None, skip: int = 0, limit: int = 100,
 
 @router.post("/permissions", response_model=PermissionRead, status_code=status.HTTP_201_CREATED)
 def create_permission(payload: PermissionCreate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("permissions:create"))):
+    if not can_manage_permission_definition(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin may manage permission definitions")
     item = permission_crud.create(db, payload)
     audit(db, current_user.id, "CREATE", "permissions")
     return item
@@ -490,6 +661,8 @@ def get_permission(item_id: int, db: Session = Depends(get_db), _: User = Depend
 
 @router.patch("/permissions/{item_id}", response_model=PermissionRead)
 def update_permission(item_id: int, payload: PermissionUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("permissions:update"))):
+    if not can_manage_permission_definition(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin may manage permission definitions")
     item = permission_crud.update(db, item_id, payload)
     audit(db, current_user.id, "UPDATE", "permissions")
     return item
@@ -497,9 +670,15 @@ def update_permission(item_id: int, payload: PermissionUpdate, db: Session = Dep
 
 @router.delete("/permissions/{item_id}")
 def delete_permission(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("permissions:delete"))):
+    if not can_manage_permission_definition(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin may manage permission definitions")
     result = permission_crud.delete(db, item_id)
     audit(db, current_user.id, "DELETE", "permissions")
     return result
+
+
+class UserSiteAssignments(BaseModel):
+    site_ids: list[int] = []
 
 
 # ---------------------------------------------------------------- Users
@@ -508,6 +687,7 @@ def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _
     users = (
         db.query(User)
         .options(joinedload(User.role).joinedload(Role.permissions))
+        .filter(~User.role.has((Role.role_name == "Super Admin") & (Role.authority_level == 100) & (Role.is_system_role.is_(True)) & (Role.is_assignable.is_(False))))
         .order_by(User.id)
         .offset(skip)
         .limit(min(limit, 500))
@@ -517,52 +697,175 @@ def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _
 
 
 @router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def create_user(payload: UserCreate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:create"))):
+def create_user(payload: UserCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:create"))):
     data = payload.model_dump()
     data["password_hash"] = hash_password(data.pop("password"))
     if data.get("role_id") is not None:
-        role_crud.get(db, data["role_id"])
+        role = role_crud.get(db, data["role_id"])
+        if not can_assign_role(current_user, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot assign this role")
     item = user_crud.create(db, data)
-    audit(db, current_user.id, "CREATE", "users")
+    record_audit_event(db, actor=current_user, action="USER_CREATED", resource_type="user", resource_id=item.id, target_user_id=item.id, new_values={"name": item.name, "email": item.email, "role_id": item.role_id, "status": item.status}, **_audit_request_context(request))
     return _user_read(item)
 
 
 @router.get("/users/{item_id}", response_model=UserRead)
 def get_user(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("users:read"))):
-    return _user_read(user_crud.get(db, item_id))
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    return _user_read(target)
+
+
+@router.get("/users/{item_id}/sites")
+def get_user_sites(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:read"))):
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    if not can_manage_user(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to view this user's site assignments")
+    return {"site_ids": [site.id for site in target.sites]}
+
+
+@router.put("/users/{item_id}/sites")
+def replace_user_sites(item_id: int, payload: UserSiteAssignments, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    if not can_manage_user(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to manage this user's site assignments")
+    site_ids = list(dict.fromkeys(payload.site_ids))
+    if any(not isinstance(site_id, int) or isinstance(site_id, bool) or site_id <= 0 for site_id in site_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="site_ids must contain positive integer IDs")
+    sites = db.query(Site).filter(Site.id.in_(site_ids), Site.deleted_at.is_(None)).all() if site_ids else []
+    found = {site.id: site for site in sites}
+    if len(found) != len(site_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="One or more site IDs are invalid")
+    if not is_super_admin(current_user):
+        inaccessible = [site_id for site_id in site_ids if not can_access_site(current_user, site_id)]
+        if inaccessible:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot assign sites outside your access scope")
+    old_ids = sorted(site.id for site in target.sites)
+    target.sites = [found[site_id] for site_id in site_ids]
+    db.commit()
+    record_audit_event(db, actor=current_user, action="USER_SITE_ASSIGNMENTS_CHANGED", resource_type="user", resource_id=target.id, target_user_id=target.id, outcome="success", old_values={"site_ids": old_ids}, new_values={"site_ids": sorted(site_ids)}, **_audit_request_context(request))
+    return {"site_ids": sorted(site_ids)}
 
 
 @router.post("/users/{item_id}/role", response_model=UserRead)
-def assign_user_role(item_id: int, payload: AssignRoleRequest, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
-    role_crud.get(db, payload.role_id)
+def assign_user_role(item_id: int, payload: AssignRoleRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    role = role_crud.get(db, payload.role_id)
+    if not can_manage_user(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to manage this user")
+    if not can_assign_role(current_user, role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot assign this role")
+    old_role_id = target.role_id
     item = user_crud.update(db, item_id, {"role_id": payload.role_id})
-    audit(db, current_user.id, "ASSIGN_ROLE", f"user:{item.id}")
+    record_audit_event(db, actor=current_user, action="USER_ROLE_CHANGED", resource_type="user", resource_id=item.id, target_user_id=item.id, old_values={"role_id": old_role_id}, new_values={"role_id": item.role_id}, **_audit_request_context(request))
     return _user_read(item)
 
 
-@router.patch("/users/{item_id}", response_model=UserRead)
-def update_user(item_id: int, payload: UserUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
+@router.patch("/users/{item_id}/status", response_model=UserRead)
+def update_user_status(item_id: int, payload: UserStatusUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
     target = user_crud.get(db, item_id)
-    if target.role and target.role.role_name.lower() == "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator account is protected")
+    _reject_protected_user(target)
+    if not can_manage_user(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to change this user status")
+    old_status = target.status
+    target.status = payload.status
+    target.locked_until = payload.suspended_until if payload.status == "suspended" else None
+    db.commit()
+    db.refresh(target)
+    record_audit_event(db, actor=current_user, action="USER_STATUS_CHANGED", resource_type="user", resource_id=target.id, target_user_id=target.id, old_values={"status": old_status}, new_values={"status": target.status}, **_audit_request_context(request))
+    return _user_read(target)
+
+
+@router.patch("/users/{item_id}", response_model=UserRead)
+def update_user(item_id: int, payload: UserUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    if not can_manage_user(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to manage this user")
+    old_values = {"name": target.name, "email": target.email, "role_id": target.role_id}
     data = payload.model_dump(exclude_unset=True)
+    if "max_concurrent_sessions" in data:
+        if not is_super_admin(current_user) or _is_protected_super_admin_user(target):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin may change session limits")
+        data["max_concurrent_sessions"] = max(1, min(10, int(data["max_concurrent_sessions"])))
+    if "role_id" in data:
+        role = role_crud.get(db, data["role_id"])
+        if not can_assign_role(current_user, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot assign this role")
     if "password" in data:
         data["password_hash"] = hash_password(data.pop("password"))
     item = user_crud.update(db, item_id, data)
-    audit(db, current_user.id, "UPDATE", "users")
+    record_audit_event(db, actor=current_user, action="USER_UPDATED", resource_type="user", resource_id=item.id, target_user_id=item.id, old_values=old_values, new_values={"name": item.name, "email": item.email, "role_id": item.role_id}, **_audit_request_context(request))
     return _user_read(item)
 
 
 @router.delete("/users/{item_id}")
-def delete_user(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:delete"))):
+def delete_user(item_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:delete"))):
     target = user_crud.get(db, item_id)
-    if target.role and target.role.role_name.lower() == "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator account is protected")
-    if item_id == current_user.id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete your own account")
+    _reject_protected_user(target)
+    if not can_manage_user(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient authority to manage this user")
     result = user_crud.delete(db, item_id)
-    audit(db, current_user.id, "DELETE", "users")
+    record_audit_event(db, actor=current_user, action="USER_DELETED", resource_type="user", resource_id=target.id, target_user_id=target.id, old_values={"name": target.name, "email": target.email, "role_id": target.role_id, "status": target.status}, **_audit_request_context(request))
     return result
+
+
+@router.get("/users/{item_id}/sessions", response_model=list[UserSessionRead])
+def list_user_sessions(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:read"))):
+    if not is_super_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin may manage user sessions")
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    sessions = db.query(UserSession).filter(UserSession.user_id == target.id).order_by(UserSession.created_at.desc()).limit(100).all()
+    return [UserSessionRead.model_validate({**{key: getattr(item, key) for key in ("session_id", "created_at", "last_seen_at", "expires_at", "revoked_at", "revoke_reason", "ip_address", "user_agent")}, "active": item.revoked_at is None and item.expires_at > now}) for item in sessions]
+
+
+@router.delete("/users/{item_id}/sessions/{session_id}")
+def revoke_user_session(item_id: int, session_id: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
+    if not is_super_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin may manage user sessions")
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    session = db.query(UserSession).filter(UserSession.user_id == target.id, UserSession.session_id == session_id).first()
+    if session is None: raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    session.revoked_at, session.revoke_reason = datetime.now(timezone.utc).replace(tzinfo=None), "admin_revoke"
+    db.commit()
+    record_audit_event(db, actor=current_user, action="SESSION_REVOKED", resource_type="user", resource_id=target.id, target_user_id=target.id, outcome="success", metadata={"session_id": session_id}, **_audit_request_context(request))
+    return {"detail": "Session revoked"}
+
+
+@router.post("/users/{item_id}/sessions/revoke-all")
+def revoke_all_user_sessions(item_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("users:update"))):
+    if not is_super_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin may manage user sessions")
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    count = db.query(UserSession).filter(UserSession.user_id == target.id, UserSession.revoked_at.is_(None)).update({"revoked_at": now, "revoke_reason": "admin_revoke_all"}, synchronize_session=False)
+    db.commit()
+    record_audit_event(db, actor=current_user, action="SESSION_REVOKED", resource_type="user", resource_id=target.id, target_user_id=target.id, outcome="success", metadata={"revoke_all": True, "count": count}, **_audit_request_context(request))
+    return {"revoked": count}
+
+
+@router.get("/users/{item_id}/activity")
+def user_activity(item_id: int, action: str | None = None, outcome: str | None = None, source_ip: str | None = None, start_date: datetime | None = None, end_date: datetime | None = None, limit: int = 50, offset: int = 0, db: Session = Depends(get_db), current_user: User = Depends(require_permission("audit_logs:read"))):
+    target = user_crud.get(db, item_id)
+    _reject_protected_user(target)
+    if not can_view_audit_actor(current_user, target):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot view this user's activity")
+    query = db.query(AuditLog).filter((AuditLog.target_user_id == target.id) | (AuditLog.user_id == target.id))
+    if action: query = query.filter(AuditLog.action == action)
+    if outcome: query = query.filter(AuditLog.outcome == outcome)
+    if source_ip: query = query.filter(AuditLog.source_ip == source_ip)
+    if start_date: query = query.filter(AuditLog.timestamp >= start_date)
+    if end_date: query = query.filter(AuditLog.timestamp <= end_date)
+    total = query.count()
+    items = query.order_by(AuditLog.timestamp.desc(), AuditLog.id.desc()).offset(max(0, offset)).limit(min(max(1, limit), 200)).all()
+    return {"items": items, "total": total, "limit": min(max(1, limit), 200), "offset": max(0, offset)}
 
 
 # ---------------------------------------------------------------- Branding / Organizations
@@ -610,8 +913,14 @@ def delete_organization(item_id: int, db: Session = Depends(get_db), current_use
 
 # ---------------------------------------------------------------- Sites
 @router.get("/sites", response_model=list[SiteRead])
-def list_sites(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("sites:read"))):
-    return site_crud.list(db, skip, limit)
+def list_sites(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(require_permission("sites:read"))):
+    query = db.query(Site).filter(Site.deleted_at.is_(None))
+    accessible_site_ids = get_accessible_site_ids(current_user)
+    if accessible_site_ids is not None:
+        if not accessible_site_ids:
+            return []
+        query = query.filter(Site.id.in_(accessible_site_ids))
+    return query.order_by(Site.id).offset(skip).limit(min(limit, 500)).all()
 
 
 @router.post("/sites", response_model=SiteRead, status_code=status.HTTP_201_CREATED)
@@ -622,12 +931,18 @@ def create_site(payload: SiteCreate, db: Session = Depends(get_db), current_user
 
 
 @router.get("/sites/{item_id}", response_model=SiteRead)
-def get_site(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("sites:read"))):
-    return site_crud.get(db, item_id)
+def get_site(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("sites:read"))):
+    item = site_crud.get(db, item_id)
+    if not can_access_site(current_user, item_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Site {item_id} not found")
+    return item
 
 
 @router.patch("/sites/{item_id}", response_model=SiteRead)
 def update_site(item_id: int, payload: SiteUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("sites:update"))):
+    item = site_crud.get(db, item_id)
+    if not can_access_site(current_user, item_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Site {item_id} not found")
     item = site_crud.update(db, item_id, payload)
     audit(db, current_user.id, "UPDATE", "sites")
     return item
@@ -635,6 +950,9 @@ def update_site(item_id: int, payload: SiteUpdate, db: Session = Depends(get_db)
 
 @router.delete("/sites/{item_id}")
 def delete_site(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("sites:delete"))):
+    site_crud.get(db, item_id)
+    if not can_access_site(current_user, item_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Site {item_id} not found")
     result = site_crud.delete(db, item_id)
     audit(db, current_user.id, "DELETE", "sites")
     return result
@@ -731,7 +1049,7 @@ def delete_device_type(item_id: int, db: Session = Depends(get_db), current_user
 
 # ---------------------------------------------------------------- Devices
 @router.get("/devices", response_model=list[DeviceRead])
-def list_devices(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("devices:read"))):
+def list_devices(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:read"))):
     devices = (
         db.query(Device)
         .options(
@@ -748,6 +1066,11 @@ def list_devices(skip: int = 0, limit: int = 100, db: Session = Depends(get_db),
             joinedload(Device.credentials).load_only(DeviceCredential.device_id, DeviceCredential.snmp_version),
         )
         .filter(Device.deleted_at.is_(None))
+        .filter(
+            is_super_admin(current_user)
+            if get_accessible_site_ids(current_user) is None
+            else (Device.site_id.in_(get_accessible_site_ids(current_user)) if get_accessible_site_ids(current_user) else False)
+        )
         .order_by(Device.id)
         .offset(skip)
         .limit(min(limit, 500))
@@ -785,8 +1108,9 @@ def list_device_options(
     skip: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("devices:read")),
+    current_user: User = Depends(require_permission("devices:read")),
 ):
+    accessible_site_ids = get_accessible_site_ids(current_user)
     devices = (
         db.query(Device)
         .options(
@@ -798,6 +1122,7 @@ def list_device_options(
             joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
         )
         .filter(Device.deleted_at.is_(None))
+        .filter(is_super_admin(current_user) if accessible_site_ids is None else (Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False))
         .order_by(Device.hostname.asc(), Device.id.asc())
         .offset(skip)
         .limit(min(limit, 1000))
@@ -956,12 +1281,18 @@ def add_device_with_discovery(
 
 
 @router.get("/devices/{item_id}", response_model=DeviceRead)
-def get_device(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("devices:read"))):
-    return device_crud.get(db, item_id)
+def get_device(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:read"))):
+    device = device_crud.get(db, item_id)
+    if not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Device {item_id} not found")
+    return device
 
 
 @router.patch("/devices/{item_id}", response_model=DeviceRead)
 def update_device(item_id: int, payload: DeviceUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:update"))):
+    device = device_crud.get(db, item_id)
+    if not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Device {item_id} not found")
     values = payload.model_dump(exclude_unset=True)
     vendor_name = values.pop("vendor_name", None)
     if vendor_name is not None:
@@ -987,6 +1318,8 @@ def delete_device(item_id: int, db: Session = Depends(get_db), current_user: Use
     # data available for later re-discovery. Use the model cascade instead.
     device = db.query(Device).filter(Device.id == item_id).first()
     if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if not can_access_site(current_user, device.site_id):
         raise HTTPException(status_code=404, detail="Device not found")
     deleted_hostname = device.hostname
     deleted_ip = device.ip_address
@@ -1063,6 +1396,9 @@ def delete_all_devices(db: Session = Depends(get_db), current_user: User = Depen
 
 @router.post("/devices/{item_id}/monitoring/{enabled}", response_model=DeviceRead)
 def set_monitoring(item_id: int, enabled: bool, db: Session = Depends(get_db), current_user: User = Depends(require_permission("devices:update"))):
+    item = device_crud.get(db, item_id)
+    if not can_access_site(current_user, item.site_id):
+        raise HTTPException(status_code=404, detail=f"Device {item_id} not found")
     item = device_crud.update(db, item_id, {"monitoring_status": enabled})
     if enabled:
         create_operational_alert(
@@ -1082,9 +1418,11 @@ def get_device_status_history(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("devices:read")),
+    current_user: User = Depends(require_permission("devices:read")),
 ):
-    device_crud.get(db, item_id)
+    device = device_crud.get(db, item_id)
+    if not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Device {item_id} not found")
     return (
         db.query(DeviceStatusHistory)
         .filter(DeviceStatusHistory.device_id == item_id)
@@ -1136,7 +1474,7 @@ def delete_credential(item_id: int, db: Session = Depends(get_db), current_user:
 
 # ---------------------------------------------------------------- Interfaces
 @router.get("/interfaces", response_model=list[InterfaceRead])
-def list_interfaces(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("interfaces:read"))):
+def list_interfaces(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(require_permission("interfaces:read"))):
     return (
         db.query(Interface)
         .options(load_only(
@@ -1150,6 +1488,9 @@ def list_interfaces(skip: int = 0, limit: int = 100, db: Session = Depends(get_d
             Interface.packet_errors,
             Interface.last_updated,
         ))
+        .join(Device, Interface.device_id == Device.id)
+        .filter(Device.deleted_at.is_(None))
+        .filter(is_super_admin(current_user) if get_accessible_site_ids(current_user) is None else (Device.site_id.in_(get_accessible_site_ids(current_user)) if get_accessible_site_ids(current_user) else False))
         .order_by(Interface.id)
         .offset(skip)
         .limit(min(limit, 500))
@@ -1158,8 +1499,12 @@ def list_interfaces(skip: int = 0, limit: int = 100, db: Session = Depends(get_d
 
 
 @router.get("/interfaces/{item_id}", response_model=InterfaceRead)
-def get_interface(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("interfaces:read"))):
-    return interface_crud.get(db, item_id)
+def get_interface(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("interfaces:read"))):
+    item = interface_crud.get(db, item_id)
+    device = db.get(Device, item.device_id)
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Interface {item_id} not found")
+    return item
 
 
 @router.post("/interfaces", response_model=InterfaceRead, status_code=status.HTTP_201_CREATED)
@@ -1256,7 +1601,7 @@ def delete_monitoring_job(item_id: int, db: Session = Depends(get_db), current_u
 
 # ---------------------------------------------------------------- Device metrics
 @router.get("/device-metrics", response_model=list[DeviceMetricRead])
-def list_device_metrics(device_id: int | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_any_permission("device_metrics:read", "devices:read"))):
+def list_device_metrics(device_id: int | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("device_metrics:read", "devices:read"))):
     query = db.query(DeviceMetric).options(load_only(
         DeviceMetric.id,
         DeviceMetric.device_id,
@@ -1269,6 +1614,10 @@ def list_device_metrics(device_id: int | None = None, skip: int = 0, limit: int 
         DeviceMetric.bandwidth_usage,
         DeviceMetric.created_at,
     ))
+    query = query.join(Device, DeviceMetric.device_id == Device.id).filter(Device.deleted_at.is_(None))
+    accessible_site_ids = get_accessible_site_ids(current_user)
+    if accessible_site_ids is not None:
+        query = query.filter(Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False)
     if device_id:
         query = query.filter(DeviceMetric.device_id == device_id)
     return query.order_by(DeviceMetric.created_at.desc()).offset(skip).limit(min(limit, 500)).all()
@@ -1280,8 +1629,12 @@ def create_device_metric(payload: DeviceMetricCreate, db: Session = Depends(get_
 
 
 @router.get("/device-metrics/{item_id}", response_model=DeviceMetricRead)
-def get_device_metric(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission("device_metrics:read", "devices:read"))):
-    return metric_crud.get(db, item_id)
+def get_device_metric(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("device_metrics:read", "devices:read"))):
+    item = metric_crud.get(db, item_id)
+    device = db.get(Device, item.device_id)
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"DeviceMetric {item_id} not found")
+    return item
 
 
 @router.patch("/device-metrics/{item_id}", response_model=DeviceMetricRead)
@@ -1330,7 +1683,7 @@ def delete_threshold(item_id: int, db: Session = Depends(get_db), current_user: 
 
 # ---------------------------------------------------------------- Alerts
 @router.get("/alerts", response_model=list[AlertRead])
-def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _: User = Depends(require_permission("alerts:read"))):
+def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:read"))):
     query = db.query(Alert).options(load_only(
         Alert.id,
         Alert.device_id,
@@ -1344,6 +1697,10 @@ def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 10
         Alert.created_at,
         Alert.deleted_at,
     )).filter(Alert.deleted_at.is_(None))
+    accessible_site_ids = get_accessible_site_ids(current_user)
+    query = query.join(Device, Alert.device_id == Device.id).filter(Device.deleted_at.is_(None))
+    if accessible_site_ids is not None:
+        query = query.filter(Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False)
     if status_filter:
         query = query.filter(Alert.status == status_filter)
     return query.order_by(Alert.created_at.desc()).offset(skip).limit(min(limit, 500)).all()
@@ -1371,12 +1728,20 @@ def create_alert(payload: AlertCreate, db: Session = Depends(get_db), current_us
 
 
 @router.get("/alerts/{item_id}", response_model=AlertRead)
-def get_alert(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("alerts:read"))):
-    return alert_crud.get(db, item_id)
+def get_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:read"))):
+    item = alert_crud.get(db, item_id)
+    device = db.get(Device, item.device_id) if item.device_id else None
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
+    return item
 
 
 @router.patch("/alerts/{item_id}", response_model=AlertRead)
 def update_alert(item_id: int, payload: AlertUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:update"))):
+    existing = alert_crud.get(db, item_id)
+    device = db.get(Device, existing.device_id) if existing.device_id else None
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
     item = alert_crud.update(db, item_id, payload)
     if item.status == "resolved":
         try:
@@ -1401,6 +1766,10 @@ def clear_all_alerts(db: Session = Depends(get_db), current_user: User = Depends
 
 @router.delete("/alerts/{item_id}")
 def delete_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:delete"))):
+    existing = alert_crud.get(db, item_id)
+    device = db.get(Device, existing.device_id) if existing.device_id else None
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
     result = alert_crud.delete(db, item_id)
     audit(db, current_user.id, "DELETE", "alerts")
     return result
@@ -1408,6 +1777,10 @@ def delete_alert(item_id: int, db: Session = Depends(get_db), current_user: User
 
 @router.post("/alerts/{item_id}/acknowledge", response_model=AlertRead)
 def acknowledge_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:update"))):
+    existing = alert_crud.get(db, item_id)
+    device = db.get(Device, existing.device_id) if existing.device_id else None
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
     item = alert_crud.update(db, item_id, {"status": "acknowledged", "acknowledged_by": current_user.id})
     audit(db, current_user.id, "ACKNOWLEDGE", "alerts")
     return item
@@ -1415,6 +1788,10 @@ def acknowledge_alert(item_id: int, db: Session = Depends(get_db), current_user:
 
 @router.post("/alerts/{item_id}/resolve", response_model=AlertRead)
 def resolve_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:update"))):
+    existing = alert_crud.get(db, item_id)
+    device = db.get(Device, existing.device_id) if existing.device_id else None
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
     item = alert_crud.update(db, item_id, {"status": "resolved", "resolved_at": datetime.utcnow()})
     try:
         process_alert_recovery(db, item.id, current_user.id)
@@ -1817,25 +2194,112 @@ def record_page_view(page: str, db: Session = Depends(get_db), current_user: Use
 
 
 @router.get("/audit-logs/users")
-def list_audit_log_users(db: Session = Depends(get_db), _: User = Depends(require_permission("audit_logs:read"))):
-    return [
-        {"id": user_id, "name": name, "email": email}
-        for user_id, name, email in db.query(User.id, User.name, User.email).order_by(User.name.asc()).all()
-    ]
+def list_audit_log_users(db: Session = Depends(get_db), current_user: User = Depends(require_permission("audit_logs:read"))):
+    if not can_view_security_audit(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Security-wide audit access is not permitted")
+    query = db.query(User.id, User.name, User.email).join(Role, User.role_id == Role.id)
+    if not is_super_admin(current_user):
+        query = query.filter(Role.authority_level < get_authority_level(current_user))
+    return [{"id": user_id, "name": name, "email": email} for user_id, name, email in query.order_by(User.name.asc()).all()]
 
 
-@router.get("/audit-logs", response_model=list[AuditLogRead])
-def list_audit_logs(skip: int = 0, limit: int = 100, user_id: int | None = None, db: Session = Depends(get_db), _: User = Depends(require_permission("audit_logs:read"))):
-    query = db.query(AuditLog, User.name.label("user_name")).outerjoin(User, AuditLog.user_id == User.id)
+@router.get("/audit-logs")
+def list_audit_logs(
+    user_id: int | None = None,
+    action: str | None = None,
+    outcome: str | None = None,
+    resource_type: str | None = None,
+    resource_id: int | None = None,
+    source_ip: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    include_total: bool = Query(False),
+    skip: int | None = Query(None, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("audit_logs:read")),
+):
+    if not can_view_security_audit(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Security-wide audit access is not permitted")
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be before or equal to end_date")
+    if is_super_admin(current_user):
+        query = db.query(AuditLog, User.name.label("user_name")).outerjoin(User, AuditLog.user_id == User.id)
+    else:
+        query = db.query(AuditLog, User.name.label("user_name")).join(User, AuditLog.user_id == User.id).join(Role, User.role_id == Role.id)
+        query = query.filter(Role.authority_level < get_authority_level(current_user))
     if user_id is not None:
         query = query.filter(AuditLog.user_id == user_id)
-    rows = query.order_by(AuditLog.timestamp.desc()).offset(skip).limit(min(limit, 500)).all()
-    return [{**log.__dict__, "user_name": name} for log, name in rows]
+    if action is not None:
+        query = query.filter(AuditLog.action == action)
+    if outcome is not None:
+        query = query.filter(AuditLog.outcome == outcome)
+    if resource_type is not None:
+        query = query.filter(AuditLog.resource_type == resource_type)
+    if resource_id is not None:
+        query = query.filter(AuditLog.resource_id == resource_id)
+    if source_ip is not None:
+        query = query.filter(AuditLog.source_ip == source_ip)
+    if start_date is not None:
+        query = query.filter(AuditLog.timestamp >= start_date)
+    if end_date is not None:
+        query = query.filter(AuditLog.timestamp <= end_date)
+    effective_offset = skip if skip is not None else offset
+    total = query.with_entities(func.count(AuditLog.id)).scalar() if include_total else None
+    rows = query.order_by(AuditLog.timestamp.desc(), AuditLog.id.desc()).offset(effective_offset).limit(limit).all()
+    items = [{**log.__dict__, "user_name": name} for log, name in rows]
+    return {"items": items, "total": total} if include_total else items
+
+
+@router.get("/audit-logs/summary")
+def audit_log_summary(
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("audit_logs:read")),
+):
+    if not can_view_security_audit(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Security-wide audit access is not permitted")
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be before or equal to end_date")
+    if is_super_admin(current_user):
+        query = db.query(AuditLog).outerjoin(User, AuditLog.user_id == User.id)
+    else:
+        query = db.query(AuditLog).join(User, AuditLog.user_id == User.id).join(Role, User.role_id == Role.id)
+        query = query.filter(Role.authority_level < get_authority_level(current_user))
+    if start_date is not None:
+        query = query.filter(AuditLog.timestamp >= start_date)
+    if end_date is not None:
+        query = query.filter(AuditLog.timestamp <= end_date)
+    counts = query.with_entities(
+        func.count(AuditLog.id).label("total_activities"),
+        func.count(case((AuditLog.outcome == "success", 1))).label("successful_actions"),
+        func.count(case((AuditLog.outcome == "failure", 1))).label("failed_actions"),
+        func.count(case((AuditLog.action == "LOGIN_SUCCESS", 1))).label("login_success"),
+        func.count(case((AuditLog.action == "LOGIN_FAILED", 1))).label("login_failed"),
+        func.count(case((AuditLog.action == "ACCOUNT_LOCKED", 1))).label("account_locked"),
+        func.count(case((AuditLog.action == "USER_STATUS_CHANGED", 1))).label("user_status_changes"),
+    ).one()
+    return {
+        "total_activities": counts.total_activities,
+        "successful_actions": counts.successful_actions,
+        "failed_actions": counts.failed_actions,
+        "login_success": counts.login_success,
+        "login_failed": counts.login_failed,
+        "account_locked": counts.account_locked,
+        "user_status_changes": counts.user_status_changes,
+    }
 
 
 @router.get("/audit-logs/{item_id}", response_model=AuditLogRead)
-def get_audit_log(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("audit_logs:read"))):
-    return audit_crud.get(db, item_id)
+def get_audit_log(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("audit_logs:read"))):
+    if not can_view_security_audit(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Security-wide audit access is not permitted")
+    row = db.query(AuditLog, User).outerjoin(User, AuditLog.user_id == User.id).filter(AuditLog.id == item_id).first()
+    if row is None or not can_view_audit_actor(current_user, row[1]):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Audit entry is outside your authority scope")
+    return row[0]
 
 
 # ---------------------------------------------------------------- Dashboard

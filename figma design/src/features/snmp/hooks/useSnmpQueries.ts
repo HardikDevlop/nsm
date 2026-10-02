@@ -104,6 +104,8 @@ export function useSNMPDevices(params: {
     queryFn: ({ signal }) => listSNMPDevicesOptimized(params, signal),
     staleTime: 15_000,
     refetchOnWindowFocus: false,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -114,6 +116,9 @@ export function useSNMPDeviceDetails(deviceId: number | null) {
     queryFn: () => getSNMPDeviceDetails(deviceId!),
     enabled: !!deviceId,
     staleTime: 10000,
+    refetchInterval: 15000,
+    refetchIntervalInBackground: false,
+    refetchOnReconnect: true,
   });
 }
 
@@ -147,6 +152,9 @@ export function useModuleMonitoringStatus(deviceId: number | null, module: strin
     queryFn: () => getModuleMonitoringStatus(deviceId!, module!),
     enabled: !!deviceId && !!module,
     staleTime: 10000, // 10 seconds
+    refetchInterval: 15000,
+    refetchIntervalInBackground: false,
+    refetchOnReconnect: true,
   });
 }
 

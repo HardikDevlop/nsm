@@ -58,7 +58,7 @@ export function SNMPModuleShell({
       <div className="p-4 md:p-6">
         <GlassCard className="p-6 text-center">
           <div className="font-display font-bold" style={{ color: '#ff3366' }}>Unable to load SNMP device</div>
-          <div className="font-mono text-xs mt-2" style={{ color: '#8899bb' }}>{error?.message ?? 'Device not found'}</div>
+          <div className="font-mono text-xs mt-2" style={{ color: 'var(--t-muted, #8899bb)' }}>{error?.message ?? 'Device not found'}</div>
         </GlassCard>
       </div>
     );
@@ -113,14 +113,14 @@ export function SNMPModuleShell({
         <span>/</span>
         <button type="button" onClick={() => navigate(`/snmp/devices/${id}`)} className="hover:text-cyan-400 transition-colors">{device.name || device.ip_address}</button>
         <span>/</span>
-        <span style={{ color: '#c8d8ee' }}>{pageTitle ?? title(module)}</span>
+        <span style={{ color: 'var(--t-text, #c8d8ee)' }}>{pageTitle ?? title(module)}</span>
       </div>
 
       {/* Header */}
       <div className="snmp-page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-display font-bold text-xl sm:text-2xl tracking-widest neon-cyan">{pageTitle ?? title(module)}</h1>
-          <p className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+          <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {device.name || device.hostname || device.ip_address} · {device.ip_address} · {device.last_seen ? `Last seen ${new Date(device.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}` : 'Last seen N/A'}
           </p>
         </div>
@@ -135,7 +135,7 @@ export function SNMPModuleShell({
                     disabled={!supported}
                     onChange={event => update.mutate({ deviceId: id, module, data: { interval_seconds: Number(event.target.value) } })}
                     className="glass-bright rounded px-2 py-1.5 font-mono text-xs"
-                    style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)', opacity: supported ? 1 : 0.5 }}
+                    style={{ border: '1px solid rgba(0,212,255,0.25)', color: 'var(--t-text, #c8d8ee)', background: 'var(--t-input-bg, rgba(8,25,55,0.7))', opacity: supported ? 1 : 0.5 }}
                   >
                     {INTERVALS.map(value => <option key={value} value={value}>{value}s</option>)}
                   </select>
@@ -159,7 +159,7 @@ export function SNMPModuleShell({
                     disabled={!supported}
                     onChange={event => update.mutate({ deviceId: id, module, data: { interval_seconds: Number(event.target.value) } })}
                     className="glass-bright rounded px-2 py-1.5 font-mono text-xs"
-                    style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)', opacity: supported ? 1 : 0.5 }}
+                    style={{ border: '1px solid rgba(0,212,255,0.25)', color: 'var(--t-text, #c8d8ee)', background: 'var(--t-input-bg, rgba(8,25,55,0.7))', opacity: supported ? 1 : 0.5 }}
                   >
                     {INTERVALS.map(value => <option key={value} value={value}>{value}s</option>)}
                   </select>
@@ -217,7 +217,7 @@ export function SNMPModuleShell({
 
       {!supported && !allowUnsupportedContent ? (
         <GlassCard className="p-8 text-center">
-          <div className="font-display font-bold text-base" style={{ color: '#8899bb' }}>
+          <div className="font-display font-bold text-base" style={{ color: 'var(--t-muted, #8899bb)' }}>
             {unsupportedMessage ?? `${moduleConfig?.label ?? title(module)} is not supported by this device.`}
           </div>
         </GlassCard>

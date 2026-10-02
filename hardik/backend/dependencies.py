@@ -2,9 +2,11 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, selectinload
 
-from backend.auth.security import decode_access_token
+from datetime import datetime, timezone
+
+from backend.auth.security import decode_access_token, decode_access_token_claims
 from backend.database.session import get_db
-from backend.models import Role, User
+from backend.models import Role, User, UserSession
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -19,7 +21,8 @@ def get_current_user(
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    email = decode_access_token(credentials.credentials)
+    claims = decode_access_token_claims(credentials.credentials)
+    email = claims.get("sub") if claims else None
     if email is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -36,6 +39,15 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
     if user.status != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is not active")
+    session_id = claims.get("jti") if claims else None
+    if session_id:
+        session = db.query(UserSession).filter(UserSession.session_id == session_id, UserSession.user_id == user.id).first()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if session is None or session.revoked_at is not None or session.expires_at <= now:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid")
+        if session.last_seen_at <= now.replace(microsecond=0):
+            session.last_seen_at = now
+            db.commit()
     return user
 
 

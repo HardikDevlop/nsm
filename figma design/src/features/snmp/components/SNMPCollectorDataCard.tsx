@@ -368,7 +368,7 @@ export default function SNMPCollectorDataCard({
                       >
                         <td
                           className="px-3 py-2 font-mono text-xs"
-                          style={{ color: "#c8d8ee" }}
+                          style={{ color: "var(--t-text, #111827)", opacity: 1 }}
                         >
                           {group.port ?? group.if_index ?? "-"}
                         </td>
@@ -387,13 +387,13 @@ export default function SNMPCollectorDataCard({
                         </td>
                         <td
                           className="px-3 py-2 font-mono text-xs"
-                          style={{ color: "#c8d8ee" }}
+                          style={{ color: "var(--t-text, #111827)", opacity: 1 }}
                         >
                           {group.mac_count}
                         </td>
                         <td
                           className="px-3 py-2 font-mono text-xs"
-                          style={{ color: "#c8d8ee" }}
+                          style={{ color: "var(--t-text, #111827)", opacity: 1 }}
                         >
                           {group.vlans?.join(", ") || "-"}
                         </td>
@@ -446,7 +446,7 @@ export default function SNMPCollectorDataCard({
                   </div>
                   <div
                     className="font-mono text-xs mt-1 break-words"
-                    style={{ color: "#c8d8ee" }}
+                    style={{ color: "var(--t-text, #111827)", opacity: 1 }}
                   >
                     {formatMetricValue(key, value)}
                   </div>
@@ -456,7 +456,7 @@ export default function SNMPCollectorDataCard({
           )}
           {rows.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full snmp-arp-table" style={{ minWidth: 900 }}>
+              <table className="w-full snmp-readable-table snmp-collector-data-table snmp-arp-table" style={{ minWidth: 900 }}>
                 <thead>
                   <tr
                     style={{ borderBottom: "1px solid rgba(0,212,255,0.08)" }}
@@ -466,8 +466,9 @@ export default function SNMPCollectorDataCard({
                         key={col}
                         className="text-left px-4 py-2 font-mono text-xs"
                         style={{
-                          color: "#8899bb",
-                          background: "rgba(8,25,55,0.95)",
+                          color: "#111827",
+                          background: "transparent",
+                          opacity: 1,
                         }}
                       >
                         {titleize(col)}
@@ -485,7 +486,7 @@ export default function SNMPCollectorDataCard({
                         <td
                           key={col}
                           className="px-4 py-2 font-mono text-[10px] max-w-[260px] truncate"
-                          style={{ color: "#c8d8ee" }}
+                          style={{ color: "var(--t-text, #111827)", opacity: 1 }}
                         >
                           {formatMetricValue(col, row?.[col])}
                         </td>

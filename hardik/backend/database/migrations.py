@@ -175,6 +175,11 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20260922_0047_audit_outcome", description="Track audit event outcome for authentication and security events"),
     Migration(migration_id="20260929_0048_report_schedules", description="Persist scheduled Report Management definitions"),
     Migration(migration_id="20260929_0049_generated_reports", description="Persist generated scheduled report history"),
+    Migration(migration_id="20260930_0050_role_hierarchy_foundation", description="Add role authority and system assignment metadata"),
+    Migration(migration_id="20260930_0051_user_login_lock_tracking", description="Add failed-login counters, temporary lock expiry, and last-login timestamp"),
+    Migration(migration_id="20260930_0052_audit_log_context_fields", description="Add nullable structured audit context fields"),
+    Migration(migration_id="20260930_0053_user_site_access_scope_foundation", description="Add user-to-site access scope association table"),
+    Migration(migration_id="20261001_0054_user_sessions", description="Add persistent user sessions and concurrent-session limits"),
 )
 
 
@@ -1196,6 +1201,53 @@ def run_migrations(engine: Engine) -> list[str]:
                 connection.execute(text("""CREATE TABLE IF NOT EXISTS generated_reports (id SERIAL PRIMARY KEY, schedule_id INTEGER REFERENCES report_schedules(id) ON DELETE SET NULL, report_name VARCHAR(160) NOT NULL, format VARCHAR(20) NOT NULL, status VARCHAR(20) NOT NULL, period_start TIMESTAMP NOT NULL, period_end TIMESTAMP NOT NULL, generated_at TIMESTAMP NOT NULL, file_path VARCHAR(500), file_size INTEGER, error_message VARCHAR(500))"""))
                 connection.execute(text('CREATE INDEX IF NOT EXISTS ix_generated_reports_schedule ON generated_reports (schedule_id)'))
                 connection.execute(text('CREATE INDEX IF NOT EXISTS ix_generated_reports_generated_at ON generated_reports (generated_at DESC)'))
+        elif migration.migration_id == "20260930_0050_role_hierarchy_foundation":
+            with engine.begin() as connection:
+                connection.execute(text('ALTER TABLE roles ADD COLUMN IF NOT EXISTS authority_level INTEGER NOT NULL DEFAULT 0'))
+                connection.execute(text('ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_system_role BOOLEAN NOT NULL DEFAULT FALSE'))
+                connection.execute(text('ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_assignable BOOLEAN NOT NULL DEFAULT TRUE'))
+                connection.execute(text("UPDATE roles SET authority_level = 100, is_system_role = TRUE, is_assignable = FALSE WHERE role_name = 'Super Admin'"))
+                connection.execute(text("UPDATE roles SET authority_level = 80 WHERE role_name = 'Admin'"))
+                connection.execute(text("UPDATE roles SET authority_level = 50 WHERE role_name = 'Operator'"))
+                connection.execute(text("UPDATE roles SET authority_level = 10 WHERE role_name = 'Viewer'"))
+        elif migration.migration_id == "20260930_0051_user_login_lock_tracking":
+            with engine.begin() as connection:
+                connection.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0'))
+                connection.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP WITH TIME ZONE'))
+                connection.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE'))
+        elif migration.migration_id == "20260930_0053_user_site_access_scope_foundation":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS user_sites (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE, PRIMARY KEY (user_id, site_id))"""))
+        elif migration.migration_id == "20261001_0054_user_sessions":
+            with engine.begin() as connection:
+                connection.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS max_concurrent_sessions INTEGER NOT NULL DEFAULT 1'))
+                connection.execute(text("CREATE TABLE IF NOT EXISTS user_sessions (id SERIAL PRIMARY KEY, session_id VARCHAR(64) NOT NULL UNIQUE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMP NOT NULL, last_seen_at TIMESTAMP NOT NULL, expires_at TIMESTAMP NOT NULL, revoked_at TIMESTAMP, revoke_reason VARCHAR(120), ip_address VARCHAR(64), user_agent VARCHAR(500), login_method VARCHAR(40))"))
+                for statement in (
+                    'CREATE INDEX IF NOT EXISTS ix_user_sessions_user_id ON user_sessions (user_id)',
+                    'CREATE INDEX IF NOT EXISTS ix_user_sessions_expires_at ON user_sessions (expires_at)',
+                    'CREATE INDEX IF NOT EXISTS ix_user_sessions_revoked_at ON user_sessions (revoked_at)',
+                ):
+                    connection.execute(text(statement))
+        elif migration.migration_id == "20260930_0052_audit_log_context_fields":
+            with engine.begin() as connection:
+                columns = {
+                    "actor_username": "VARCHAR(255)",
+                    "actor_role": "VARCHAR(80)",
+                    "resource_type": "VARCHAR(120)",
+                    "resource_id": "INTEGER",
+                    "target_user_id": "INTEGER",
+                    "site_id": "INTEGER",
+                    "request_method": "VARCHAR(16)",
+                    "request_path": "VARCHAR(500)",
+                    "source_ip": "VARCHAR(64)",
+                    "user_agent": "VARCHAR(500)",
+                    "failure_reason": "TEXT",
+                    "old_values": "JSON",
+                    "new_values": "JSON",
+                    "metadata_json": "JSON",
+                }
+                for name, sql_type in columns.items():
+                    connection.execute(text(f'ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS "{name}" {sql_type}'))
         elif migration.migration_id == "20260831_0030_cmdb_reconciliation":
             _ensure_cmdb_reconciliation(engine)
         else:
