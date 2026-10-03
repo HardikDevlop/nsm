@@ -238,11 +238,11 @@ class SNMPPoller:
         if not credentials:
             return {"success": False, "error": "No SNMP credentials"}
 
-        # Do not hold a DB connection during the network round-trip.
-        supported = self._is_module_supported(job.device_id, job.module_name)
+        # Do not hold a DB connection during the network round-trip.  Cached
+        # capability flags are hints from discovery, not a connectivity gate:
+        # stale/partial discovery previously turned reachable NVRs into
+        # ``Module not supported`` before their standard MIBs were queried.
         self.db.close()
-        if not supported:
-            return {"success": False, "error": "Module not supported", "not_supported": True}
 
         collector_name = MODULE_COLLECTOR_MAP.get(job.module_name, job.module_name)
         started = time.perf_counter()
@@ -849,17 +849,25 @@ class PollingScheduler:
         """Restore enabled runnable configs, including retryable errors."""
         db = SessionLocal()
         try:
+            # enabled is the durable monitoring intent; runtime status may be
+            # stale after a crash/restart. Restore every enabled config.
             configs = db.query(MonitoringConfig).filter(
                 MonitoringConfig.enabled.is_(True),
-                MonitoringConfig.status.in_((
-                    MonitoringStatus.RUNNING.value,
-                    MonitoringStatus.ERROR.value,
-                )),
+                MonitoringConfig.status != MonitoringStatus.NOT_SUPPORTED.value,
             ).all()
 
+            restored = 0
             for config in configs:
-                await self._schedule_config(config, db)
-            logger.info("Loaded %d polling jobs from database", len(configs))
+                try:
+                    await self._schedule_config(config, db)
+                    if self.scheduler.get_job(f"{config.device_id}:{config.module_name}"):
+                        restored += 1
+                except Exception:
+                    logger.exception(
+                        "MONITORING_RESTORE_FAILED device_id=%s module=%s",
+                        config.device_id, config.module_name,
+                    )
+            logger.info("MONITORING_RESTORED jobs=%d enabled_configs=%d", restored, len(configs))
         finally:
             db.close()
 
@@ -870,20 +878,6 @@ class PollingScheduler:
         # Remove existing job if any
         if self.scheduler.get_job(job_id):
             self.scheduler.remove_job(job_id)
-
-        # Check capability
-        cap = db.query(DeviceCapabilities).filter(
-            DeviceCapabilities.device_id == config.device_id
-        ).first() if db else None
-
-        if cap:
-            cap_map = cap.to_map()
-            if not cap_map.get(config.module_name, False):
-                logger.info("Module %s not supported on device %d, skipping", config.module_name, config.device_id)
-                config.status = MonitoringStatus.NOT_SUPPORTED.value
-                if db:
-                    db.commit()
-                return
 
         # Calculate next poll time
         next_poll = config.next_poll_at or now_utc()
@@ -950,7 +944,11 @@ class PollingScheduler:
                 elif result.get("not_supported"):
                     config.status = MonitoringStatus.NOT_SUPPORTED.value
                 else:
-                    config.status = MonitoringStatus.ERROR.value
+                    # A failed poll must not disable enabled monitoring.
+                    config.status = (
+                        MonitoringStatus.RUNNING.value
+                        if config.enabled else MonitoringStatus.ERROR.value
+                    )
                     config.error_message = result.get("error", "Unknown error")
                 config.next_poll_at = now_utc() + timedelta(seconds=config.interval_seconds)
                 if config.enabled and config.status != MonitoringStatus.NOT_SUPPORTED.value:
@@ -1058,7 +1056,12 @@ class PollingScheduler:
                 )
                 config = db.query(MonitoringConfig).filter(MonitoringConfig.id == config_id).first()
                 if config:
-                    config.status = MonitoringStatus.ERROR.value
+                    # Worker/transport failure is transient; preserve active
+                    # monitoring intent and leave the retry job registered.
+                    config.status = (
+                        MonitoringStatus.RUNNING.value
+                        if config.enabled else MonitoringStatus.ERROR.value
+                    )
                     config.error_message = str(exc)
                     config.next_poll_at = now_utc() + timedelta(seconds=config.interval_seconds)
                     db.commit()

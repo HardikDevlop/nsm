@@ -23,8 +23,7 @@ hypothesis>=6.100
 
 
 # start backend 
-# cd /home/agnigate/Desktop/NMS/hardik
-# source .venv/bin/activate
+
 # sudo systemctl restart agnigate_backend.service
 # sudo systemctl status agnigate_backend.service --no-pager
 
@@ -46,9 +45,10 @@ hypothesis>=6.100
 
 
 
-
-uvicorn backend.main:app --host 127.0.0.1 --port 8000
-
+# cd /home/agnigate/Desktop/NMS/hardik
+# source .venv/bin/activate
+# uvicorn backend.main:app --host 127.0.0.1 --port 8000
+# lsof -ti:8000 | xargs -r kill -9
 
 
 
@@ -94,4 +94,4 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 
 # python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
-# lsof -ti:8000 | xargs -r kill -9
+

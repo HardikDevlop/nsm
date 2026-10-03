@@ -1423,12 +1423,23 @@ def get_device_status_history(
     device = device_crud.get(db, item_id)
     if not can_access_site(current_user, device.site_id):
         raise HTTPException(status_code=404, detail=f"Device {item_id} not found")
+    # Monitoring transition timestamps are stored as naive IST values for
+    # legacy compatibility. Keep the API window in the same timezone and
+    # expose a rolling frame of the newest 100 transitions.
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    since = now_ist - timedelta(hours=24)
     return (
         db.query(DeviceStatusHistory)
-        .filter(DeviceStatusHistory.device_id == item_id)
+        .filter(
+            DeviceStatusHistory.device_id == item_id,
+            DeviceStatusHistory.timestamp >= since,
+            DeviceStatusHistory.old_status.in_(["online", "offline"]),
+            DeviceStatusHistory.new_status.in_(["online", "offline"]),
+            DeviceStatusHistory.old_status != DeviceStatusHistory.new_status,
+        )
         .order_by(DeviceStatusHistory.timestamp.desc())
-        .offset(skip)
-        .limit(min(limit, 500))
+        .offset(max(skip, 0))
+        .limit(min(max(limit, 1), 100))
         .all()
     )
 

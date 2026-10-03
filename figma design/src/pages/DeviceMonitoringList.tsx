@@ -24,6 +24,7 @@ export default function DeviceMonitoringList() {
   const [monitoringData, setMonitoringData] = useState<MonitoringStatusResponse | null>(null)
   const [liveDevices, setLiveDevices] = useState<LiveDevice[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [startingAll, setStartingAll] = useState(false)
   const [stoppingAll, setStoppingAll] = useState(false)
   const [actionInProgress, setActionInProgress] = useState<Record<string, boolean>>({})
@@ -32,6 +33,7 @@ export default function DeviceMonitoringList() {
 
   // Load devices from DB
   const loadDevices = useCallback(async () => {
+    setRefreshing(true)
     try {
       const data = await listDevices()
       setDevices(data)
@@ -39,6 +41,7 @@ export default function DeviceMonitoringList() {
       setError(err instanceof Error ? err.message : 'Failed to load devices')
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [])
 
@@ -55,12 +58,7 @@ export default function DeviceMonitoringList() {
 
   // Initial load
   useEffect(() => {
-    let ignore = false
-    void (async () => {
-      await loadDevices()
-      await loadStatus()
-    })()
-    return () => { ignore = true }
+    void Promise.all([loadDevices(), loadStatus()])
   }, [loadDevices, loadStatus])
 
   // SSE stream for real-time monitoring updates
@@ -352,7 +350,7 @@ export default function DeviceMonitoringList() {
                         className="rounded px-3 py-1.5 font-mono text-xs uppercase transition min-h-[36px] flex items-center"
                         style={{ background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff' }}
                       >
-                        View Details
+                        View Monitoring
                       </Link>
                     </div>
                   </div>

@@ -13,21 +13,21 @@ export interface ThemeColors {
 }
 
 const DARK_DEFAULTS: ThemeColors = {
-  bg: '#0b1220',
-  text: '#e6edf7',
+  bg: '#000000',
+  text: '#ffffff',
   accent: '#3b82f6',
-  card: '#111c2e',
-  muted: '#94a3b8',
-  border: '#263750',
+  card: '#050505',
+  muted: '#a3a3a3',
+  border: '#262626',
 }
 
 const LIGHT_DEFAULTS: ThemeColors = {
-  bg: '#f6f3ed',
-  text: '#172033',
+  bg: '#ffffff',
+  text: '#000000',
   accent: '#3b82f6',
-  card: '#fcfaf7',
-  muted: '#64748b',
-  border: '#ded8ce',
+  card: '#ffffff',
+  muted: '#6b7280',
+  border: '#e5e7eb',
 }
 
 interface ThemeContextType {
@@ -94,9 +94,9 @@ function applyCSS(colors: ThemeColors, theme: Theme) {
   s.setProperty('--t-text-secondary', secondary)
   s.setProperty('--t-text-disabled', disabled)
   s.setProperty('--t-border-strong', colors.border)
-  s.setProperty('--t-table-header', theme === 'light' ? '#e8eef5' : colors.card)
+  s.setProperty('--t-table-header', colors.card)
   s.setProperty('--t-table-row', theme === 'light' ? colors.card : colors.card)
-  s.setProperty('--t-table-row-hover', theme === 'light' ? '#f3eee6' : hexToRgba(colors.accent, 0.08))
+  s.setProperty('--t-table-row-hover', theme === 'light' ? '#f3f4f6' : '#111111')
   s.setProperty('--t-tooltip-bg', colors.card)
   s.setProperty('--t-surface-hover', hexToRgba(colors.accent, 0.08))
   s.setProperty('--t-surface-active', hexToRgba(colors.accent, 0.15))
@@ -126,7 +126,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try {
       // Versioned key ensures old hard-coded cyan/red palettes cannot
       // override the current accessible defaults.
-      const saved = localStorage.getItem('theme-colors-v2')
+      const saved = localStorage.getItem('theme-colors-v3')
       if (saved) {
         const parsed = JSON.parse(saved) as ThemeColors | Partial<ThemePalettes>
         const migrate = (value: ThemeColors, fallback: ThemeColors): ThemeColors => {
@@ -186,7 +186,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     applyCSS(colors, theme)
-    localStorage.setItem('theme-colors-v2', JSON.stringify(palettes))
+    localStorage.setItem('theme-colors-v3', JSON.stringify(palettes))
   }, [colors, palettes, theme])
 
   const toggleTheme = useCallback(() => {

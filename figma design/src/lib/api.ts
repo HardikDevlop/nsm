@@ -246,9 +246,15 @@ export async function requestJson<T>(
   const externalSignal = init.signal
   if (externalSignal) {
     if (externalSignal.aborted) timeoutController.abort()
-    else externalSignal.addEventListener("abort", () => timeoutController.abort(), { once: true })
+    else
+      externalSignal.addEventListener(
+        "abort",
+        () => timeoutController.abort(),
+        { once: true },
+      )
   }
 
+  const startedAt = performance.now()
   const request = fetch(buildUrl(path), {
     ...init,
     signal: timeoutController.signal,
@@ -259,6 +265,10 @@ export async function requestJson<T>(
     },
   })
     .then(async (response) => {
+      const elapsedMs = performance.now() - startedAt
+      if (import.meta.env.DEV) {
+        console.debug(`[NMS API] ${method} ${path} ${response.status} ${Math.round(elapsedMs)}ms`)
+      }
       if (response.status === 401) {
         authToken = null
         window.localStorage.removeItem("nms_access_token")
@@ -272,13 +282,28 @@ export async function requestJson<T>(
         try {
           const body = (await response.json()) as {
             detail?: string | { message?: string }
-            error?: { code?: string; message?: string; detail?: string; suggestion?: string; request_id?: string }
+            error?: {
+              code?: string
+              message?: string
+              detail?: string
+              suggestion?: string
+              request_id?: string
+            }
           }
           if (body.error) {
-            const safe = [body.error.message, body.error.detail, body.error.suggestion].filter(Boolean).join(' ')
-            detail = safe || body.error.code || ''
+            const safe = [
+              body.error.message,
+              body.error.detail,
+              body.error.suggestion,
+            ]
+              .filter(Boolean)
+              .join(" ")
+            detail = safe || body.error.code || ""
           } else {
-            detail = typeof body.detail === "string" ? body.detail : (body.detail?.message ?? "")
+            detail =
+              typeof body.detail === "string"
+                ? body.detail
+                : (body.detail?.message ?? "")
           }
         } catch {
           /* non-JSON error */
@@ -293,7 +318,8 @@ export async function requestJson<T>(
       // Browser fetch failures are TypeError instances; do not leak browser or
       // runtime implementation text into the UI.
       if (error instanceof Error) {
-        if (error.name === "AbortError" && didTimeout) throw new Error("Request timed out. Please try again.")
+        if (error.name === "AbortError" && didTimeout)
+          throw new Error("Request timed out. Please try again.")
         if (error.name === "TypeError") throw new Error(networkMessage(error))
         throw error
       }
@@ -316,7 +342,7 @@ export interface DashboardSummary {
   total_devices: number
   online_devices: number
   offline_devices: number
-  health_counts: Record<'online' | 'offline' | 'degraded' | 'stale' | 'unknown', number>
+  health_counts: Record<"online" | "offline" | "degraded" | "stale" | "unknown", number>
   active_alerts: number
   critical_alerts: number
   recent_events: number
@@ -384,7 +410,7 @@ export interface FlowRecordsResponse {
   to: string
 }
 
-export type FlowProtocol = 'sflow' | 'ipfix'
+export type FlowProtocol = "sflow" | "ipfix"
 
 export interface FlowAnalyticsFilters {
   hours: number
@@ -413,7 +439,9 @@ export async function getFlowAnalytics(
   )
 }
 
-export async function getFlowTrends(filters: FlowAnalyticsFilters): Promise<FlowTrendItem[]> {
+export async function getFlowTrends(
+  filters: FlowAnalyticsFilters,
+): Promise<FlowTrendItem[]> {
   const query = new URLSearchParams({
     hours: String(filters.hours),
     bucket: filters.hours > 48 ? "day" : "hour",
@@ -428,7 +456,9 @@ export async function getFlowTrends(filters: FlowAnalyticsFilters): Promise<Flow
   return response.items
 }
 
-export async function getFlowRecords(filters: FlowAnalyticsFilters): Promise<FlowRecordsResponse> {
+export async function getFlowRecords(
+  filters: FlowAnalyticsFilters,
+): Promise<FlowRecordsResponse> {
   const query = new URLSearchParams({
     hours: String(filters.hours),
     page: String(filters.page ?? 1),
@@ -530,13 +560,20 @@ export async function listAPMServices(
     }`,
   )
 }
-export async function getAPMOverview(filters: APMFilters): Promise<{ items: APMOverviewItem[] from: string to: string }> {
+export async function getAPMOverview(
+  filters: APMFilters,
+): Promise<{ items: APMOverviewItem[] from: string to: string }> {
   return requestJson(`/apm/overview${apmQuery(filters)}`)
 }
-export async function getAPMServiceMetrics(serviceId: number, filters: APMFilters): Promise<{ items: APMServiceMetric[] from: string to: string }> {
+export async function getAPMServiceMetrics(
+  serviceId: number,
+  filters: APMFilters,
+): Promise<{ items: APMServiceMetric[] from: string to: string }> {
   return requestJson(`/apm/services/${serviceId}/metrics${apmQuery(filters)}`)
 }
-export async function getAPMDependencies(filters: APMFilters): Promise<{ items: APMDependencyItem[] from: string to: string }> {
+export async function getAPMDependencies(
+  filters: APMFilters,
+): Promise<{ items: APMDependencyItem[] from: string to: string }> {
   return requestJson(`/apm/dependencies${apmQuery(filters)}`)
 }
 
@@ -606,13 +643,17 @@ export interface CMDBItemFilters {
 export async function listCMDBTypes(): Promise<CMDBType[]> {
   return requestJson("/cmdb/types")
 }
-export async function listCMDBItems(filters: CMDBItemFilters = {}): Promise<CMDBItem[]> {
+export async function listCMDBItems(
+  filters: CMDBItemFilters = {},
+): Promise<CMDBItem[]> {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(filters))
     if (value != null && value !== "") query.set(key, String(value))
   return requestJson(`/cmdb/items${query.toString() ? `?${query}` : ""}`)
 }
-export async function getCMDBRelationships(ciId: number): Promise<CMDBRelationship[]> {
+export async function getCMDBRelationships(
+  ciId: number,
+): Promise<CMDBRelationship[]> {
   return requestJson(`/cmdb/items/${ciId}/relationships`)
 }
 export async function getCMDBHistory(ciId: number): Promise<CMDBHistory[]> {
@@ -841,10 +882,10 @@ export interface ReportSchedule {
   id: number
   name: string
   enabled: boolean
-  frequency: 'daily' | 'weekly' | 'monthly'
+  frequency: "daily" | "weekly" | "monthly"
   run_time: string
   timezone?: string | null
-  report_format: 'csv'
+  report_format: "csv"
   filters: ReportManagementFilters
   created_at: string
   updated_at: string
@@ -857,7 +898,7 @@ export interface GeneratedReport {
   schedule_id?: number | null
   report_name: string
   format: string
-  status: 'RUNNING' | 'SUCCESS' | 'FAILED'
+  status: "RUNNING" | "SUCCESS" | "FAILED"
   period_start: string
   period_end: string
   generated_at: string
@@ -865,16 +906,45 @@ export interface GeneratedReport {
   error_message?: string | null
 }
 
-export async function getReportSchedules() { return requestJson<ReportSchedule[]>('/reports/schedules') }
-export async function createReportSchedule(payload: Omit<ReportSchedule, 'id' | 'created_at' | 'updated_at' | 'last_run_at' | 'next_run_at'>) { return requestJson<ReportSchedule>('/reports/schedules', { method: 'POST', body: JSON.stringify(payload) }) }
-export async function updateReportSchedule(id: number, payload: Partial<Omit<ReportSchedule, 'id' | 'created_at' | 'updated_at'>>) { return requestJson<ReportSchedule>(`/reports/schedules/${id}`, { method: 'PUT', body: JSON.stringify(payload) }) }
-export async function deleteReportSchedule(id: number) { await requestJson<void>(`/reports/schedules/${id}`, { method: 'DELETE' }) }
-export async function getGeneratedReports() { return requestJson<GeneratedReport[]>('/reports/generated') }
+export async function getReportSchedules() {
+  return requestJson<ReportSchedule[]>("/reports/schedules")
+}
+export async function createReportSchedule(
+  payload: Omit<ReportSchedule, "id" | "created_at" | "updated_at" | "last_run_at" | "next_run_at">,
+) {
+  return requestJson<ReportSchedule>("/reports/schedules", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+export async function updateReportSchedule(
+  id: number,
+  payload: Partial<Omit<ReportSchedule, "id" | "created_at" | "updated_at">>,
+) {
+  return requestJson<ReportSchedule>(`/reports/schedules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  })
+}
+export async function deleteReportSchedule(id: number) {
+  await requestJson<void>(`/reports/schedules/${id}`, { method: "DELETE" })
+}
+export async function getGeneratedReports() {
+  return requestJson<GeneratedReport[]>("/reports/generated")
+}
 export async function downloadGeneratedReport(id: number) {
   const token = await ensureAuth()
-  const response = await fetch(buildUrl(`/reports/generated/${id}/download`), { headers: { Authorization: `Bearer ${token}` } })
+  const response = await fetch(buildUrl(`/reports/generated/${id}/download`), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
   if (!response.ok) throw new Error(`Request failed: ${response.status}`)
-  return { blob: await response.blob(), filename: response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/)?.[1] ?? `generated-report-${id}.csv` }
+  return {
+    blob: await response.blob(),
+    filename:
+      response.headers
+        .get("Content-Disposition")
+        ?.match(/filename="?([^";]+)"?/)?.[1] ?? `generated-report-${id}.csv`,
+  }
 }
 
 export interface ReportEmailScheduleStatus {
@@ -888,7 +958,9 @@ export interface ReportEmailScheduleStatus {
 }
 
 export async function getReportManagementEmailSchedule(): Promise<ReportEmailScheduleStatus> {
-  return requestJson<ReportEmailScheduleStatus>("/reports/management/email-schedule")
+  return requestJson<ReportEmailScheduleStatus>(
+    "/reports/management/email-schedule",
+  )
 }
 
 export interface ReportInterfaceDetail {
@@ -1000,12 +1072,30 @@ export interface ReportManagementSection {
   minimum?: number | null
 }
 
-export interface ReportTrendAvailabilityPoint { bucket: string; availability_percent: number | null }
-export interface ReportTrendPerformancePoint { bucket: string; cpu_avg: number | null; memory_avg: number | null; latency_avg_ms: number | null }
-export interface ReportTrendBandwidthPoint { bucket: string; rx_mbps: number | null; tx_mbps: number | null }
-export interface ReportTrendAlertPoint { bucket: string; total: number; critical: number; warning: number; info: number }
+export interface ReportTrendAvailabilityPoint {
+  bucket: string
+  availability_percent: number | null
+}
+export interface ReportTrendPerformancePoint {
+  bucket: string
+  cpu_avg: number | null
+  memory_avg: number | null
+  latency_avg_ms: number | null
+}
+export interface ReportTrendBandwidthPoint {
+  bucket: string
+  rx_mbps: number | null
+  tx_mbps: number | null
+}
+export interface ReportTrendAlertPoint {
+  bucket: string
+  total: number
+  critical: number
+  warning: number
+  info: number
+}
 export interface ReportManagementTrends {
-  bucket_granularity: 'hourly' | 'daily' | 'monthly'
+  bucket_granularity: "hourly" | "daily" | "monthly"
   availability: ReportTrendAvailabilityPoint[]
   performance: ReportTrendPerformancePoint[]
   bandwidth: ReportTrendBandwidthPoint[]
@@ -1125,6 +1215,127 @@ export async function listDeviceOptions(params?: {
   if (params?.limit != null) query.set("limit", String(params.limit))
   const suffix = query.size ? `?${query.toString()}` : ""
   return requestJson<DeviceOptionRecord[]>(`/devices/options${suffix}`)
+}
+
+export interface RemoteAccessTestResponse {
+  success: boolean
+  protocol: "ssh" | "telnet"
+  host: string | null
+  port: number | null
+  latency?: number
+  error_code?: string | null
+  stage?: string | null
+  message?: string | null
+  credential_id?: number | null
+  connection_metadata?: Record<string, unknown>
+}
+
+export interface RemoteAccessSession {
+  session_uuid: string
+  device_id: number
+  protocol: "ssh" | "telnet"
+  port: number
+  device_username: string
+  status: string
+  started_at: string
+  ended_at: string | null
+  disconnect_reason: string | null
+}
+
+export async function listRemoteAccessSessions(): Promise<RemoteAccessSession[]> {
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions")
+}
+
+export async function listRemoteAccessSessionHistory(): Promise<RemoteAccessSession[]> {
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions/history")
+}
+
+export async function createRemoteAccessSession(payload: {
+  device_id: number
+  protocol: "ssh" | "telnet"
+  port: number
+  credential_id?: number
+  username?: string
+  secret?: string
+}): Promise<RemoteAccessSession> {
+  console.info("[remote-access] session request", {
+    device_id: payload.device_id, protocol: payload.protocol, port: payload.port,
+    credential_id: payload.credential_id,
+    credential_id_present: payload.credential_id != null,
+    username_present: Boolean(payload.username), secret_present: Boolean(payload.secret),
+  })
+  return requestJson<RemoteAccessSession>("/remote-access/sessions", {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      username: payload.username,
+      secret: payload.secret,
+    }),
+  })
+}
+
+export async function deleteRemoteAccessSession(
+  sessionUuid: string,
+): Promise<RemoteAccessSession | null> {
+  return requestJson<RemoteAccessSession | null>(
+    `/remote-access/sessions/${encodeURIComponent(sessionUuid)}`,
+    { method: "DELETE" },
+  )
+}
+
+export async function openRemoteAccessTerminal(
+  sessionUuid: string,
+): Promise<WebSocket> {
+  const token = await ensureAuth()
+  const apiUrl = buildUrl(
+    `/remote-access/sessions/${encodeURIComponent(sessionUuid)}/terminal`,
+  )
+  const url = apiUrl.replace(/^http/, "ws")
+  return new WebSocket(url, `nms-bearer-${token}`)
+}
+
+export async function testRemoteAccess(payload: {
+  device_id: number
+  protocol: "ssh" | "telnet"
+  port: number
+  username: string
+  secret: string
+  auth_type?: "password" | "private_key"
+  remember_credential: boolean
+}): Promise<RemoteAccessTestResponse> {
+  console.info("[remote-access] test request", {
+    device_id: payload.device_id, protocol: payload.protocol, port: payload.port,
+    username_present: Boolean(payload.username), secret_present: Boolean(payload.secret),
+    auth_type: payload.auth_type ?? "password", remember_credential: payload.remember_credential,
+  })
+  return requestJson<RemoteAccessTestResponse>("/remote-access/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export interface SSHHostKeyMetadata {
+  id: number
+  device_id: number
+  host: string
+  port: number
+  key_type: string
+  fingerprint: string
+  status: "PENDING" | "TRUSTED" | "REVOKED"
+}
+
+export async function scanSSHHostKey(deviceId: number, port: number): Promise<SSHHostKeyMetadata> {
+  return requestJson<SSHHostKeyMetadata>("/remote-access/host-keys/scan", {
+    method: "POST", body: JSON.stringify({ device_id: deviceId, port }),
+  })
+}
+
+export async function trustSSHHostKey(id: number): Promise<SSHHostKeyMetadata> {
+  return requestJson<SSHHostKeyMetadata>(`/remote-access/host-keys/${id}/trust`, { method: "POST" })
+}
+
+export async function revokeSSHHostKey(id: number): Promise<SSHHostKeyMetadata> {
+  return requestJson<SSHHostKeyMetadata>(`/remote-access/host-keys/${id}/revoke`, { method: "POST" })
 }
 
 /** Devices with an explicitly configured SNMP credential only. */
@@ -1283,7 +1494,9 @@ export async function listSyslogRecords(
     if (value !== undefined && value !== null && value !== "")
       query.set(key, String(value))
   })
-  return requestJson<SyslogRecordsResponse>(`/syslog/records?${query.toString()}`)
+  return requestJson<SyslogRecordsResponse>(
+    `/syslog/records?${query.toString()}`,
+  )
 }
 
 export async function listSyslogRules(): Promise<SyslogRule[]> {
@@ -1583,7 +1796,7 @@ export interface MonitoringStreamEvent {
 
 export interface TopologyStreamEvent {
   event: "topology"
-  data: { revision: string; updated_at: string }
+  data: { revision: string updated_at: string }
 }
 
 export async function pingIps(ips: string[], timeoutMs = 1000): Promise<{
@@ -1850,7 +2063,7 @@ export async function createRole(data: {
 
 export async function updateRole(
   id: number,
-  data: { role_name?: string; authority_level?: number },
+  data: { role_name?: string authority_level?: number },
 ): Promise<RoleRecord> {
   return requestJson(`/roles/${id}`, {
     method: "PATCH",
@@ -1914,22 +2127,38 @@ export interface UserActivityResponse {
   offset: number
 }
 
-export async function listUserSessions(id: number): Promise<UserSessionRecord[]> {
+export async function listUserSessions(
+  id: number,
+): Promise<UserSessionRecord[]> {
   return requestJson<UserSessionRecord[]>(`/users/${id}/sessions`)
 }
 
-export async function revokeUserSession(id: number, sessionId: string): Promise<{ detail: string }> {
-  return requestJson(`/users/${id}/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" })
+export async function revokeUserSession(
+  id: number,
+  sessionId: string,
+): Promise<{ detail: string }> {
+  return requestJson(`/users/${id}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  })
 }
 
-export async function revokeAllUserSessions(id: number): Promise<{ revoked: number }> {
+export async function revokeAllUserSessions(
+  id: number,
+): Promise<{ revoked: number }> {
   return requestJson(`/users/${id}/sessions/revoke-all`, { method: "POST" })
 }
 
-export async function listUserActivity(id: number, params: Record<string, string | number | undefined> = {}): Promise<UserActivityResponse> {
+export async function listUserActivity(
+  id: number,
+  params: Record<string, string | number | undefined> = {},
+): Promise<UserActivityResponse> {
   const query = new URLSearchParams()
-  Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)) })
-  return requestJson<UserActivityResponse>(`/users/${id}/activity${query.toString() ? `?${query}` : ""}`)
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") query.set(key, String(value))
+  })
+  return requestJson<UserActivityResponse>(
+    `/users/${id}/activity${query.toString() ? `?${query}` : ""}`,
+  )
 }
 
 export async function getUserSites(id: number): Promise<UserSiteAssignments> {
@@ -1983,7 +2212,12 @@ export async function updateUserStatus(
 ): Promise<UserRecord> {
   return requestJson(`/users/${id}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status, ...(suspendedUntil ? { suspended_until: new Date(suspendedUntil).toISOString() } : {}) }),
+    body: JSON.stringify({
+      status,
+      ...(suspendedUntil
+        ? { suspended_until: new Date(suspendedUntil).toISOString() }
+        : {}),
+    }),
   })
 }
 
@@ -2479,7 +2713,12 @@ export interface DeviceOverviewItem {
   ip_address: string
   mac_address?: string | null
   status: string
-  health?: { status?: string; health_reason?: string; freshness_status?: string; age_seconds?: number | null }
+  health?: {
+    status?: string
+    health_reason?: string
+    freshness_status?: string
+    age_seconds?: number | null
+  }
   monitoring_status: boolean
   vendor?: string | null
   device_type?: string | null
@@ -2647,19 +2886,48 @@ export interface OverviewResponse {
   fetched_at: string
 }
 
-export async function getOverview(hours = 24, forceRefresh = false): Promise<OverviewResponse> {
+export async function getOverview(
+  hours = 24,
+  forceRefresh = false,
+): Promise<OverviewResponse> {
   // The overview is a live dashboard snapshot; never reuse the generic
   // 30-second client cache for it. Backend applies a short 10-second cache.
-  return requestJson<OverviewResponse>(`/overview?hours=${hours}${forceRefresh ? "&force_refresh=true" : ""}`, { cache: "no-store" })
+  return requestJson<OverviewResponse>(
+    `/overview?hours=${hours}${forceRefresh ? "&force_refresh=true" : ""}`,
+    { cache: "no-store" },
+  )
 }
 
-export async function getDeviceMonitoringConfigs(deviceId: number): Promise<Array<{ device_id: number; module_name: string; enabled: boolean; interval_seconds: number; status: string; last_poll_at?: string | null; next_poll_at?: string | null; error_message?: string | null }>> {
+export async function getDeviceMonitoringConfigs(
+  deviceId: number,
+): Promise<Array<{
+  device_id: number
+  module_name: string
+  enabled: boolean
+  interval_seconds: number
+  status: string
+  last_poll_at?: string | null
+  next_poll_at?: string | null
+  error_message?: string | null
+}>> {
   return requestJson(`/snmp/devices/${deviceId}/monitoring`)
 }
 
-export async function restartMonitoringJob(deviceId: number, module: string, intervalSeconds: number): Promise<unknown> {
-  await requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/stop`, { method: "POST" })
-  return requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/start`, { method: "POST", body: JSON.stringify({ module_name: module, interval_seconds: intervalSeconds }) })
+export async function restartMonitoringJob(
+  deviceId: number,
+  module: string,
+  intervalSeconds: number,
+): Promise<unknown> {
+  await requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/stop`, {
+    method: "POST",
+  })
+  return requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/start`, {
+    method: "POST",
+    body: JSON.stringify({
+      module_name: module,
+      interval_seconds: intervalSeconds,
+    }),
+  })
 }
 
 // ── Kill all monitoring services ──────────────────────────────────────────
@@ -2683,7 +2951,10 @@ export async function getServiceStates(): Promise<OverviewResponse["services"]> 
 }
 
 export async function startPollingService(): Promise<OverviewResponse["services"]> {
-  return requestJson<OverviewResponse["services"]>("/monitoring/polling/start", { method: "POST" })
+  return requestJson<OverviewResponse["services"]>(
+    "/monitoring/polling/start",
+    { method: "POST" },
+  )
 }
 
 // ── Organizations (full CRUD) ─────────────────────────────────────────────
@@ -3734,10 +4005,14 @@ export interface RuntimeStatusRecord {
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatusRecord> {
-  return requestJson<RuntimeStatusRecord>("/runtime-status", { cache: "no-store" })
+  return requestJson<RuntimeStatusRecord>("/runtime-status", {
+    cache: "no-store",
+  })
 }
 
-export async function restartRuntimeProcess(pid: number): Promise<{ detail: string; pid: number }> {
+export async function restartRuntimeProcess(
+  pid: number,
+): Promise<{ detail: string pid: number }> {
   return requestJson(`/runtime-status/restart/${pid}`, { method: "POST" })
 }
 
@@ -3942,14 +4217,15 @@ export interface AuditLogPage {
 
 export function listAuditLogs(): Promise<AuditLogRecord[]>
 export function listAuditLogs(userId: number): Promise<AuditLogRecord[]>
-export function listAuditLogs(params: AuditLogFilters & { include_total: true }): Promise<AuditLogPage>
+export function listAuditLogs(
+  params: AuditLogFilters & { include_total: true },
+): Promise<AuditLogPage>
 export async function listAuditLogs(
   params?: AuditLogFilters | number,
 ): Promise<AuditLogRecord[] | AuditLogPage> {
   // Preserve the original listAuditLogs() and listAuditLogs(userId) signatures.
-  const filters: AuditLogFilters = typeof params === "number"
-    ? { user_id: params }
-    : (params ?? {})
+  const filters: AuditLogFilters =
+    typeof params === "number" ? { user_id: params } : (params ?? {})
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined && value !== null && value !== "")
@@ -3978,7 +4254,8 @@ export async function getAuditLogSummary(
   params: AuditLogSummaryParams = {},
 ): Promise<AuditLogSummary> {
   const query = new URLSearchParams()
-  if (params.start_date !== undefined) query.set("start_date", params.start_date)
+  if (params.start_date !== undefined)
+    query.set("start_date", params.start_date)
   if (params.end_date !== undefined) query.set("end_date", params.end_date)
   const suffix = query.toString() ? `?${query.toString()}` : ""
   return requestJson<AuditLogSummary>(`/audit-logs/summary${suffix}`)

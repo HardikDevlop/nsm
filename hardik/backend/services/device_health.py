@@ -16,6 +16,28 @@ from backend.utils.time import utc_now
 STALE_MULTIPLIER = 3
 
 
+def derive_monitoring_state(device: Device, configs: list[MonitoringConfig] | None = None) -> dict[str, Any]:
+    """Return the canonical module-monitoring intent/runtime contract.
+
+    ``Device.monitoring_status`` is deliberately excluded: it is the legacy
+    ICMP opt-in flag.  Module intent lives in MonitoringConfig.enabled and is
+    never inferred from reachability or the last poll result.
+    """
+    configs = configs if configs is not None else []
+    enabled = [config for config in configs if config.enabled]
+    if not enabled:
+        state = "stopped"
+    elif any(config.status in {MonitoringStatus.ERROR.value, "retrying"} for config in enabled):
+        state = "degraded"
+    else:
+        state = "active"
+    return {
+        "monitoring_enabled": bool(enabled),
+        "monitoring_state": state,
+        "monitoring_modules": [config.module_name for config in enabled],
+    }
+
+
 def _aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -69,7 +91,12 @@ def derive_device_health(db: Session, device: Device, *, now: datetime | None = 
     enabled = [c for c in configs if c.enabled]
     icmp_enabled = bool(device.monitoring_status)
     icmp_interval = min((c.interval_seconds for c in enabled), default=60)
-    icmp, icmp_age = _icmp_health_evidence(device, now, icmp_interval)
+    # ``last_seen`` is not an ICMP probe.  When the legacy ICMP intent is
+    # disabled, keep that evidence out of the reachability classification.
+    icmp, icmp_age = (
+        _icmp_health_evidence(device, now, icmp_interval)
+        if icmp_enabled else ("disabled", None)
+    )
 
     snmp_rows = []
     for config in enabled:

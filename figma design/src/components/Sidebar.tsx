@@ -38,6 +38,7 @@ const nav = [
   // { to: '/firewall', label: 'Firewall', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', permission: 'firewall:read' },
   { to: '/servers', label: 'Server Monitor', icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2', permission: 'server_monitoring:read' },
   { to: '/linux-servers', label: 'Linux Server Monitoring', icon: 'M4 5h16v14H4zM8 9h8M8 13h5', permission: 'linux_servers:read' },
+  { to: '/remote-access', label: 'Remote Access', icon: 'M4 6h16M7 10v8m5-8v8m5-8v8M3 6l2-3h14l2 3M5 21h14', permission: 'remote_access:view', management: true },
   // { to: '/forensics', label: 'Forensics', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z', permission: 'forensics:read' },
   // { to: '/compliance', label: 'Compliance', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4', permission: 'compliance:read' },
   
@@ -257,7 +258,7 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
                 }`
               }
               style={({ isActive }) => ({
-                color: isActive ? 'var(--t-accent)' : 'var(--t-muted)',
+                color: isActive ? 'var(--t-accent)' : isDark ? 'var(--t-text)' : 'var(--t-muted)',
                 background: isActive ? 'var(--t-accent-alpha)' : 'transparent',
                 border: isActive ? '1px solid var(--t-accent-border)' : '1px solid transparent',
               })}
@@ -306,7 +307,7 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
                     }`
                   }
                   style={({ isActive }) => ({
-                    color: isActive ? 'var(--t-accent)' : 'var(--t-muted)',
+                    color: isActive ? 'var(--t-accent)' : isDark ? 'var(--t-text)' : 'var(--t-muted)',
                     background: isActive ? 'var(--t-accent-alpha)' : 'transparent',
                     border: isActive ? '1px solid var(--t-accent-border)' : '1px solid transparent',
                   })}
@@ -357,7 +358,7 @@ export default function Sidebar({ collapsed, mobileOpen, onClose }: Props) {
                     }`
                   }
                   style={({ isActive }) => ({
-                    color: isActive ? 'var(--t-accent)' : 'var(--t-muted)',
+                    color: isActive ? 'var(--t-accent)' : isDark ? 'var(--t-text)' : 'var(--t-muted)',
                     background: isActive ? 'var(--t-accent-alpha)' : 'transparent',
                     border: isActive ? '1px solid var(--t-accent-border)' : '1px solid transparent',
                   })}

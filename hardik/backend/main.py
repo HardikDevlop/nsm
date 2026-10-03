@@ -18,6 +18,7 @@ from backend.api.routes import router
 from backend.api.snmp_device_routes import router as snmp_device_router
 from backend.api.manual_topology_routes import router as manual_topology_router
 from backend.api.overview_routes import router as overview_router
+from backend.api.remote_access_routes import router as remote_access_router
 from backend.api.monitoring_data_routes import router as monitoring_data_router
 from backend.api.flow_routes import router as flow_router
 from backend.api.apm_routes import router as apm_router
@@ -48,6 +49,7 @@ from backend.seed import seed_rbac, seed_ouis_and_products
 from backend.services.snmp_polling import get_polling_scheduler, shutdown_polling_scheduler
 from backend.snmp.client import shutdown_snmp_workers
 from backend.services.realtime_monitor import get_engine
+from backend.services.remote_access.session_manager import SessionManager
 from backend.services.ha_scheduler import SchedulerLease
 from backend.services.report_email import register_daily_report_job
 from backend.services.report_schedule import set_report_scheduler, restore_report_schedules
@@ -101,6 +103,9 @@ async def lifespan(app: FastAPI):
             syslog_service = None
     app.state.syslog = syslog_service
 
+    app.state.remote_access_db = SessionLocal()
+    app.state.remote_access_session_manager = SessionManager(app.state.remote_access_db)
+
     # Start centralized SNMP polling scheduler
     app.state.scheduler_lease = SchedulerLease()
     app.state.scheduler_lease_owned = await asyncio.to_thread(app.state.scheduler_lease.acquire)
@@ -132,6 +137,12 @@ async def lifespan(app: FastAPI):
     await shutdown_polling_scheduler()
     app.state.scheduler_lease.release()
     await asyncio.to_thread(shutdown_snmp_workers)
+    if getattr(app.state, "remote_access_session_manager", None) is not None:
+        for item in list(app.state.remote_access_session_manager.list_active_sessions()):
+            app.state.remote_access_session_manager.disconnect_session(item.session_uuid, reason="Application shutdown")
+        app.state.remote_access_db.commit()
+        app.state.remote_access_db.close()
+        app.state.remote_access_session_manager = None
     await asyncio.to_thread(get_engine().shutdown)
 
 async def _supervise_scheduler_lease(app: FastAPI):
@@ -235,6 +246,7 @@ app.include_router(linux_monitoring_router)
 
 # Overview + Kill-all service control
 app.include_router(overview_router)
+app.include_router(remote_access_router, prefix="/api/v1")
 
 # Legacy endpoints (/api/inventory, /api/discovery/modules, /api/discovery/summary)
 # kept alive for backward compatibility with the React frontend.

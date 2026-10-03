@@ -65,6 +65,7 @@ export default function DeviceMonitoring() {
   const cleanupRef = useRef<(() => void) | null>(null)
   const deviceRef = useRef<DeviceRecord | null>(null)
   const monitoringRef = useRef(false)
+  const lastLiveStatusRef = useRef<string | null>(null)
 
   // Load initial device data
   const loadDevice = useCallback(async () => {
@@ -142,6 +143,9 @@ export default function DeviceMonitoring() {
           setLiveLastCheck(match.last_check as string | null)
           const hist = match.history as Array<{ time: string; status: string; rtt_ms: number | null }> | undefined
           if (hist) setLiveHistory(hist)
+          const nextStatus = String(match.status ?? 'unknown')
+          if (lastLiveStatusRef.current && lastLiveStatusRef.current !== nextStatus) void loadStatusHistory()
+          lastLiveStatusRef.current = nextStatus
         }
       } catch { /* silent */ }
 
@@ -162,6 +166,9 @@ export default function DeviceMonitoring() {
             setLiveLastCheck(match.last_check as string | null)
             const hist = match.history as Array<{ time: string; status: string; rtt_ms: number | null }> | undefined
             if (hist) setLiveHistory(hist)
+            const nextStatus = String(match.status ?? 'unknown')
+            if (lastLiveStatusRef.current && lastLiveStatusRef.current !== nextStatus) void loadStatusHistory()
+            lastLiveStatusRef.current = nextStatus
           } else if (monitoringRef.current) {
             // Device was being monitored but is no longer in the list — stopped externally
             setIsMonitoring(false)
@@ -271,11 +278,12 @@ export default function DeviceMonitoring() {
   // Pagination
   const totalMetricPages = Math.max(1, Math.ceil(metrics.length / metricPageSize))
   const pagedMetrics = useMemo(() => metrics.slice((metricPage - 1) * metricPageSize, metricPage * metricPageSize), [metrics, metricPage])
-  const realStatusHistory = useMemo(() => statusHistory.filter(entry => (
-    entry.new_status === 'online' && (entry.old_status === 'offline' || entry.old_status === 'online')
-  ) || (
-    entry.new_status === 'offline' && (entry.old_status === 'online' || entry.old_status === 'offline')
-  )), [statusHistory])
+  const realStatusHistory = useMemo(() => statusHistory
+    .filter(entry => (
+      (entry.old_status === 'offline' && entry.new_status === 'online') ||
+      (entry.old_status === 'online' && entry.new_status === 'offline')
+    ))
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()), [statusHistory])
   const totalStatusPages = Math.max(1, Math.ceil(realStatusHistory.length / statusPageSize))
   const pagedStatusHistory = useMemo(() => realStatusHistory.slice((statusPage - 1) * statusPageSize, statusPage * statusPageSize), [realStatusHistory, statusPage])
 
@@ -477,7 +485,7 @@ export default function DeviceMonitoring() {
             {/* Status Change History */}
             <GlassCard className="p-3 md:p-4">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">STATUS CHANGE HISTORY</div>
-              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · verified online/offline transitions from database · {realStatusHistory.length} recorded changes</div>
+              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · last 24 hours · newest 100 verified online/offline transitions · {realStatusHistory.length} recorded changes</div>
               {realStatusHistory.length === 0 ? (
                 <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No up/down changes recorded yet.</div>
               ) : (

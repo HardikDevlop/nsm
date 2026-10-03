@@ -631,6 +631,7 @@ export default function Dashboard() {
 
   const [data, setData] = useState<OverviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState("12H")
   const [updated, setUpdated] = useState<Date | null>(null)
@@ -638,7 +639,8 @@ export default function Dashboard() {
   const [serverMetrics, setServerMetrics] = useState<LinuxMetricSnapshot | null>(null)
 
   const load = async (quiet = false, forceRefresh = false) => {
-    if (!quiet) setLoading(true)
+    if (!quiet && !data) setLoading(true)
+    if (data) setRefreshing(true)
     try {
       setError(null)
       const hours = range === "1H" ? 1 : range === "6H" ? 6 : range === "12H" ? 12 : range === "7D" ? 168 : 24
@@ -649,6 +651,7 @@ export default function Dashboard() {
       setError(e instanceof Error ? e.message : d.noStoredData)
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -685,7 +688,7 @@ export default function Dashboard() {
   const rangeLabel = range === "1H" ? "Last 1 hour" : range === "6H" ? "Last 6 hours" : range === "12H" ? "Last 12 hours" : range === "7D" ? "Last 7 days" : "Last 24 hours"
   const devices = data?.devices ?? []
   const summary = data?.summary
-  const snmpEnabled = devices.filter((d) => Boolean(d.snmp_version)).length
+  const snmpEnabled = data?.normalized?.snmp?.configured_devices ?? 0
   const canDevices = hasPermission('devices:read')
   const canMonitoringJobs = hasPermission('monitoring_jobs:read')
   const canAlerts = hasPermission('alerts:read')
@@ -695,12 +698,12 @@ export default function Dashboard() {
     offline: summary?.health_counts?.offline ?? summary?.offline_devices ?? 0,
     degraded: summary?.health_counts?.degraded ?? 0,
     stale: summary?.health_counts?.stale ?? 0,
-    warning: summary?.health_counts?.degraded ?? summary?.warning_devices ?? 0,
+    warning: summary?.warning_devices ?? ((summary?.health_counts?.degraded ?? 0) + (summary?.health_counts?.stale ?? 0)),
     unknown: summary?.health_counts?.unknown ?? 0,
   }
 
-  const avgCpu = n?.performance?.avg_cpu ?? 0
-  const avgMem = n?.performance?.avg_memory ?? 0
+  const avgCpu = n?.performance?.avg_cpu ?? null
+  const avgMem = n?.performance?.avg_memory ?? null
 
   // Backward-compatible fallback while older API responses/cache entries do
   // not contain the new range aggregate.
@@ -710,8 +713,8 @@ export default function Dashboard() {
   const fallbackMemory = devices
     .map((device) => n?.devices[String(device.id)]?.memory ?? device.memory_usage)
     .filter((value): value is number => value != null && Number.isFinite(value))
-  const displayCpu = serverMetrics?.cpu_percent ?? 0
-  const displayMem = serverMetrics?.memory_percent ?? 0
+  const displayCpu = serverMetrics?.cpu_percent ?? null
+  const displayMem = serverMetrics?.memory_percent ?? null
   const hasCpuData = serverMetrics?.cpu_percent != null
   const hasMemoryData = serverMetrics?.memory_percent != null
   const hasAvailabilityData = Boolean(summary?.total_devices)
@@ -884,11 +887,11 @@ export default function Dashboard() {
           </div>
           <button
             onClick={() => void load(false, true)}
-            disabled={loading}
+            disabled={loading || refreshing}
             className="font-mono text-xs px-3 py-2 rounded glass-bright transition-all duration-300 hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ color: C.cyan, border: `1px solid ${C.cyan}40` }}
           >
-            {loading ? d.loading : d.refresh}
+            {loading || refreshing ? d.loading : d.refresh}
           </button>
         </div>
       </div>
@@ -903,21 +906,29 @@ export default function Dashboard() {
         </div>
       )}
 
+      {refreshing && data && (
+        <div className="font-mono text-[10px]" style={{ color: C.muted }} aria-live="polite">
+          Refreshing dashboard data…
+        </div>
+      )}
+
       {loading && !data ? (
-        <div
-          className="glass rounded-xl p-12 text-center font-mono text-sm animate-pulse"
-          style={{ color: C.cyan }}
-        >
-          {d.loadingStored}
+        <div className="space-y-4" aria-busy="true" aria-label={d.loadingStored}>
+          <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-8 gap-3">
+            {Array.from({ length: 8 }, (_, index) => <div key={index} className="glass rounded-xl h-28 animate-pulse" />)}
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            {Array.from({ length: 3 }, (_, index) => <div key={index} className="glass rounded-xl h-72 animate-pulse" />)}
+          </div>
         </div>
       ) : (
         <>
           {/* ── METRIC CARDS ── */}
           <SectionLabel label="Overview" />
           <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-8 gap-3 animate-slideUp">
-            <Metric label={d.totalDevices} number={summary?.total_devices ?? 0} hint={d.inventory} onClick={canDevices ? () => navigate("/device-monitoring") : undefined} />
-            <Metric label={d.online} number={summary?.online_devices ?? 0} hint={d.reachable} tone="green" onClick={canDevices ? () => navigate("/device-monitoring") : undefined} />
-            <Metric label={d.offline} number={summary?.offline_devices ?? 0} hint={d.unreachable} tone="red" onClick={canDevices ? () => navigate("/device-monitoring") : undefined} />
+            <Metric label={d.totalDevices} number={summary?.total_devices ?? 0} hint={d.inventory} onClick={canDevices ? () => navigate("/devices") : undefined} />
+            <Metric label={d.online} number={health.online} hint={d.reachable} tone="green" onClick={canDevices ? () => navigate("/devices") : undefined} />
+            <Metric label={d.offline} number={health.offline} hint={d.unreachable} tone="red" onClick={canDevices ? () => navigate("/devices") : undefined} />
             <Metric label={d.snmpEnabled} number={snmpEnabled} hint={d.credentialsConfigured} tone="green" onClick={canDevices ? () => navigate("/snmp/devices") : undefined} />
             <Metric label={d.snmpFailed} number={n?.polling.failure ?? 0} hint={rangeLabel} tone="red" onClick={canMonitoringJobs ? () => navigate("/monitoring-jobs") : undefined} />
             <Metric label={d.criticalAlerts} number={summary?.critical_alerts ?? 0} hint={d.openAcknowledged} tone="red" onClick={canAlerts ? () => navigate("/alerts") : undefined} />
@@ -944,7 +955,7 @@ export default function Dashboard() {
                     <div className="mt-4 h-2 rounded-full overflow-hidden" style={{ background: "var(--t-border-light)" }}><div className="traffic-fill h-full rounded-full" style={{ width: `${pct}%`, background: item.tone, boxShadow: `0 0 12px ${item.tone}` }} /></div>
                     <div className="mt-3">
                       <TrafficMiniChart
-                        data={chart.length ? chart.slice(-24) : [{ label: "Now", rx_mbps: item.short === "RX" ? item.value : 0, tx_mbps: item.short === "TX" ? item.value : 0 }]}
+                        data={chart.slice(-24)}
                         dataKey={item.short === "RX" ? "rx_mbps" : "tx_mbps"}
                         tone={item.tone}
                       />
@@ -1005,7 +1016,12 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="grid grid-cols-4 gap-2 mt-3">
-                {Object.entries(health).map(([key, val]) => (
+                {([
+                  ["online", health.online],
+                  ["offline", health.offline],
+                  ["warning", health.warning],
+                  ["unknown", health.unknown],
+                ] as const).map(([key, val]) => (
                   <div key={key} className="text-center rounded-lg p-2 transition-all duration-300 hover:scale-105" style={{ background: "rgba(0,212,255,.04)" }}>
                     <div className="font-display text-lg" style={{ color: key === "offline" ? C.red : key === "warning" ? C.amber : C.green }}>
                       {val}
@@ -1326,7 +1342,7 @@ export default function Dashboard() {
           {/* ═══════════ ROW: Network Info + Recent Table ═══════════ */}
           <SectionLabel label="Topology & Recent Activity" />
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <Panel title={d.networkInformation} subtitle={d.normalizedTopologyInventory}>
+            <Panel title={d.networkInformation} subtitle={d.normalizedTopologyInventory} className="self-start h-fit">
               <div className="grid grid-cols-2 gap-3">
                 {Object.entries({
                   [d.lldpCdpNeighbors]: n?.network.lldp_neighbors,
@@ -1336,7 +1352,7 @@ export default function Dashboard() {
                   [d.mac]: n?.network.mac_entries,
                   [d.topologyNodes]: n?.network.topology_nodes,
                 }).map(([label, metric]) => (
-                  <div key={label} className="transition-all duration-300 hover:translate-x-1">
+                  <div key={label} className="rounded-lg px-3 py-2 transition-all duration-300 hover:-translate-y-0.5" style={{ border: `1px solid ${C.cyan}22`, background: `linear-gradient(145deg, ${C.cyan}0d, transparent 75%)` }}>
                     <div className="font-mono text-[10px]" style={{ color: C.muted }}>{label}</div>
                     <div className="font-display text-lg neon-cyan">{metric == null ? "N/A" : metric}</div>
                   </div>
@@ -1350,7 +1366,7 @@ export default function Dashboard() {
               onClick={() => navigate("/device-monitoring")}
               className="xl:col-span-2"
             >
-              <div className="overflow-x-auto">
+              <div className="max-h-[220px] overflow-y-auto">
                 <table className="w-full table-fixed text-left">
                   <colgroup>
                     <col className="w-[36%]" />
@@ -1367,7 +1383,7 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {devices.slice(0, 8).map((dv) => (
+                    {devices.map((dv) => (
                       <tr
                         key={dv.id}
                         className="font-mono text-xs transition-colors duration-200 hover:bg-cyan-400/5"

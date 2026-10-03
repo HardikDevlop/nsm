@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from backend.database.session import get_db
 from backend.dependencies import require_permission
+from backend.auth.authorization import get_accessible_site_ids
 from backend.services.device_health import derive_device_health
 from backend.models.snmp import PollStatus
 
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["Overview & Service Control"])
 _OVERVIEW_CACHE_TTL_SECONDS = 10
 _OVERVIEW_HISTORY_MAX_ROWS = 5000
-_overview_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_overview_cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _overview_cache_lock = Lock()
 
 _POLLING_FAILURE_STATUSES = frozenset({
@@ -203,7 +204,7 @@ def get_overview(
     hours: int = Query(default=24, ge=1, le=168),
     force_refresh: bool = Query(default=False),
     db: Session = Depends(get_db),
-    _: Any = Depends(require_permission("dashboard:read")),
+    current_user: Any = Depends(require_permission("dashboard:read")),
 ) -> dict[str, Any]:
     """
     Return everything the Dashboard needs in a single call.
@@ -223,20 +224,24 @@ def get_overview(
     from backend.models.identity import DeviceCapabilities  # noqa: PLC0415
 
     now_ts = datetime.utcnow().timestamp()
-    redis_key = f"nms:overview:v1:hours:{hours}"
+    accessible_sites = get_accessible_site_ids(current_user)
+    scope_key = "all" if accessible_sites is None else ",".join(map(str, sorted(accessible_sites)))
+    cache_scope = f"user:{getattr(current_user, 'id', 'unknown')}:sites:{scope_key}"
+    redis_key = f"nms:overview:v2:{cache_scope}:hours:{hours}"
+    cache_key = (cache_scope, hours)
     if not force_refresh:
         redis_value = get_json(redis_key)
         if isinstance(redis_value, dict):
             return redis_value
         with _overview_cache_lock:
-            cached = _overview_cache.get(hours)
+            cached = _overview_cache.get(cache_key)
             if cached and now_ts - cached[0] < _OVERVIEW_CACHE_TTL_SECONDS:
                 return cached[1]
 
     since_24h = datetime.utcnow() - timedelta(hours=hours)
 
     # ── devices (with vendor and type joined) ──────────────────────────────
-    device_rows = (
+    device_query = (
         db.query(Device)
         .options(
             load_only(
@@ -250,6 +255,11 @@ def get_overview(
             joinedload(Device.device_type).load_only(DeviceType.id, DeviceType.name),
         )
         .filter(Device.deleted_at.is_(None))
+    )
+    if accessible_sites is not None:
+        device_query = device_query.filter(Device.site_id.in_(accessible_sites) if accessible_sites else False)
+    device_rows = (
+        device_query
         .order_by(Device.hostname)
         .all()
     )
@@ -346,15 +356,13 @@ def get_overview(
 
     # ── build device list ──────────────────────────────────────────────────
     devices_out: list[dict[str, Any]] = []
-    total = online = offline = 0
+    total = 0
     health_counts = {state: 0 for state in ("online", "offline", "degraded", "stale", "unknown")}
     for dev in device_rows:
         total += 1
         health = derive_device_health(db, dev)
         derived_status = health["status"]
         health_counts[derived_status] += 1
-        if derived_status == "online": online += 1
-        elif derived_status == "offline": offline += 1
 
         met = metric_by_device.get(dev.id)
         interface_count = iface_counts_by_device.get(dev.id)
@@ -567,6 +575,8 @@ def get_overview(
         db.query(func.count(MonitoringConfig.id)).filter(MonitoringConfig.enabled.is_(True)).scalar_subquery().label("configured_jobs"),
         db.query(func.count(OIDCache.id)).filter(OIDCache.supported.is_(False)).scalar_subquery().label("unsupported_oids"),
     ).one()
+    configured_snmp_devices = db.query(func.count(func.distinct(DeviceCredential.device_id))).filter(DeviceCredential.device_id.in_(device_ids)).scalar() if device_ids else 0
+    monitored_snmp_devices = db.query(func.count(func.distinct(MonitoringConfig.device_id))).filter(MonitoringConfig.device_id.in_(device_ids), MonitoringConfig.enabled.is_(True)).scalar() if device_ids else 0
     capabilities = db.query(DeviceCapabilities).filter(
         DeviceCapabilities.device_id.in_(device_ids),
     ).all() if device_ids else []
@@ -628,16 +638,21 @@ def get_overview(
             "enabled_jobs": dashboard_counts.configured_jobs,
             "collector_failures": polling_summary["failed_attempts"],
             "unsupported_oids": dashboard_counts.unsupported_oids,
+            "success_rate_definition": "successful attempts / (successful + failed attempts) in selected window; unsupported, no_data, and unknown are excluded",
+            "window_hours": hours,
         },
         "interface_summary": {
             "total": len(interface_rows),
             "up": sum(1 for row in interface_rows if str(row["oper_status"]).lower() in ("up", "upward")),
             "down": sum(1 for row in interface_rows if str(row["oper_status"]).lower() in ("down", "downward")),
+            "administratively_down": sum(1 for row in interface_rows if str(row["admin_status"]).lower() in ("down", "2", "false")),
+            "unknown_or_stale": sum(1 for row in interface_rows if row["freshness"] != "fresh"),
             "errors": sum(row["errors"] or 0 for row in interface_rows),
             "drops": sum(row["discards"] or 0 for row in interface_rows),
         },
         "alerts_by_severity": alert_counts,
         "device_types": type_counts,
+        "snmp": {"configured_devices": int(configured_snmp_devices or 0), "monitored_devices": int(monitored_snmp_devices or 0)},
         "network": {
             "lldp_neighbors": network_counts["lldp_neighbors"],
             "vlan_count": network_counts["vlan_count"],
@@ -654,10 +669,11 @@ def get_overview(
     payload = {
         "summary": {
             "total_devices":    total,
-            "online_devices":   online,
-            "offline_devices":  offline,
-            "warning_devices":  total - online - offline,
+            "online_devices":   health_counts["online"],
+            "offline_devices":  health_counts["offline"],
+            "warning_devices":  health_counts["degraded"] + health_counts["stale"],
             "health_counts":     health_counts,
+            "status_share":      health_counts.copy(),
             "active_alerts":    active_alerts,
             "critical_alerts":  critical_alerts,
             "recent_events":    len(event_rows),
@@ -671,7 +687,7 @@ def get_overview(
         "fetched_at": datetime.utcnow().isoformat(),
     }
     with _overview_cache_lock:
-        _overview_cache[hours] = (now_ts, payload)
+        _overview_cache[cache_key] = (now_ts, payload)
     # Keep the dashboard snapshot short-lived. The in-process cache is 10s;
     # using the global Redis TTL here could otherwise serve an old overview
     # long after a new poll has been persisted.

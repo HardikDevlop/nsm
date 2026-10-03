@@ -4,7 +4,8 @@ import { PermissionGuard } from '../components/PermissionGuard'
 import TablePagination from '../components/TablePagination'
 import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
-import { listDeviceCredentials, createDeviceCredential, updateDeviceCredential, deleteDeviceCredential, listDeviceOptions, type DeviceCredentialRecord, type DeviceOptionRecord } from '../lib/api'
+import { listDeviceCredentials, createDeviceCredential, updateDeviceCredential, deleteDeviceCredential, listDeviceOptions, scanSSHHostKey, trustSSHHostKey, revokeSSHHostKey, testRemoteAccess, type DeviceCredentialRecord, type DeviceOptionRecord, type SSHHostKeyMetadata } from '../lib/api'
+import { useAuth } from '../components/AuthContext'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (<div><label className="font-mono text-xs block mb-1" style={{ color: 'var(--t-muted)' }}>{label}</label>{children}</div>)
@@ -25,6 +26,15 @@ export default function DeviceCredentials() {
   const [fUsername, setFUsername] = useState('')
   const [fPassword, setFPassword] = useState('')
   const [fCommunity, setFCommunity] = useState('')
+  const [fPort, setFPort] = useState(22)
+  const [fAuthType, setFAuthType] = useState<'password' | 'private_key'>('password')
+  const [hostKey, setHostKey] = useState<SSHHostKeyMetadata | null>(null)
+  const [hostKeyId, setHostKeyId] = useState<number | null>(null)
+  const [hostKeyLoading, setHostKeyLoading] = useState(false)
+  const [hostKeyError, setHostKeyError] = useState('')
+  const [testLoading, setTestLoading] = useState(false)
+  const [testError, setTestError] = useState('')
+  const { hasPermission } = useAuth()
 
   const load = useCallback(async () => {
     try {
@@ -37,8 +47,40 @@ export default function DeviceCredentials() {
 
   useEffect(() => { void load() }, [load])
 
-  function openCreate() { setEditing(null); setFDeviceId(devices[0]?.id || 0); setFType('snmp_v2c'); setFUsername(''); setFPassword(''); setFCommunity('public'); setShowModal(true) }
-  function openEdit(item: DeviceCredentialRecord) { setEditing(item); setFDeviceId(item.device_id); setFType(item.credential_type); setFUsername(item.username ?? ''); setFPassword(''); setFCommunity(''); setShowModal(true) }
+  function clearHostKey() { setHostKey(null); setHostKeyId(null); setHostKeyError(''); setTestError('') }
+  function openCreate() { setEditing(null); setFDeviceId(devices[0]?.id || 0); setFType('snmp_v2c'); setFUsername(''); setFPassword(''); setFCommunity('public'); setFPort(22); setFAuthType('password'); clearHostKey(); setShowModal(true) }
+  function openEdit(item: DeviceCredentialRecord) { setEditing(item); setFDeviceId(item.device_id); setFType(item.credential_type); setFUsername(item.username ?? ''); setFPassword(''); setFCommunity(''); setFPort(22); setFAuthType('password'); clearHostKey(); setShowModal(true) }
+
+  function changeDevice(id: number) { setFDeviceId(id); if (fType === 'ssh') clearHostKey() }
+  function changeType(type: string) { setFType(type); if (type !== 'ssh') clearHostKey() }
+
+  async function handleScanHostKey() {
+    if (!hasPermission('remote_access:manage_credentials') || !fDeviceId || fPort < 1 || fPort > 65535) return
+    setHostKeyLoading(true); setHostKeyError(''); clearHostKey()
+    try {
+      const result = await scanSSHHostKey(fDeviceId, fPort)
+      setHostKey(result)
+      setHostKeyId(result.id)
+    } catch (e) { setHostKeyError(e instanceof Error ? e.message : 'Host-key scan failed') }
+    finally { setHostKeyLoading(false) }
+  }
+
+  async function handleHostKeyAction(action: 'trust' | 'revoke') {
+    if (!hostKeyId) { setHostKeyError('Host-key record id is unavailable; scan again after the backend returns it.'); return }
+    try { setHostKey(action === 'trust' ? await trustSSHHostKey(hostKeyId) : await revokeSSHHostKey(hostKeyId)) }
+    catch (e) { setHostKeyError(e instanceof Error ? e.message : 'Host-key update failed') }
+  }
+
+  async function handleTestConnection() {
+    if (!fDeviceId || !fUsername.trim() || !fPassword) { setTestError('Device, username, and authentication secret are required.'); return }
+    setTestLoading(true); setTestError('')
+    try {
+      const result = await testRemoteAccess({ device_id: fDeviceId, protocol: 'ssh', port: fPort, username: fUsername.trim(), secret: fPassword, auth_type: fAuthType, remember_credential: false })
+      if (!result.success) setTestError([result.stage, result.error_code, result.message].filter(Boolean).join(' · ') || 'Connection failed')
+      else toast.success('SSH connection verified')
+    } catch (e) { setTestError(e instanceof Error ? e.message : 'Connection test failed') }
+    finally { setTestLoading(false) }
+  }
 
   async function handleSubmit() {
     if (!fDeviceId) { toast.warning('Device required'); return }
@@ -129,11 +171,23 @@ export default function DeviceCredentials() {
           <div className="glass rounded-xl p-6 w-full max-w-md shadow-2xl" style={{ border: '1px solid rgba(0,212,255,0.25)' }} onClick={e => e.stopPropagation()}>
             <h3 className="font-display font-bold text-lg mb-4" style={{ color: 'var(--t-accent)' }}>{editing ? '✏ Edit Credential' : '🔒 New Credential'}</h3>
             <div className="space-y-4">
-              <Field label="DEVICE *"><select value={fDeviceId} onChange={e => setFDeviceId(Number(e.target.value))} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle}>{devices.map(d => (<option key={d.id} value={d.id}>{d.hostname} ({d.ip_address})</option>))}</select></Field>
-              <Field label="TYPE"><select value={fType} onChange={e => setFType(e.target.value)} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle}><option value="snmp_v2c">SNMP v2c</option><option value="snmp_v3">SNMP v3</option><option value="ssh">SSH</option><option value="api">API</option></select></Field>
+              <Field label="DEVICE *"><select value={fDeviceId} onChange={e => changeDevice(Number(e.target.value))} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle}>{devices.map(d => (<option key={d.id} value={d.id}>{d.hostname} ({d.ip_address})</option>))}</select></Field>
+              <Field label="TYPE"><select value={fType} onChange={e => changeType(e.target.value)} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle}><option value="snmp_v2c">SNMP v2c</option><option value="snmp_v3">SNMP v3</option><option value="ssh">SSH</option><option value="api">API</option></select></Field>
+              {fType === 'ssh' && <>
+                <Field label="HOST"><input readOnly value={devices.find(d => d.id === fDeviceId)?.ip_address ?? ''} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm opacity-75" style={inputStyle} /></Field>
+                <Field label="SSH PORT"><input type="number" min={1} max={65535} value={fPort} onChange={e => { setFPort(Number(e.target.value)); clearHostKey() }} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle} /></Field>
+                <Field label="AUTHENTICATION"><select value={fAuthType} onChange={e => setFAuthType(e.target.value as 'password' | 'private_key')} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle}><option value="password">Password</option><option value="private_key">Private Key</option></select></Field>
+              </>}
               {(fType === 'ssh' || fType === 'snmp_v3' || fType === 'api') && <Field label="USERNAME"><input value={fUsername} onChange={e => setFUsername(e.target.value)} placeholder="admin" className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle} onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }} onBlur={e => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}/></Field>}
               {(fType === 'ssh' || fType === 'snmp_v3') && <Field label="PASSWORD"><input type="password" value={fPassword} onChange={e => setFPassword(e.target.value)} placeholder={editing ? '(unchanged)' : 'password'} className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle} onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }} onBlur={e => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}/></Field>}
               {fType === 'snmp_v2c' && <Field label="COMMUNITY STRING"><input value={fCommunity} onChange={e => setFCommunity(e.target.value)} placeholder="public" className="w-full rounded-lg px-3 py-2.5 font-mono text-sm" style={inputStyle} onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }} onBlur={e => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}/></Field>}
+              {fType === 'ssh' && <div className="rounded-lg p-3 space-y-3" style={{ border: '1px solid var(--t-border-alpha)' }}>
+                <div className="font-display font-semibold text-sm" style={{ color: 'var(--t-text)' }}>Host Key</div>
+                {hasPermission('remote_access:manage_credentials') && <button type="button" onClick={() => void handleScanHostKey()} disabled={hostKeyLoading || !fDeviceId || !Number.isInteger(fPort) || fPort < 1 || fPort > 65535} className="rounded-lg px-3 py-2 font-mono text-xs disabled:opacity-50" style={{ background: 'var(--t-accent)', color: '#fff' }}>{hostKeyLoading ? 'Scanning…' : 'Scan Host Key'}</button>}
+                {hostKeyError && <div className="font-mono text-xs" style={{ color: '#ff6688' }}>{hostKeyError}</div>}
+                {hostKey && <div className="space-y-1 font-mono text-xs" style={{ color: 'var(--t-muted)' }}><div>Key type: <span style={{ color: 'var(--t-text)' }}>{hostKey.key_type}</span></div><div>Fingerprint: <span style={{ color: 'var(--t-text)' }}>{hostKey.fingerprint}</span></div><div>Status: <span style={{ color: 'var(--t-text)' }}>{hostKey.status}</span></div>{hasPermission('remote_access:manage_credentials') && hostKeyId && hostKey.status === 'PENDING' && <button type="button" onClick={() => void handleHostKeyAction('trust')} className="mt-2 rounded-lg px-3 py-2" style={{ background: 'var(--t-accent)', color: '#fff' }}>Trust Host Key</button>}{hasPermission('remote_access:manage_credentials') && hostKeyId && hostKey.status === 'TRUSTED' && <button type="button" onClick={() => void handleHostKeyAction('revoke')} className="mt-2 rounded-lg px-3 py-2" style={{ background: 'transparent', border: '1px solid var(--t-border-alpha)', color: 'var(--t-text)' }}>Revoke Trust</button>}</div>}
+              </div>}
+              {fType === 'ssh' && <div><button type="button" onClick={() => void handleTestConnection()} disabled={testLoading} className="rounded-lg px-3 py-2 font-mono text-xs disabled:opacity-50" style={{ background: 'var(--t-border-light)', color: 'var(--t-text)' }}>{testLoading ? 'Testing…' : 'Test Connection'}</button>{testError && <div className="font-mono text-xs mt-2" style={{ color: '#ff6688' }}>{testError}</div>}</div>}
             </div>
             <div className="flex gap-2 justify-end mt-6">
               <button onClick={() => setShowModal(false)} className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-80 transition-all" style={{ background: 'var(--t-border-light, rgba(255,255,255,0.05))', border: '1px solid var(--t-border-alpha)', color: 'var(--t-muted)' }}>Cancel</button>

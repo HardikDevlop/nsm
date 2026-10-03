@@ -1,4 +1,4 @@
-import type { ReactNode, CSSProperties, KeyboardEvent } from 'react'
+import { forwardRef, type ReactNode, type CSSProperties, type KeyboardEvent } from 'react'
 
 type Props = {
   children: ReactNode
@@ -11,26 +11,22 @@ type Props = {
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void
 }
 
-const glowMap = {
-  cyan:  'glow-border-cyan',
-  green: 'glow-border-green',
-  red:   'glow-border-red',
-  amber: 'glow-border-amber',
-}
-
-export default function GlassCard({
+const GlassCard = forwardRef<HTMLDivElement, Props>(function GlassCard({
   children, className = '', style, glow, onClick, role, tabIndex, onKeyDown,
-}: Props) {
+}, ref) {
   return (
     <div
+      ref={ref}
       onClick={onClick}
       role={role}
       tabIndex={tabIndex}
       onKeyDown={onKeyDown}
-      className={`glass rounded-xl ${glow ? glowMap[glow] : ''} ${onClick ? 'cursor-pointer hover:border-cyan-400/30 transition-all' : ''} ${className}`}
+      className={`glass rounded-xl ${onClick ? 'cursor-pointer transition-colors hover:border-[var(--t-text-secondary)]' : ''} ${className}`}
       style={style}
     >
       {children}
     </div>
   )
-}
+})
+
+export default GlassCard

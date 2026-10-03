@@ -20,6 +20,7 @@ from backend.models.qos import QoSSample  # noqa: F401
 from backend.models.bgp import BGPObservation  # noqa: F401
 from backend.models.syslog import SyslogRecord  # noqa: F401
 from backend.models.syslog_rule import SyslogCorrelationRule  # noqa: F401
+from backend.models.remote_access import RemoteAccessCredential, RemoteAccessSession, SSHHostKey  # noqa: F401
 
 
 role_permissions = Table(
@@ -198,6 +199,8 @@ class Device(Base):
     vendor: Mapped[Vendor | None] = relationship(back_populates="devices")
     device_type: Mapped[DeviceType | None] = relationship(back_populates="devices")
     credentials: Mapped[list["DeviceCredential"]] = relationship(back_populates="device", cascade="all, delete-orphan")
+    remote_access_credentials: Mapped[list["RemoteAccessCredential"]] = relationship(back_populates="device", cascade="all, delete-orphan")
+    ssh_host_keys: Mapped[list["SSHHostKey"]] = relationship(back_populates="device", cascade="all, delete-orphan")
     interfaces: Mapped[list["Interface"]] = relationship(back_populates="device", cascade="all, delete-orphan")
     metrics: Mapped[list["DeviceMetric"]] = relationship(back_populates="device", cascade="all, delete-orphan")
     alerts: Mapped[list["Alert"]] = relationship(back_populates="device", cascade="all, delete-orphan")

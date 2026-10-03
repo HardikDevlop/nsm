@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { getMe, login as apiLogin, serverLogout, logout as apiLogout, type UserRecord } from '../lib/api'
 
 interface AuthContextType {
@@ -32,8 +32,9 @@ const USER_CACHE_KEY = 'nms.user.cache.v2'
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserRecord | null>(null)
   const [loading, setLoading] = useState(true)
+  const initializationRef = useRef<Promise<UserRecord | null> | null>(null)
 
-  const permissions = new Set(user?.permissions ?? [])
+  const permissions = useMemo(() => new Set(user?.permissions ?? []), [user?.permissions])
   // Hierarchy is UX-only; the backend remains the security source of truth.
   // Missing or malformed authority must never grant elevated access.
   const authorityLevel = typeof user?.authority_level === 'number' && Number.isFinite(user.authority_level)
@@ -59,12 +60,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const hydrateUser = useCallback(async (ignoreMissingToken = false, forceRefresh = true) => {
+    // React StrictMode intentionally mounts effects twice in development. Keep
+    // auth initialization single-flight so that behavior does not create two
+    // /auth/me requests (and so concurrent callers share the same validation).
+    if (initializationRef.current && forceRefresh) return initializationRef.current
     const token = window.localStorage.getItem('nms_access_token')
     if (!token) {
       if (!ignoreMissingToken) setLoading(false)
       return null
     }
     setLoading(true)
+    const request = (async () => {
     try {
       const cached = JSON.parse(window.sessionStorage.getItem(USER_CACHE_KEY) || 'null') as UserRecord | null
       if (cached) {
@@ -95,6 +101,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false)
     }
+    })()
+    if (forceRefresh) {
+      initializationRef.current = request
+      void request.then(() => undefined, () => undefined).finally(() => {
+        if (initializationRef.current === request) initializationRef.current = null
+      })
+    }
+    return request
   }, [])
 
   useEffect(() => {
@@ -135,6 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // best-effort and must never leave the application stuck on a spinner.
     void serverLogout().catch(() => undefined)
     apiLogout()
+    initializationRef.current = null
     setUser(null)
     try {
       window.sessionStorage.removeItem(USER_CACHE_KEY)
@@ -144,8 +159,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(false)
   }, [])
 
+  const contextValue = useMemo(() => ({ user, permissions, authorityLevel, isSuperAdmin, canManageAuthority, hasPermission, hasAnyPermission, login, logout, loading }), [user, permissions, authorityLevel, isSuperAdmin, canManageAuthority, hasPermission, hasAnyPermission, login, logout, loading])
+
   return (
-    <AuthContext.Provider value={{ user, permissions, authorityLevel, isSuperAdmin, canManageAuthority, hasPermission, hasAnyPermission, login, logout, loading }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   )

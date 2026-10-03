@@ -21,6 +21,8 @@ const DeviceMonitoring = lazyRetry(() => import("./pages/DeviceMonitoring"))
 const DeviceMonitoringList = lazyRetry(
   () => import("./pages/DeviceMonitoringList"),
 )
+const AllDevices = lazyRetry(() => import("./pages/AllDevices"))
+const DeviceDetails = lazyRetry(() => import("./pages/DeviceDetails"))
 const RoleManagement = lazyRetry(() => import("./pages/RoleManagement"))
 const UserManagement = lazyRetry(() => import("./pages/UserManagement"))
 const Organizations = lazyRetry(() => import("./pages/Organizations"))
@@ -54,6 +56,7 @@ const ConfigurationCompliance = lazyRetry(
 const Availability = lazyRetry(() => import("./pages/Availability"))
 const QoS = lazyRetry(() => import("./pages/QoS"))
 const BGP = lazyRetry(() => import("./pages/BGP"))
+const RemoteAccess = lazyRetry(() => import("./pages/RemoteAccess"))
 
 export const router = createBrowserRouter([
   { path: "/login", Component: Login },
@@ -138,6 +141,14 @@ export const router = createBrowserRouter([
             ),
           },
           {
+            path: "devices",
+            Component: withPermission(AllDevices, "device_monitoring:read"),
+          },
+          {
+            path: "devices/:deviceId",
+            Component: withPermission(DeviceDetails, "device_monitoring:read"),
+          },
+          {
             path: "device-monitoring",
             Component: withPermission(
               DeviceMonitoringList,
@@ -201,6 +212,7 @@ export const router = createBrowserRouter([
               "device_credentials:read",
             ),
           },
+          { path: "remote-access", Component: withPermission(RemoteAccess, "remote_access:view") },
           {
             path: "device-types",
             Component: withPermission(DeviceTypes, "device_types:read"),

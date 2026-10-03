@@ -13,6 +13,7 @@ interface RealtimeDataState<T> {
   currentData: T | null
   historicalData: Array<{ timestamp: number; data: T }>
   loading: boolean
+  refreshing: boolean
   error: string | null
   lastUpdate: number | null
   nextRefresh: number | null
@@ -31,6 +32,7 @@ export function useRealtimeData<T>({
     currentData: null,
     historicalData: [],
     loading: false,
+    refreshing: false,
     error: null,
     lastUpdate: null,
     nextRefresh: null
@@ -38,19 +40,26 @@ export function useRealtimeData<T>({
   
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const inFlightRef = useRef(false)
   
   // Fetch data function
   const fetchData = useCallback(async () => {
     if (!enabled) return
     
-    // Cancel previous request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-    }
+    // Do not allow a slow poll to overlap the next tick. The fetch callback
+    // predates AbortSignal support, so cancelling here did not actually stop
+    // the underlying request and could still produce out-of-order updates.
+    if (inFlightRef.current) return
+    inFlightRef.current = true
     
     abortControllerRef.current = new AbortController()
     
-    setState(prev => ({ ...prev, loading: true, error: null }))
+    setState(prev => ({
+      ...prev,
+      loading: prev.currentData === null,
+      refreshing: prev.currentData !== null,
+      error: null,
+    }))
     
     try {
       const data = await fetchFunction()
@@ -68,6 +77,7 @@ export function useRealtimeData<T>({
           currentData: data,
           historicalData: newHistoricalData,
           loading: false,
+          refreshing: false,
           lastUpdate: timestamp,
           nextRefresh: timestamp + (refreshInterval * 1000)
         }
@@ -84,10 +94,13 @@ export function useRealtimeData<T>({
       setState(prev => ({
         ...prev,
         loading: false,
+        refreshing: false,
         error: errorMessage
       }))
       
       onError?.(errorMessage)
+    } finally {
+      inFlightRef.current = false
     }
   }, [fetchFunction, enabled, timeWindow, refreshInterval, onData, onError])
   
@@ -119,6 +132,7 @@ export function useRealtimeData<T>({
       if (abortControllerRef.current) {
         abortControllerRef.current.abort()
       }
+      inFlightRef.current = false
     }
   }, [enabled, refreshInterval, fetchData])
   
@@ -164,6 +178,7 @@ export function useRealtimeData<T>({
     // Current state
     data: state.currentData,
     loading: state.loading,
+    refreshing: state.refreshing,
     error: state.error,
     lastUpdate: state.lastUpdate,
     nextRefresh: state.nextRefresh,

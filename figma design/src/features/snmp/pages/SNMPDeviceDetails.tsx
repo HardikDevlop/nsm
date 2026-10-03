@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router'
 import GlassCard from '../../../components/GlassCard'
+import { PermissionGuard } from '../../../components/PermissionGuard'
 import SNMPStatusBadge from '../components/SNMPStatusBadge'
 import SNMPHealthIndicator from '../components/SNMPHealthIndicator'
 import { useSNMPDeviceDetails, useSNMPSystemInfo, useStartModuleMonitoring, useStopModuleMonitoring, useUpdateModuleMonitoring } from '../hooks/useSnmpQueries'
@@ -332,6 +333,13 @@ export default function SNMPDeviceDetails() {
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={device.status} />
           <SNMPStatusBadge status={snmp.status === 'verified' ? 'verified' : 'unknown'} />
+          <PermissionGuard permission="device_monitoring:read">
+            <button onClick={() => navigate(`/device-monitoring/${id}`)}
+              className="glass-bright px-3 py-1.5 rounded font-mono text-xs hover:bg-cyan-400/10"
+              style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff' }}>
+              VIEW MONITORING
+            </button>
+          </PermissionGuard>
           <button onClick={handleRefresh} className="glass-bright px-3 py-1.5 rounded font-mono text-xs hover:bg-cyan-400/10 flex items-center gap-1.5"
             style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#00d4ff' }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -435,7 +443,7 @@ export default function SNMPDeviceDetails() {
                 </div>
                 <div>
                   <div className="font-mono text-[10px] mb-1" style={{ color: '#667799' }}>Monitoring</div>
-                  <StatusBadge status={device.monitoring_status ? 'running' : 'stopped'} type="monitoring" />
+                  <StatusBadge status={device.monitoring_state === 'active' ? 'running' : device.monitoring_state === 'degraded' ? 'error' : (device.monitoring_state ?? (device.monitoring_enabled ? 'running' : 'stopped'))} type="monitoring" />
                 </div>
                 {device.last_seen && (
                   <div>

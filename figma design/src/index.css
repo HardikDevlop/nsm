@@ -1,10 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Josefin+Sans:wght@200;300;400;500;600;700&family=Lato:wght@400;700&family=Manrope:wght@400;500;600;700&family=Merriweather+Sans:wght@400;600;700&family=Montserrat:wght@400;500;600;700&family=Nunito:wght@400;600;700&family=Open+Sans:wght@400;600;700&family=Outfit:wght@400;500;600;700&family=Playfair+Display:wght@400;600;700&family=Poppins:wght@400;500;600;700&family=Quicksand:wght@400;500;600;700&family=Raleway:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Rubik:wght@400;500;600;700&family=Source+Sans+3:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Ubuntu:wght@400;500;700&family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import 'tailwindcss';
 
 @theme inline {
   --color-background: var(--t-bg, #000000);
   --color-foreground: var(--t-text, #e2e8f5);
-  --color-card: var(--t-card-alpha, rgba(20, 20, 20, 0.6));
+  --color-card: var(--t-card, #ffffff);
   --color-card-foreground: var(--t-text, #e2e8f5);
   --color-primary: var(--t-accent, #FF0015);
   --color-primary-foreground: var(--t-bg, #000000);
@@ -12,7 +12,7 @@
   --color-secondary-foreground: #000000;
   --color-danger: #ff3366;
   --color-warning: #ffaa00;
-  --color-muted: var(--t-border-light, rgba(255, 255, 255, 0.05));
+  --color-muted: var(--t-muted, #6b7280);
   --color-muted-foreground: var(--t-muted, #888888);
   --color-accent: #7c3aed;
   --color-border: var(--t-border-light, rgba(30, 30, 30, 0.8));
@@ -49,6 +49,17 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
 .snmp-mac-topology { color: var(--t-text); border-color: var(--t-border); }
 .snmp-mac-topology [style*="#667799"],
 .snmp-mac-topology [style*="#8899bb"] { color: var(--t-text-secondary) !important; }
+
+[data-theme="dark"] .snmp-port-summary-table thead,
+[data-theme="dark"] .snmp-port-summary-table thead th { background: #050505 !important; }
+[data-theme="dark"] .snmp-port-summary-table tbody tr,
+[data-theme="dark"] .snmp-port-summary-table tbody tr:nth-child(even),
+[data-theme="dark"] .snmp-port-summary-table tbody tr:nth-child(odd) {
+  background: #000000 !important;
+  border-color: #1a1a1a !important;
+}
+[data-theme="dark"] .snmp-port-summary-table tbody tr:hover { background: #111111 !important; }
+[data-theme="dark"] .snmp-port-summary-table .snmp-mac-mapping { background: #050505 !important; }
 
 [data-theme="light"] .snmp-collector-card .snmp-mac-mapping {
   background: var(--t-card) !important;
@@ -422,6 +433,65 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
 [data-theme="light"] .snmp-module-tabs { background: rgba(255,255,255,.72); }
 [data-theme="dark"] .snmp-page-header {
   background: linear-gradient(135deg, rgba(20,34,62,.9), rgba(11,19,35,.88));
+}
+
+/* Page surfaces are intentionally neutral. Meaningful colours remain in
+   status badges, chart series, topology markers, and primary actions. */
+.snmp-page-header,
+.snmp-hero,
+.snmp-module-tabs,
+.snmp-collector-card,
+.syslog-hero,
+.syslog-filter-card,
+.syslog-table-card,
+.syslog-page > .glass-card,
+.syslog-page > .glass {
+  background: var(--t-card) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.snmp-page-header::before,
+.snmp-page-header::after,
+.snmp-hero::before,
+.snmp-hero::after,
+.snmp-module-page::before,
+.syslog-hero::before,
+.syslog-hero::after {
+  display: none !important;
+}
+
+.snmp-module-tabs,
+.snmp-collector-card,
+.syslog-filter-card,
+.syslog-table-card,
+.syslog-page > .glass-card,
+.syslog-page > .glass {
+  border-color: var(--t-border) !important;
+}
+
+/* Legacy utility surfaces should inherit the active theme when they are used
+   as structural chrome. Semantic badges and controls keep their own colour. */
+main .bg-slate-900,
+main .bg-slate-800,
+main .bg-slate-700,
+main .bg-gray-900,
+main .bg-gray-800,
+main .bg-gray-700,
+main .bg-indigo-950,
+main .bg-indigo-900,
+main .bg-purple-950,
+main .bg-purple-900 {
+  background-color: var(--t-card) !important;
+  background-image: none !important;
+}
+
+main .backdrop-blur,
+main .backdrop-blur-sm,
+main .backdrop-blur-md,
+main .backdrop-blur-lg,
+main .backdrop-blur-xl {
+  backdrop-filter: none !important;
 }
 
 * {
@@ -1379,6 +1449,103 @@ html[data-locale="hi"] .font-mono {
 [data-theme="light"] .topology-page svg text {
   fill: #111827 !important;
 }
+
+/* Foundation contract: legacy class names remain supported, but all shared
+   surfaces are opaque semantic theme surfaces. This removes blur, glass and
+   decorative shadows globally without changing component APIs. */
+.glass,
+.glass-bright,
+.glass-light {
+  background: var(--t-card) !important;
+  border: 1px solid var(--t-border) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+.grid-bg { background-image: none !important; }
+.neon-cyan, .neon-green, .neon-red, .neon-amber { text-shadow: none !important; }
+.glow-border-cyan, .glow-border-green, .glow-border-red, .glow-border-amber { box-shadow: none !important; }
+.pulse-glow { animation: none !important; }
+
+/* Semantic controls and overlays. Status colors remain available through
+   dedicated status classes and inline indicators. */
+input, select, textarea, option,
+table, dialog, [role="dialog"], [role="menu"], [role="listbox"] {
+  background-color: var(--t-card) !important;
+  color: var(--t-text) !important;
+  border-color: var(--t-border) !important;
+}
+
+button, a { transition-duration: 100ms !important; }
+.transition-all { transition-property: color, background-color, border-color, opacity !important; }
+
+/* Interactive surface contract. Legacy pages use several modal and popup
+   class combinations; these shared rules keep them theme-aware without
+   requiring duplicate markup or JavaScript theme branches. */
+[role="dialog"],
+[role="menu"],
+[role="listbox"],
+dialog,
+.modal,
+.popover,
+.dropdown-menu,
+.drawer,
+.sheet {
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+  border-color: var(--t-border) !important;
+  box-shadow: none !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* The common fixed scrim pattern is intentionally lightweight. */
+.fixed.inset-0 {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+input,
+select,
+textarea {
+  border-width: 1px;
+  box-shadow: none !important;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled,
+button:disabled {
+  opacity: .58;
+  cursor: not-allowed;
+}
+
+/* SweetAlert is used for date and confirmation flows outside React markup. */
+.swal2-popup,
+.swal2-modal {
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+  border: 1px solid var(--t-border) !important;
+  box-shadow: none !important;
+}
+.swal2-title,
+.swal2-html-container,
+.swal2-content,
+.swal2-input,
+.swal2-select,
+.swal2-textarea {
+  color: var(--t-text) !important;
+}
+.swal2-input,
+.swal2-select,
+.swal2-textarea {
+  background: var(--t-card) !important;
+  border-color: var(--t-border) !important;
+}
+.swal2-container { background: rgba(0, 0, 0, .52) !important; }
+.swal2-actions button { box-shadow: none !important; }
 
 /* Manual topology node labels still carry the legacy dark SVG fills inline. */
 [data-theme="light"] .manual-topology-page svg text {

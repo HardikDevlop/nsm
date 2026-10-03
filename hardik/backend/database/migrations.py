@@ -180,6 +180,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20260930_0052_audit_log_context_fields", description="Add nullable structured audit context fields"),
     Migration(migration_id="20260930_0053_user_site_access_scope_foundation", description="Add user-to-site access scope association table"),
     Migration(migration_id="20261001_0054_user_sessions", description="Add persistent user sessions and concurrent-session limits"),
+    Migration(migration_id="20261002_0055_remote_access_foundation", description="Create Remote Access credentials and terminal session foundation tables"),
+    Migration(migration_id="20261003_0056_ssh_host_keys", description="Persist per-device SSH host-key onboarding state"),
+    Migration(migration_id="20261003_0057_remote_access_session_invariants", description="Enforce Remote Access session lifecycle state and active-session uniqueness"),
 )
 
 
@@ -212,6 +215,72 @@ def _ensure_migration_table(engine: Engine) -> None:
                 """
             )
         )
+
+
+def _ensure_remote_access_foundation(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS remote_access_credentials (
+                id SERIAL PRIMARY KEY, device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                protocol VARCHAR(10) NOT NULL CHECK (protocol IN ('ssh', 'telnet')),
+                port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535), username VARCHAR(120) NOT NULL,
+                auth_type VARCHAR(20) NOT NULL DEFAULT 'password' CHECK (auth_type IN ('password', 'private_key')),
+                encrypted_secret TEXT NOT NULL, is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                last_verified_at TIMESTAMP, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
+                CONSTRAINT uq_remote_access_credential_device_protocol UNIQUE (device_id, protocol)
+            )
+        """))
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS remote_access_sessions (
+                id SERIAL PRIMARY KEY, session_uuid VARCHAR(36) NOT NULL UNIQUE,
+                device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                credential_id INTEGER REFERENCES remote_access_credentials(id) ON DELETE SET NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                protocol VARCHAR(10) NOT NULL, port INTEGER NOT NULL, device_username VARCHAR(120) NOT NULL,
+                status VARCHAR(20) NOT NULL CHECK (status IN ('connecting', 'connected', 'disconnected', 'failed', 'timeout')),
+                started_at TIMESTAMP NOT NULL, last_activity_at TIMESTAMP NOT NULL, ended_at TIMESTAMP,
+                disconnect_reason VARCHAR(500), source_ip VARCHAR(64), created_at TIMESTAMP NOT NULL
+            )
+        """))
+        for statement in (
+            'CREATE INDEX IF NOT EXISTS "ix_remote_access_credentials_device_id" ON remote_access_credentials (device_id)',
+            'CREATE INDEX IF NOT EXISTS "ix_remote_access_sessions_session_uuid" ON remote_access_sessions (session_uuid)',
+            'CREATE INDEX IF NOT EXISTS "ix_remote_access_sessions_device_id" ON remote_access_sessions (device_id)',
+            'CREATE INDEX IF NOT EXISTS "ix_remote_access_sessions_user_id" ON remote_access_sessions (user_id)',
+            'CREATE INDEX IF NOT EXISTS "ix_remote_access_sessions_status" ON remote_access_sessions (status)',
+            'CREATE INDEX IF NOT EXISTS "ix_remote_access_sessions_started_at" ON remote_access_sessions (started_at)',
+        ):
+            connection.execute(text(statement))
+
+
+def _ensure_ssh_host_keys(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("""CREATE TABLE IF NOT EXISTS ssh_host_keys (
+            id SERIAL PRIMARY KEY, device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+            host VARCHAR(255) NOT NULL, port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+            key_type VARCHAR(64) NOT NULL, public_host_key TEXT NOT NULL, fingerprint VARCHAR(128) NOT NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','TRUSTED','REVOKED')),
+            scanned_at TIMESTAMP NOT NULL, trusted_at TIMESTAMP, trusted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            CONSTRAINT uq_ssh_host_key_device_port UNIQUE (device_id, port))"""))
+        connection.execute(text('CREATE INDEX IF NOT EXISTS ix_ssh_host_keys_device_id ON ssh_host_keys (device_id)'))
+
+
+def _ensure_remote_access_session_invariants(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("""UPDATE remote_access_sessions
+            SET status = 'disconnected', ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+                disconnect_reason = COALESCE(disconnect_reason, 'Reconciled invalid lifecycle state')
+            WHERE status = 'connected' AND ended_at IS NOT NULL"""))
+        connection.execute(text("""CREATE UNIQUE INDEX IF NOT EXISTS
+            uq_remote_access_active_user_device_protocol
+            ON remote_access_sessions (user_id, device_id, protocol)
+            WHERE status IN ('connecting', 'connected') AND ended_at IS NULL"""))
+        if connection.dialect.name == "postgresql":
+            connection.execute(text("""DO $$ BEGIN
+                ALTER TABLE remote_access_sessions ADD CONSTRAINT ck_remote_access_session_terminal_state
+                CHECK ((status IN ('connecting', 'connected') AND ended_at IS NULL) OR (status NOT IN ('connecting', 'connected') AND ended_at IS NOT NULL));
+            EXCEPTION WHEN duplicate_object THEN NULL; END $$"""))
 
 
 def _applied_migrations(engine: Engine) -> set[str]:
@@ -1228,6 +1297,12 @@ def run_migrations(engine: Engine) -> list[str]:
                     'CREATE INDEX IF NOT EXISTS ix_user_sessions_revoked_at ON user_sessions (revoked_at)',
                 ):
                     connection.execute(text(statement))
+        elif migration.migration_id == "20261002_0055_remote_access_foundation":
+            _ensure_remote_access_foundation(engine)
+        elif migration.migration_id == "20261003_0056_ssh_host_keys":
+            _ensure_ssh_host_keys(engine)
+        elif migration.migration_id == "20261003_0057_remote_access_session_invariants":
+            _ensure_remote_access_session_invariants(engine)
         elif migration.migration_id == "20260930_0052_audit_log_context_fields":
             with engine.begin() as connection:
                 columns = {

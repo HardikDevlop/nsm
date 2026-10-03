@@ -211,8 +211,7 @@ export default function SNMPCollectorDataCard({
         className="relative overflow-hidden p-4"
         style={{
           borderBottom: `1px solid ${color}33`,
-          background:
-            "linear-gradient(135deg, rgba(8,25,55,.8), rgba(5,12,25,.45))",
+          background: "var(--t-card)",
         }}
       >
         <div
@@ -282,7 +281,7 @@ export default function SNMPCollectorDataCard({
                   className="snmp-mac-stat rounded-lg border p-2.5"
                   style={{
                     borderColor: `${tone}33`,
-                    background: "rgba(2,8,18,.55)",
+                    background: "var(--t-card)",
                   }}
                 >
                   <div
@@ -312,7 +311,7 @@ export default function SNMPCollectorDataCard({
       {collector?.supported ? (
         <>
           {portGroups.length > 0 && (
-            <>              <div className="overflow-x-auto p-4 sm:p-5">
+            <>              <div className="snmp-port-summary overflow-x-auto p-4 sm:p-5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <div
@@ -335,7 +334,7 @@ export default function SNMPCollectorDataCard({
                     {portGroups.length} PORTS
                   </span>
                 </div>
-                <table className="w-full" style={{ minWidth: 860 }}>
+                <table className="snmp-port-summary-table w-full" style={{ minWidth: 860 }}>
                   <thead>
                     <tr>
                       {[
@@ -348,7 +347,7 @@ export default function SNMPCollectorDataCard({
                         <th
                           key={col}
                           className="sticky top-0 px-3 py-2.5 text-left font-mono text-[9px] uppercase tracking-wider"
-                          style={{ color: "#8899bb", background: "#081937" }}
+                          style={{ color: "var(--t-text-secondary)", background: "var(--t-table-header)" }}
                         >
                           {col}
                         </th>
@@ -362,8 +361,7 @@ export default function SNMPCollectorDataCard({
                         className="transition-colors hover:bg-cyan-400/[.04]"
                         style={{
                           borderTop: "1px solid rgba(0,212,255,0.06)",
-                          background:
-                            index % 2 ? "rgba(8,25,55,.18)" : "transparent",
+                          background: index % 2 ? "var(--t-table-row)" : "transparent",
                         }}
                       >
                         <td
@@ -403,7 +401,7 @@ export default function SNMPCollectorDataCard({
                               <div
                                 key={mapping.mac}
                                 className="snmp-mac-mapping rounded border px-2 py-1"
-                                style={{ borderColor: "rgba(0,212,255,0.12)", background: "rgba(8,25,55,.28)" }}
+                                style={{ borderColor: "var(--t-border)", background: "var(--t-card)" }}
                               >
                                 <div className="flex flex-wrap items-center gap-2 font-mono text-[9px] leading-tight">
                                   <span className="inline-flex items-center gap-1">
@@ -433,9 +431,8 @@ export default function SNMPCollectorDataCard({
                   key={key}
                   className="rounded-lg p-3"
                   style={{
-                    background:
-                      "linear-gradient(145deg, rgba(8,25,55,.65), rgba(2,8,18,.5))",
-                    border: "1px solid rgba(0,212,255,0.12)",
+                    background: "var(--t-card)",
+                    border: "1px solid var(--t-border)",
                   }}
                 >
                   <div
@@ -508,8 +505,8 @@ export default function SNMPCollectorDataCard({
             <details
               className="mx-4 mb-4 rounded"
               style={{
-                border: "1px solid rgba(0,212,255,0.1)",
-                background: "rgba(8,25,55,0.25)",
+                border: "1px solid var(--t-border)",
+                background: "var(--t-card)",
               }}
             >
               <summary

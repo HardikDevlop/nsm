@@ -61,6 +61,7 @@ from backend.models.identity import DeviceCapabilities, DeviceIdentity
 from backend.models.snmp import DeviceInterface, LatestInterface
 from backend.snmp.normalizer import mac as canonical_mac
 from backend.utils.time import as_utc, utc_now
+from backend.services.device_health import derive_monitoring_state
 
 logger = logging.getLogger(__name__)
 
@@ -3183,7 +3184,7 @@ def list_snmp_devices_optimized(
             "status": d.status,
             "snmp_version": primary_credential.snmp_version if primary_credential else None,
             "snmp_status": snmp_status_val,
-            "monitoring_enabled": any(c.enabled for c in configs),
+            **derive_monitoring_state(d, configs),
             "monitoring_status": d.monitoring_status,
             "last_seen": d.last_seen.isoformat() if d.last_seen else None,
             "last_poll_at": max((c.last_poll_at for c in configs if c.last_poll_at), default=None),
@@ -3315,6 +3316,7 @@ def get_device_details(
             "topology_metadata": device.topology_metadata or {},
             "status": device.status,
             "monitoring_status": device.monitoring_status,
+            **derive_monitoring_state(device, configs),
             "last_seen": device.last_seen.isoformat() if device.last_seen else None,
             "created_at": device.created_at.isoformat() if device.created_at else None,
             "uptime_seconds": device.uptime_seconds,
