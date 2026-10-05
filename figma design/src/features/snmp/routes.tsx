@@ -23,7 +23,6 @@ const SNMPVLANMonitoring = lazyRetry(() => import('./pages/SNMPVLANMonitoring'))
 
 /** All SNMP URLs live under this feature route table. */
 export const snmpRoutes = [
-  { path: 'snmp', Component: withPermission(SNMPMonitoring, 'devices:read') },
   { path: 'snmp-monitoring', Component: withPermission(SNMPMonitoring, 'devices:read') },
   { path: 'snmp/dashboard', Component: withPermission(SNMPDashboard, 'devices:read') },
   { path: 'snmp/dashboard/:deviceId', Component: withPermission(SNMPDashboard, 'devices:read') },

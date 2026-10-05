@@ -1435,6 +1435,61 @@ html[data-locale="hi"] .font-mono {
   border-color: var(--t-border) !important;
 }
 
+/* Use a readable dark-green positive state throughout light mode. Many
+   feature pages intentionally keep their status colors inline, so normalize
+   those values here instead of maintaining a separate override per page. */
+[data-theme="light"] {
+  --color-secondary: #047857;
+  --light-positive: #047857;
+  --light-positive-strong: #065f46;
+  --light-positive-bg: rgba(4, 120, 87, .09);
+  --light-positive-border: rgba(4, 120, 87, .35);
+}
+
+[data-theme="light"] .status-dot.online,
+[data-theme="light"] [style*="#00ff88"],
+[data-theme="light"] [style*="#00FF88"],
+[data-theme="light"] [style*="rgb(0, 255, 136)"],
+[data-theme="light"] [style*="rgb(0,255,136)"],
+[data-theme="light"] [style*="text-green-400"],
+[data-theme="light"] .text-green-400,
+[data-theme="light"] .text-emerald-400 {
+  color: var(--light-positive) !important;
+}
+
+[data-theme="light"] [style*="#00ff88"],
+[data-theme="light"] [style*="#00FF88"],
+[data-theme="light"] [style*="rgb(0, 255, 136)"],
+[data-theme="light"] [style*="rgb(0,255,136)"] {
+  border-color: var(--light-positive-border) !important;
+}
+
+[data-theme="light"] .status-dot.online,
+[data-theme="light"] [style*="background: '#00ff88'"],
+[data-theme="light"] [style*="background: \"#00ff88\""],
+[data-theme="light"] [style*="backgroundColor: '#00ff88'"] {
+  background-color: var(--light-positive) !important;
+  box-shadow: 0 0 6px rgba(4, 120, 87, .45) !important;
+}
+
+[data-theme="light"] [style*="background: 'rgba(0,255,136"],
+[data-theme="light"] [style*="background: \"rgba(0,255,136"],
+[data-theme="light"] [style*="backgroundColor: 'rgba(0,255,136"] {
+  background-color: var(--light-positive-bg) !important;
+}
+
+[data-theme="light"] [style*="rgba(0,255,136"],
+[data-theme="light"] [style*="rgba(0, 255, 136"],
+[data-theme="light"] [style*="rgba(0,255,136,"] {
+  background-color: var(--light-positive-bg) !important;
+  border-color: var(--light-positive-border) !important;
+}
+
+[data-theme="light"] [class*="border-green-400"],
+[data-theme="light"] [class*="border-emerald-400"] {
+  border-color: var(--light-positive-border) !important;
+}
+
 [data-theme="light"] .recharts-text {
   fill: var(--t-muted, #666) !important;
 }

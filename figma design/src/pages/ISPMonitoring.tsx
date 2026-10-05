@@ -11,7 +11,7 @@ import { useI18n } from '../i18n/I18nContext'
 // ── Design tokens (shared across this page) ──
 const COLOR = {
   cyan: '#00d4ff',
-  green: '#00ff88',
+  green: '#047857',
   red: '#ff3366',
   amber: '#ffaa00',
   purple: '#9b8cff',
@@ -150,6 +150,7 @@ export default function ISPMonitoring() {
   const [error, setError] = useState<string | null>(null)
   const [storedIps, setStoredIps] = useState<Set<string>>(new Set())
   const [showAllStored, setShowAllStored] = useState(false)
+  const [deviceStatusFilter, setDeviceStatusFilter] = useState<'all' | 'online' | 'offline'>('all')
   const [addingIps, setAddingIps] = useState<Set<string>>(new Set())
   const [topoHover, setTopoHover] = useState<string | null>(null)
   const [topoStatuses, setTopoStatuses] = useState<Record<string, boolean>>({})
@@ -182,6 +183,13 @@ export default function ISPMonitoring() {
   const [selectedManagedDeviceIds, setSelectedManagedDeviceIds] = useState<Set<number>>(new Set())
   const [deletingSelectedManaged, setDeletingSelectedManaged] = useState(false)
 
+  const visibleDevices = useMemo(() => {
+    if (deviceStatusFilter === 'all') return devices
+    return devices.filter(device => deviceStatusFilter === 'online'
+      ? device.status === 'online'
+      : device.status !== 'online')
+  }, [devices, deviceStatusFilter])
+
   // ── Topology graph data ──
   interface TopoNode { id: string; ip: string; hostname: string; status: string; mac: string; x: number; y: number; type: 'gateway' | 'device' }
   interface TopoEdge { from: string; to: string }
@@ -195,7 +203,7 @@ export default function ISPMonitoring() {
 
     // Always use stored DB devices for topology — discoveryResults are temporary
     // and should never replace devices already stored in the database
-    const source = devices.map(d => ({
+    const source = visibleDevices.map(d => ({
       ip: d.ip_address,
       hostname: d.hostname,
       status: topoStatuses[d.ip_address] !== undefined
@@ -218,7 +226,7 @@ export default function ISPMonitoring() {
     })
 
     return { topoNodes: nodes, topoEdges: edges }
-  }, [devices, discoveryResults, discoveryTarget, topoStatuses])
+  }, [visibleDevices, discoveryResults, discoveryTarget, topoStatuses])
 
   // ── Canvas topology renderer ──
   const drawTopology = useCallback(() => {
@@ -269,7 +277,10 @@ export default function ISPMonitoring() {
       const isHovered = topoHover === node.id
       const isGateway = node.type === 'gateway'
       const r = isGateway ? 14 : 7
-      const color = node.status === 'online' ? '#00ff88' : '#ff3366'
+      const lightTheme = document.documentElement.getAttribute('data-theme') === 'light'
+      const color = node.status === 'online'
+        ? (lightTheme ? COLOR.green : '#00ff88')
+        : '#ff3366'
 
       // Glow
       if (isHovered || isGateway) {
@@ -307,7 +318,6 @@ export default function ISPMonitoring() {
       // Label
       ctx.font = `${isGateway ? 10 : 8}px "JetBrains Mono", monospace`
       ctx.textAlign = 'center'
-      const lightTheme = document.documentElement.getAttribute('data-theme') === 'light'
       ctx.fillStyle = isHovered ? (lightTheme ? '#111827' : '#ffffff') : (lightTheme ? '#475569' : '#8899bb')
       ctx.fillText(node.ip, px, py + r + 12)
       if (isGateway) {
@@ -426,10 +436,17 @@ export default function ISPMonitoring() {
       { name: 'Devices', value: devices.length, color: COLOR.cyan },
       { name: 'Online', value: online, color: COLOR.green },
       { name: 'Offline', value: offline, color: COLOR.red },
-      { name: 'Interfaces', value: interfaceCount, color: COLOR.amber },
+      // { name: 'Interfaces', value: interfaceCount, color: COLOR.amber },
       { name: 'Open Alerts', value: openAlertCount, color: COLOR.purple },
     ]
   }, [devices, interfaceCount, openAlertCount])
+
+  const handleSummaryClick = (name: string) => {
+    if (name === 'Devices') return setDeviceStatusFilter('all')
+    if (name === 'Online') return setDeviceStatusFilter('online')
+    if (name === 'Offline') return setDeviceStatusFilter('offline')
+    navigate(name === 'Interfaces' ? '/snmp' : '/alerts-management')
+  }
 
   const toggleModule = (moduleKey: string) => {
     // Open SNMP modal when SNMP is clicked
@@ -900,7 +917,7 @@ export default function ISPMonitoring() {
       {/* ── Stat strip ── */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {discoverySummary.map(entry => (
-          <GlassCard key={entry.name} className="p-3 cursor-pointer transition-all hover:-translate-y-0.5 hover:border-blue-400/60" onClick={() => navigate(entry.name === 'Interfaces' ? '/snmp' : entry.name === 'Open Alerts' ? '/alerts-management' : '/device-monitoring')} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') navigate(entry.name === 'Interfaces' ? '/snmp' : entry.name === 'Open Alerts' ? '/alerts-management' : '/device-monitoring') }}>
+          <GlassCard key={entry.name} className="p-3 cursor-pointer transition-all hover:-translate-y-0.5 hover:border-blue-400/60" onClick={() => handleSummaryClick(entry.name)} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') handleSummaryClick(entry.name) }}>
             <div className="flex items-center gap-2">
               <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: entry.color }} />
               <span className="font-mono text-[10px] tracking-wide truncate" style={{ color: muted }}>{entry.name.toUpperCase()}</span>
@@ -1063,7 +1080,7 @@ export default function ISPMonitoring() {
         <GlassCard className="p-4 md:p-5">
           <SectionHeading
             title="Network topology"
-            subtitle={`${topoNodes.length - 1} device(s) connected to gateway · ${discoveryTarget}`}
+            subtitle={`${topoNodes.length - 1} ${deviceStatusFilter === 'all' ? '' : `${deviceStatusFilter} `}device(s) connected to gateway · ${discoveryTarget}`}
           />
           <div className="relative" style={{ height: 300 }}>
             <canvas
@@ -1106,13 +1123,13 @@ export default function ISPMonitoring() {
         </GlassCard>
 
         <GlassCard className="p-4 md:p-5">
-          <SectionHeading title="Stored devices" subtitle={`Ready for monitoring (${devices.length})`} />
+          <SectionHeading title="Stored devices" subtitle={`Ready for monitoring (${visibleDevices.length})`} />
           <div className="space-y-2">
-            {devices.length === 0 ? (
+            {visibleDevices.length === 0 ? (
               <EmptyState label="No stored devices yet. Discover and add devices to see them here." />
             ) : (
               <>
-                {(showAllStored ? devices : devices.slice(0, 5)).map(device => (
+                {(showAllStored ? visibleDevices : visibleDevices.slice(0, 5)).map(device => (
                   <div key={device.id} className="rounded-lg p-3" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.1)' }}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -1131,13 +1148,13 @@ export default function ISPMonitoring() {
                     </div>
                   </div>
                 ))}
-                {devices.length > 5 && (
+                {visibleDevices.length > 5 && (
                   <button
                     onClick={() => setShowAllStored(!showAllStored)}
                     className="w-full rounded py-2 font-mono text-xs transition hover:opacity-80"
                     style={tintStyle(COLOR.cyan, 0.08, 0.2)}
                   >
-                    {showAllStored ? 'Show less' : `Show all ${devices.length} devices ▼`}
+                    {showAllStored ? 'Show less' : `Show all ${visibleDevices.length} devices ▼`}
                   </button>
                 )}
               </>
