@@ -200,6 +200,60 @@ def test_live_connect_constructs_scoped_transport_and_starts_it(monkeypatch):
     assert events[:3] == ["transport_init", "start_client", "auth_password"]
 
 
+def test_trusted_fingerprint_skips_reject_policy(monkeypatch):
+    events = []
+
+    class FakeSocket:
+        def close(self): pass
+
+    class FakeKey:
+        def get_name(self): return "ssh-ed25519"
+        def asbytes(self): return b"trusted-host-key"
+
+    class FakeTransport:
+        def __init__(self, sock):
+            self.remote_version = "SSH-2.0-OpenSSH_8.9"
+            self.remote_kex = self.remote_cipher = self.remote_mac = "UNAVAILABLE"
+            self.local_kex = self.local_cipher = self.host_key_type = "UNAVAILABLE"
+            self._options = type("Options", (), {
+                "key_types": ("ssh-ed25519",), "kex": (), "ciphers": (), "digests": ()
+            })()
+        def get_security_options(self): return self._options
+        def start_client(self, timeout=None): events.append("start_client")
+        def get_remote_server_key(self): return FakeKey()
+        def auth_password(self, username, password): events.append("auth_password")
+        def open_session(self): raise AssertionError("stop after trusted host-key/auth path")
+
+    class RejectingPolicy:
+        def missing_host_key(self, *args):
+            raise AssertionError("trusted fingerprint should not fall through to RejectPolicy")
+
+    class FakeClient:
+        _system_host_keys = {}
+        _host_keys = {}
+        _policy = RejectingPolicy()
+        _transport = None
+        def load_system_host_keys(self): pass
+        def set_missing_host_key_policy(self, policy): pass
+        def get_transport(self): return self._transport
+        def close(self): pass
+
+    monkeypatch.setattr(ssh_service.paramiko, "SSHClient", FakeClient)
+    monkeypatch.setattr(ssh_service.socket, "create_connection", lambda *args, **kwargs: FakeSocket())
+    monkeypatch.setattr(ssh_service, "_RemoteAccessTransport", FakeTransport)
+
+    expected = "SHA256:" + ssh_service.base64.b64encode(
+        ssh_service.hashlib.sha256(b"trusted-host-key").digest()
+    ).decode().rstrip("=")
+    adapter = ssh_service.SSHConnectionAdapter(
+        "192.168.100.105", 22, "agnigate", "secret",
+        expected_host_key_fingerprint=expected,
+    )
+    with pytest.raises(AssertionError, match="stop after trusted"):
+        adapter.connect()
+    assert events == ["start_client", "auth_password"]
+
+
 class _BootstrapChannel:
     def __init__(self, chunks):
         self.chunks = list(chunks)

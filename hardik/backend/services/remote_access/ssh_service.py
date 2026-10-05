@@ -176,32 +176,35 @@ class SSHConnectionAdapter:
             transport.start_client(timeout=self.timeout)
             logger.info("Remote Access SSH banner remote_version=%s", transport.remote_version or "UNAVAILABLE")
             server_key = transport.get_remote_server_key()
+            verified_by_fingerprint = False
             if self.expected_host_key_fingerprint:
                 actual = "SHA256:" + base64.b64encode(hashlib.sha256(server_key.asbytes()).digest()).decode().rstrip("=")
                 if actual != self.expected_host_key_fingerprint:
                     logger.info("Remote Access SSH stage=HOST_KEY_VERIFY status=FAILED code=HOST_KEY_MISMATCH")
                     raise SSHConnectionError("SSH host key does not match trusted key", "HOST_KEY_MISMATCH", "HOST_KEY_VERIFY")
+                verified_by_fingerprint = True
             # The host-key policy logs through ``client._transport``. Attach
             # the manually-created transport before invoking the policy so a
             # missing/rejected host key is reported as HOST_KEY_FAILED rather
             # than being masked by an AttributeError.
             client._transport = transport
-            # Preserve SSHClient's RejectPolicy/AutoAddPolicy behavior without
-            # delegating transport construction to a version-dependent API.
-            host_key_name = self.host if self.port == 22 else f"[{self.host}]:{self.port}"
-            known = client._system_host_keys.get(host_key_name) or client._host_keys.get(host_key_name)
-            try:
-                if known is None:
-                    client._policy.missing_host_key(client, host_key_name, server_key)
-                else:
-                    expected = known.get(server_key.get_name())
-                    if expected is None or expected != server_key:
-                        raise paramiko.BadHostKeyException(self.host, server_key, expected or list(known.values())[0])
-            except paramiko.BadHostKeyException:
-                raise
-            except paramiko.SSHException as exc:
-                logger.info("Remote Access SSH stage=HOST_KEY_VERIFY status=FAILED code=HOST_KEY_FAILED")
-                raise SSHConnectionError("SSH host key verification failed", "HOST_KEY_FAILED", "HOST_KEY_VERIFY") from exc
+            if not verified_by_fingerprint:
+                # Preserve SSHClient's RejectPolicy/AutoAddPolicy behavior without
+                # delegating transport construction to a version-dependent API.
+                host_key_name = self.host if self.port == 22 else f"[{self.host}]:{self.port}"
+                known = client._system_host_keys.get(host_key_name) or client._host_keys.get(host_key_name)
+                try:
+                    if known is None:
+                        client._policy.missing_host_key(client, host_key_name, server_key)
+                    else:
+                        expected = known.get(server_key.get_name())
+                        if expected is None or expected != server_key:
+                            raise paramiko.BadHostKeyException(self.host, server_key, expected or list(known.values())[0])
+                except paramiko.BadHostKeyException:
+                    raise
+                except paramiko.SSHException as exc:
+                    logger.info("Remote Access SSH stage=HOST_KEY_VERIFY status=FAILED code=HOST_KEY_FAILED")
+                    raise SSHConnectionError("SSH host key verification failed", "HOST_KEY_FAILED", "HOST_KEY_VERIFY") from exc
         except paramiko.AuthenticationException:
             logger.info("Remote Access SSH stage=SSH_TRANSPORT_AUTH status=FAILED code=SSH_AUTH_FAILED")
             # Some appliances accept SSH transport auth_none and defer their
@@ -232,6 +235,8 @@ class SSHConnectionAdapter:
             client.close()
             logger.info("Remote Access SSH stage=SSH_TRANSPORT_AUTH status=FAILED code=SSH_AUTH_FAILED")
             raise SSHConnectionError("SSH authentication failed", "SSH_AUTH_FAILED", "SSH_TRANSPORT_AUTH") from exc
+        except SSHConnectionError:
+            raise
         except (paramiko.SSHException, OSError) as exc:
             _log_handshake_diagnostics(
                 client.get_transport() if hasattr(client, "get_transport") else None,

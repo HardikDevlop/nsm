@@ -63,6 +63,7 @@ class RemoteAccessSessionCreate(BaseModel):
     credential_id: int | None = Field(default=None, gt=0)
     username: str | None = Field(default=None, min_length=1, max_length=120)
     secret: str | None = Field(default=None, min_length=1)
+    remember_credential: bool = False
 
     @model_validator(mode="after")
     def credential_source(self):

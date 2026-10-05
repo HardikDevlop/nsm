@@ -16,6 +16,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from backend.models import Device, RemoteAccessSession, SSHHostKey, utc_now
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from backend.services.remote_access.test_connection import TestConnectionService
 from backend.services.remote_access_credentials import RemoteAccessCredentialError, RemoteAccessCredentialService
@@ -52,7 +53,9 @@ class SessionManager:
     def create_session(self, *, device_id: int, user_id: int, protocol: str,
                        credential_id: int | None = None, username: str | None = None,
                        secret: str | None = None, port: int | None = None,
-                       source_ip: str | None = None) -> RemoteAccessSession:
+                       source_ip: str | None = None,
+                       remember_credential: bool = False) -> RemoteAccessSession:
+        started = time.perf_counter()
         protocol = protocol.lower() if isinstance(protocol, str) else protocol
         logger.info(
             "Remote Access session request: device_id=%s protocol=%s port=%s credential_supplied=%s",
@@ -108,25 +111,45 @@ class SessionManager:
             logger.warning("Remote Access session validation failed: code=SECRET_REQUIRED")
             raise RemoteAccessCredentialError("SECRET_REQUIRED", "Authentication secret is required")
 
-        # A remote device session is independent from browser attachments.  Reuse
-        # the live adapter when another tab/browser asks for the same session.
+        logger.info(
+            "remote_access_stage user_id=%s device_id=%s protocol=%s stage=credential_validation duration_ms=%.3f",
+            user_id, device_id, protocol, (time.perf_counter() - started) * 1000,
+        )
+
+        if self.db.bind is not None and self.db.bind.dialect.name == "postgresql":
+            self.db.execute(
+                text("SELECT pg_advisory_xact_lock(:user_id, :device_id)"),
+                {"user_id": user_id, "device_id": device_id},
+            )
+
         existing = (self.db.query(RemoteAccessSession)
                      .with_for_update()
                      .filter(RemoteAccessSession.device_id == device_id,
                              RemoteAccessSession.user_id == user_id,
-                             RemoteAccessSession.protocol == protocol,
                              RemoteAccessSession.status.in_(("connecting", "connected")))
                      .order_by(RemoteAccessSession.id.desc()).first())
         if existing is not None:
             managed = self._sessions.get(existing.session_uuid)
-            if managed is not None and managed.record.status in {"connecting", "connected"}:
-                return existing
+            try:
+                still_connected = managed is not None and managed.record.status in {"connecting", "connected"} and managed.adapter.is_alive()
+            except Exception:
+                still_connected = False
+            if still_connected:
+                conflict = RemoteAccessCredentialError(
+                    "DEVICE_ALREADY_CONNECTED",
+                    "Device already has an active Remote Access session",
+                )
+                conflict.protocol = existing.protocol
+                raise conflict
             # A process restart cannot safely claim an adapter it does not own.
             # Mark that stale durable row before creating the replacement.
             existing.status = "disconnected"
             existing.ended_at = existing.ended_at or utc_now()
             existing.disconnect_reason = "Backend session owner was lost"
             self.db.flush()
+            if managed is not None:
+                self._close(managed.adapter)
+                self._sessions.pop(existing.session_uuid, None)
 
         now = utc_now()
         record = RemoteAccessSession(session_uuid=str(uuid.uuid4()), device_id=device_id,
@@ -136,6 +159,10 @@ class SessionManager:
                                      started_at=now, last_activity_at=now, source_ip=source_ip)
         self.db.add(record)
         self.db.flush()
+        logger.info(
+            "remote_access_stage user_id=%s device_id=%s protocol=%s stage=session_record_created duration_ms=%.3f",
+            user_id, device_id, protocol, (time.perf_counter() - started) * 1000,
+        )
         adapter = None
         try:
             adapter_kwargs = {"timeout": self.timeout}
@@ -153,11 +180,32 @@ class SessionManager:
                     adapter_kwargs["expected_host_key_fingerprint"] = pinned.fingerprint
             adapter = self.adapter_factories[protocol](device.ip_address, port, username.strip(), secret,
                                                        **adapter_kwargs)
+            handshake_started = time.perf_counter()
             adapter.connect()
+            logger.info(
+                "remote_access_stage user_id=%s device_id=%s protocol=%s stage=device_handshake duration_ms=%.3f",
+                user_id, device_id, protocol, (time.perf_counter() - handshake_started) * 1000,
+            )
+            if remember_credential and saved is None:
+                saved = self.credentials.upsert(
+                    device_id=device_id,
+                    protocol=protocol,
+                    port=port,
+                    username=username.strip(),
+                    auth_type="password",
+                    secret=secret,
+                    created_by=user_id,
+                )
+                saved = self.credentials.mark_verified(saved.id)
+                record.credential_id = saved.id
             record.status = "connected"
             record.last_activity_at = utc_now()
             self.db.flush()
             self._sessions[record.session_uuid] = ManagedSession(record, adapter, bytearray())
+            logger.info(
+                "remote_access_stage user_id=%s device_id=%s protocol=%s stage=session_ready duration_ms=%.3f",
+                user_id, device_id, protocol, (time.perf_counter() - started) * 1000,
+            )
             return record
         except Exception as exc:
             exception_message = str(exc)
@@ -203,16 +251,18 @@ class SessionManager:
             query = query.filter(RemoteAccessSession.user_id == user_id)
         records = query.order_by(RemoteAccessSession.started_at.desc()).all()
         active = []
+        reconciled = False
         for record in records:
             managed = self._sessions.get(record.session_uuid)
             if managed is None or not managed.adapter.is_alive():
                 record.status = "disconnected"
                 record.ended_at = record.ended_at or utc_now()
                 record.disconnect_reason = "Backend session owner was lost"
+                reconciled = True
             else:
                 active.append(record)
-        if records:
-            self.db.flush()
+        if reconciled:
+            self.db.commit()
         return active
 
     def touch(self, session_uuid: str) -> RemoteAccessSession:
@@ -240,7 +290,7 @@ class SessionManager:
             managed.record.status = "disconnected"
             managed.record.ended_at = managed.record.ended_at or utc_now()
             managed.record.disconnect_reason = reason
-            self.db.flush()
+            self.db.commit()
         self._sessions.pop(session_uuid, None)
         return managed.record
 
@@ -254,7 +304,7 @@ class SessionManager:
             managed.record.status = "disconnected"
             managed.record.ended_at = managed.record.ended_at or utc_now()
             managed.record.disconnect_reason = reason
-            self.db.flush()
+            self.db.commit()
         self._sessions.pop(session_uuid, None)
         return managed.record
 
@@ -270,6 +320,8 @@ class SessionManager:
             managed.record.disconnect_reason = "Idle timeout"
             self.db.flush()
             self._sessions.pop(session_uuid, None)
+        if expired:
+            self.db.commit()
         return expired
 
     def _required(self, session_uuid: str) -> ManagedSession:

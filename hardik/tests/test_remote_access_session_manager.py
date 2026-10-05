@@ -62,6 +62,39 @@ def test_saved_verified_credential_and_ownership(db):
     assert "hidden" not in repr(session)
 
 
+def test_same_user_cannot_create_second_protocol_session_for_same_device(db):
+    m = manager(db)
+    active = m.create_session(device_id=1, user_id=42, protocol="ssh", username="u", secret="s")
+
+    with pytest.raises(Exception) as duplicate:
+        m.create_session(device_id=1, user_id=42, protocol="telnet", username="u", secret="s")
+
+    assert getattr(duplicate.value, "code", None) == "DEVICE_ALREADY_CONNECTED"
+    assert getattr(duplicate.value, "protocol", None) == "ssh"
+    assert db.query(RemoteAccessSession).count() == 1
+    assert len(Adapter.instances) == 1
+    assert m.get_session(active.session_uuid).adapter.is_alive()
+
+
+def test_connect_can_remember_credential_after_successful_handshake(db):
+    m = manager(db)
+
+    session = m.create_session(
+        device_id=1,
+        user_id=42,
+        protocol="ssh",
+        username="remembered-user",
+        secret="remembered-secret",
+        remember_credential=True,
+    )
+    credential = db.query(RemoteAccessCredential).one()
+
+    assert session.credential_id == credential.id
+    assert credential.is_verified is True
+    assert credential.username == "remembered-user"
+    assert Adapter.instances[0].connected is True
+
+
 def test_saved_credential_device_mismatch_is_reported_before_adapter_connect(db, caplog):
     db.add(Device(id=2, hostname="edge-2", ip_address="192.0.2.11", created_at=datetime.utcnow()))
     db.commit()
@@ -84,9 +117,13 @@ def test_touch_disconnect_is_idempotent_and_updates_activity(db):
     m.touch(session.session_uuid)
     assert session.last_activity_at >= before
     m.disconnect_session(session.session_uuid, reason="user request")
-    m.disconnect_session(session.session_uuid, reason="again")
     assert session.status == "disconnected" and session.ended_at is not None
     assert Adapter.instances[0].closed == 1
+    with Session(db.get_bind()) as history_db:
+        persisted = history_db.query(RemoteAccessSession).filter_by(session_uuid=session.session_uuid).one()
+        assert persisted.status == "disconnected"
+        assert persisted.ended_at is not None
+    m.disconnect_session(session.session_uuid, reason="again")
     assert m.list_active_sessions() == []
 
 
@@ -147,11 +184,15 @@ def test_transport_reconciliation_is_idempotent_and_stops_duration(db):
     m = manager(db)
     session = m.create_session(device_id=1, user_id=1, protocol="ssh", username="u", secret="s")
     ended = m.reconcile_transport(session.session_uuid, reason="Session disconnected by device").ended_at
-    m.reconcile_transport(session.session_uuid, reason="WebSocket/remote transport failure")
     assert session.status == "disconnected"
     assert session.disconnect_reason == "Session disconnected by device"
     assert session.ended_at == ended
     assert Adapter.instances[0].closed == 1
+    with Session(db.get_bind()) as history_db:
+        persisted = history_db.query(RemoteAccessSession).filter_by(session_uuid=session.session_uuid).one()
+        assert persisted.status == "disconnected"
+        assert persisted.ended_at == ended
+    m.reconcile_transport(session.session_uuid, reason="WebSocket/remote transport failure")
 
 
 def test_auth_failure_persists_safe_human_reason(db):

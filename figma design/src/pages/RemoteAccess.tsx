@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import GlassCard from "../components/GlassCard"
 import {
+  createDevice,
   createRemoteAccessSession,
   deleteRemoteAccessSession,
   listDeviceOptions,
@@ -38,6 +39,10 @@ export default function RemoteAccess() {
   type SessionHistoryEntry = TerminalTab & { endedAt?: number; reason?: string; userId?: number }
   const [devices, setDevices] = useState<DeviceOptionRecord[]>([])
   const [deviceId, setDeviceId] = useState<number | "">("")
+  const [addingDevice, setAddingDevice] = useState(false)
+  const [addingDeviceBusy, setAddingDeviceBusy] = useState(false)
+  const [newDevice, setNewDevice] = useState({ hostname: "", ip_address: "" })
+  const [newDeviceError, setNewDeviceError] = useState("")
   const [protocol, setProtocol] = useState<"ssh" | "telnet">("ssh")
   const [username, setUsername] = useState("admin")
   const [password, setPassword] = useState("")
@@ -54,6 +59,7 @@ export default function RemoteAccess() {
   const [validatedInput, setValidatedInput] = useState<string | null>(null)
   const [testError, setTestError] = useState("")
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([])
+  const [connectingRequest, setConnectingRequest] = useState(false)
   const [activeSessionUuid, setActiveSessionUuid] = useState<string | null>(
     null,
   )
@@ -65,9 +71,13 @@ export default function RemoteAccess() {
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const terminalHostsRef = useRef(new Map<string, HTMLDivElement>())
+  const visibleTerminalSessionRef = useRef<string | null>(null)
+  const bootstrapPromiseRef = useRef<Promise<[DeviceOptionRecord[], Awaited<ReturnType<typeof listRemoteAccessSessions>>, Awaited<ReturnType<typeof listRemoteAccessSessionHistory>>]> | null>(null)
   const terminalsRef = useRef(new Map<string, { terminal: Terminal; fit: FitAddon; input: { dispose: () => void }; resize: { dispose: () => void }; observer: ResizeObserver }>())
   const socketsRef = useRef(new Map<string, WebSocket>())
   const connectingSessionsRef = useRef(new Set<string>())
+  const intentionalSocketCloseRef = useRef(new Set<string>())
+  visibleTerminalSessionRef.current = tab === "Terminal" ? activeSessionUuid : null
   // Keep the connection form across route unmounts. The device session itself
   // is owned by the backend and is restored from the active-sessions API.
   useEffect(() => {
@@ -93,63 +103,94 @@ export default function RemoteAccess() {
     } catch { /* storage may be unavailable */ }
   }, [deviceId, protocol, username, remember, port, customPort])
   useEffect(() => {
-    void listDeviceOptions({ limit: 500 })
-      .then((items) => {
-        setDevices(items)
-      })
-      .catch(() => undefined)
-  }, [])
-  useEffect(() => {
-    void listRemoteAccessSessions().then((sessions) => {
-      const restored = sessions.map((session) => ({
-        sessionUuid: session.session_uuid, deviceId: session.device_id,
-        ipAddress: devices.find((d) => d.id === session.device_id)?.ip_address,
-        hostname: devices.find((d) => d.id === session.device_id)?.hostname ?? String(session.device_id),
-        protocol: session.protocol, port: session.port, status: session.status === "connected" ? "connected" : "connecting",
+    let cancelled = false
+    bootstrapPromiseRef.current ??= Promise.all([
+      listDeviceOptions({ limit: 500 }),
+      listRemoteAccessSessions(),
+      listRemoteAccessSessionHistory(),
+    ])
+    void bootstrapPromiseRef.current.then(([deviceOptions, activeSessions, history]) => {
+      if (cancelled) return
+      setDevices(deviceOptions)
+      if (deviceOptions.length === 0) setAddingDevice(true)
+      const deviceById = new Map(deviceOptions.map((device) => [device.id, device]))
+      const restored = activeSessions.map((session) => ({
+        sessionUuid: session.session_uuid,
+        deviceId: session.device_id,
+        ipAddress: deviceById.get(session.device_id)?.ip_address,
+        hostname: deviceById.get(session.device_id)?.hostname ?? String(session.device_id),
+        protocol: session.protocol,
+        port: session.port,
+        status: session.status === "connected" ? "connected" : "connecting",
         deviceUsername: session.device_username,
         startedAt: new Date(session.started_at).getTime(),
       } as TerminalTab))
-      // The API can be observed more than once while the device options load.
-      // Keep one tab per backend session and one live terminal per device/IP.
-      const unique = restored.filter((session, index, all) => {
-        const identity = session.ipAddress || String(session.deviceId)
-        return all.findIndex((candidate) =>
-          candidate.sessionUuid === session.sessionUuid ||
-          (candidate.ipAddress || String(candidate.deviceId)) === identity,
-        ) === index
-      })
+      const unique = restored.filter((session, index, all) =>
+        all.findIndex((candidate) => candidate.deviceId === session.deviceId) === index,
+      )
+      const activeIds = new Set(unique.map((session) => session.sessionUuid))
       setTerminalTabs(unique)
-      // Route/tab remounts restore the backend session list, but the local
-      // active-tab pointer is lost. Re-select the live session so the terminal
-      // does not open as a blank screen after returning to this page.
       setActiveSessionUuid((active) => active ?? (
         unique.find((session) => session.status === "connected")?.sessionUuid ??
         unique[0]?.sessionUuid ??
         null
       ))
-    }).catch(() => undefined)
-  }, [devices])
-  useEffect(() => {
-    void Promise.all([listRemoteAccessSessionHistory(), listRemoteAccessSessions()]).then(([sessions, activeSessions]) => {
-      const activeIds = new Set(activeSessions.map((session) => session.session_uuid))
-      setSessionHistory(sessions.map((session) => ({
-        sessionUuid: session.session_uuid, deviceId: session.device_id,
-        hostname: devices.find((d) => d.id === session.device_id)?.hostname ?? String(session.device_id),
-        protocol: session.protocol, port: session.port,
-        // A history row is connected only while it is also returned by the
-        // active-session endpoint. This prevents stale CONNECTED rows after a
-        // lost browser/backend owner.
+      setSessionHistory(history.map((session) => ({
+        sessionUuid: session.session_uuid,
+        deviceId: session.device_id,
+        hostname: deviceById.get(session.device_id)?.hostname ?? String(session.device_id),
+        protocol: session.protocol,
+        port: session.port,
         status: session.status === "connected" && activeIds.has(session.session_uuid) ? "connected" : "disconnected",
-        startedAt: new Date(session.started_at).getTime(), endedAt: session.ended_at ? new Date(session.ended_at).getTime() : undefined,
-        reason: session.disconnect_reason ?? "—", userId: session.user_id,
+        startedAt: new Date(session.started_at).getTime(),
+        endedAt: session.ended_at ? new Date(session.ended_at).getTime() : undefined,
+        reason: session.disconnect_reason ?? "—",
+        userId: session.user_id,
       } as SessionHistoryEntry)))
     }).catch(() => undefined)
-  }, [devices])
+    return () => { cancelled = true }
+  }, [])
   const selected = useMemo(
     () => devices.find((d) => d.id === deviceId),
     [devices, deviceId],
   )
   const host = selected?.ip_address ?? ""
+  const saveNewDevice = async () => {
+    const hostname = newDevice.hostname.trim()
+    const ipAddress = newDevice.ip_address.trim()
+    if (!hostname || !ipAddress) {
+      setNewDeviceError("Enter a device name and IP address.")
+      return
+    }
+    setAddingDeviceBusy(true)
+    setNewDeviceError("")
+    try {
+      const saved = await createDevice({ hostname, ip_address: ipAddress })
+      const option: DeviceOptionRecord = {
+        id: saved.id,
+        hostname: saved.hostname,
+        ip_address: saved.ip_address,
+        mac_address: saved.mac_address,
+        model: saved.model,
+        vendor_name: saved.vendor_name,
+        device_type: saved.device_type,
+        status: saved.status,
+      }
+      setDevices((current) => current.some((device) => device.id === option.id)
+        ? current
+        : [...current, option])
+      setDeviceId(option.id)
+      setNewDevice({ hostname: "", ip_address: "" })
+      setAddingDevice(false)
+      setTestResult(null)
+      setValidatedInput(null)
+      toast.success(`${option.hostname} added to devices`)
+    } catch (error) {
+      setNewDeviceError(error instanceof Error ? error.message : "Unable to add device.")
+    } finally {
+      setAddingDeviceBusy(false)
+    }
+  }
   const formatSessionTime = (timestamp?: number) =>
     timestamp ? new Date(timestamp).toLocaleString() : "—"
   const formatDuration = (startedAt?: number, endedAt?: number) => {
@@ -170,6 +211,12 @@ export default function RemoteAccess() {
     setTestError("")
   }
   const inputFingerprint = () => JSON.stringify({ deviceId, protocol, port, username: username.trim(), secretPresent: Boolean(password) })
+  const activeSessionForDevice = (id: number | "") => terminalTabs.find(
+    (item) => item.deviceId === id && (item.status === "connected" || item.status === "connecting"),
+  )
+  const notifyAlreadyConnected = (session: TerminalTab) => {
+    toast.warning(`${session.hostname} is already connected via ${session.protocol.toUpperCase()}.`)
+  }
   useEffect(() => {
     if (validatedInput !== null) {
       setTestResult(null)
@@ -177,6 +224,11 @@ export default function RemoteAccess() {
     }
   }, [deviceId, protocol, port, username, password])
   const runTest = async () => {
+    const activeSession = activeSessionForDevice(deviceId)
+    if (activeSession) {
+      notifyAlreadyConnected(activeSession)
+      return
+    }
     setTestResult(null)
     setTestError("")
     if (deviceId === "" || !username.trim() || !password) {
@@ -184,6 +236,7 @@ export default function RemoteAccess() {
       return
     }
     setTesting(true)
+    const testStartedAt = performance.now()
     try {
       const result = await testRemoteAccess({
           device_id: deviceId,
@@ -199,6 +252,8 @@ export default function RemoteAccess() {
           port: result.port, credential_id: result.credential_id,
           stage: result.stage, code: result.error_code,
           message: result.message,
+          browser_round_trip_ms: Number((performance.now() - testStartedAt).toFixed(1)),
+          backend_connection_ms: result.latency,
         })
       setTestResult(result)
       setValidatedInput(result.success ? inputFingerprint() : null)
@@ -212,27 +267,25 @@ export default function RemoteAccess() {
   }
   const connectTerminal = async () => {
     setTerminalError("")
+    const existing = activeSessionForDevice(deviceId)
+    if (existing) {
+      notifyAlreadyConnected(existing)
+      return
+    }
+    if (connectingRequest || connectingSessionsRef.current.size > 0) return
     const validationMatches = testResult?.success === true && validatedInput === inputFingerprint()
     const savedCredentialId = validationMatches && testResult.credential_id
       ? testResult.credential_id
       : undefined
-    if (!validationMatches) {
-      setTerminalError("Run a successful connection test before opening a terminal.")
+    if (deviceId === "" || !username.trim() || !password && !savedCredentialId) {
+      setTerminalError("Select a device and enter username and password.")
       return
     }
-    if (terminalTabs.some((tab) => tab.status === "connecting") || connectingSessionsRef.current.size > 0) return
     const deviceName = selected?.hostname ?? host
-    const existing = terminalTabs.find((tab) =>
-      tab.deviceId === deviceId || (host && tab.ipAddress === host),
-    )
-    if (existing) {
-      setActiveSessionUuid(existing.sessionUuid)
-      setTab("Terminal")
-      setTerminalError(`A terminal is already open for ${existing.hostname} (${existing.ipAddress ?? host}).`)
-      return
-    }
     toast.info(`Connecting to ${deviceName}...`)
+    setConnectingRequest(true)
     connectingSessionsRef.current.add("pending")
+    const connectionStarted = performance.now()
     try {
       const sessionPayload = {
         device_id: deviceId,
@@ -240,10 +293,13 @@ export default function RemoteAccess() {
         port,
         ...(savedCredentialId
           ? { credential_id: savedCredentialId }
-          : { username: username.trim(), secret: password }),
+          : { username: username.trim(), secret: password, remember_credential: remember }),
       }
       const session = await createRemoteAccessSession(sessionPayload)
-      console.info("[terminal] session-created")
+      console.info("[remote-access] stage=session_creation_and_handshake", {
+        duration_ms: Number((performance.now() - connectionStarted).toFixed(1)),
+        protocol: session.protocol,
+      })
       connectingSessionsRef.current.delete("pending")
       const next: TerminalTab = {
         sessionUuid: session.session_uuid,
@@ -264,22 +320,33 @@ export default function RemoteAccess() {
         return [...tabs, next]
       })
       setActiveSessionUuid(session.session_uuid)
-      toast.info("SSH session created; opening terminal...")
+      toast.info(`${session.protocol.toUpperCase()} session created; opening terminal...`)
     } catch (error) {
       connectingSessionsRef.current.delete("pending")
-      toast.error(`Connection failed: ${error instanceof Error ? error.message : "unable to create session"}`)
+      setConnectingRequest(false)
+      const message = error instanceof Error ? error.message : "unable to create session"
+      const duplicate = message.match(/^DEVICE_ALREADY_CONNECTED:(ssh|telnet)$/i)
+      if (duplicate) {
+        toast.warning(`${deviceName} is already connected via ${duplicate[1].toUpperCase()}.`)
+        return
+      }
+      toast.error(`Connection failed: ${message}`)
       setTerminalError(
-        error instanceof Error
-          ? error.message
-          : "Unable to create terminal session.",
+        message || "Unable to create terminal session.",
       )
+    } finally {
+      connectingSessionsRef.current.delete("pending")
+      setConnectingRequest(false)
     }
   }
   const disconnectTerminal = async (sessionUuid: string) => {
     const tab = terminalTabs.find((item) => item.sessionUuid === sessionUuid)
     const socket = socketsRef.current.get(sessionUuid)
     if (socket && socket.readyState < WebSocket.CLOSING) {
-      socket.send(JSON.stringify({ type: "disconnect" }))
+      intentionalSocketCloseRef.current.add(sessionUuid)
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "disconnect" }))
+      }
       socket.close()
     }
     socketsRef.current.delete(sessionUuid)
@@ -335,17 +402,37 @@ export default function RemoteAccess() {
   }
   const startNewSession = () => {
     setActiveSessionUuid(null)
-    // Keep the connection form/draft intact when switching tabs or returning
-    // from another route. Only session-specific validation should be reset.
+    setDeviceId("")
+    setUsername("")
+    setPassword("")
+    setShowPassword(false)
+    setProtocol("ssh")
+    setPort(22)
+    setCustomPort(false)
     setTestResult(null)
     setValidatedInput(null)
     setTestError("")
     setTerminalError("")
+    setAddingDevice(false)
+    setNewDeviceError("")
     setTab("Terminal")
   }
   const appendTerminalOutput = (sessionUuid: string, output: string) => {
     void sessionUuid
     void output
+  }
+  const fitVisibleTerminal = (sessionUuid: string) => {
+    if (visibleTerminalSessionRef.current !== sessionUuid) return
+    const state = terminalsRef.current.get(sessionUuid)
+    const host = terminalHostsRef.current.get(sessionUuid)
+    if (!state || !host?.isConnected) return
+    const { width, height } = host.getBoundingClientRect()
+    if (width <= 0 || height <= 0) return
+    try {
+      state.fit.fit()
+    } catch {
+      // xterm can reject a fit while its renderer is being initialized.
+    }
   }
   useEffect(() => {
     if (!activeTab?.startedAt) return
@@ -353,12 +440,16 @@ export default function RemoteAccess() {
     return () => window.clearInterval(interval)
   }, [activeTab?.startedAt])
   useEffect(() => {
-    if (!activeSessionUuid || !terminalHostRef.current) return
-    if (terminalsRef.current.has(activeSessionUuid)) return
+    if (!activeSessionUuid || tab !== "Terminal" || !terminalHostRef.current) return
     const sessionUuid = activeSessionUuid
-    const tab = terminalTabs.find((item) => item.sessionUuid === sessionUuid)
-    if (!tab) return
+    const sessionTab = terminalTabs.find((item) => item.sessionUuid === sessionUuid)
+    if (!sessionTab) return
     const host = terminalHostsRef.current.get(sessionUuid) ?? terminalHostRef.current
+    if (terminalsRef.current.has(sessionUuid)) {
+      const frame = requestAnimationFrame(() => fitVisibleTerminal(sessionUuid))
+      return () => cancelAnimationFrame(frame)
+    }
+    const xtermStartedAt = performance.now()
     const terminal = new Terminal({
       convertEol: true,
       cursorBlink: true,
@@ -369,12 +460,17 @@ export default function RemoteAccess() {
     const fit = new FitAddon()
     terminal.loadAddon(fit)
     terminal.open(host)
-    fit.fit()
-    terminalRef.current = terminal
-    fitRef.current = fit
-    terminalsRef.current.set(sessionUuid, { terminal, fit, input: { dispose: () => undefined }, resize: { dispose: () => undefined }, observer: new ResizeObserver(() => fit.fit()) })
-    console.info("[terminal] xterm-created", sessionUuid)
+    const observer = new ResizeObserver(() => fitVisibleTerminal(sessionUuid))
+    terminalsRef.current.set(sessionUuid, { terminal, fit, input: { dispose: () => undefined }, resize: { dispose: () => undefined }, observer })
+    observer.observe(host)
+    const xtermReadyAt = performance.now()
+    console.info("[remote-access] stage=xterm_created", {
+      session_uuid: sessionUuid,
+      duration_ms: Number((xtermReadyAt - xtermStartedAt).toFixed(1)),
+    })
+    requestAnimationFrame(() => fitVisibleTerminal(sessionUuid))
     let socket: WebSocket | undefined
+    const websocketStartedAt = performance.now()
     void openRemoteAccessTerminal(sessionUuid)
       .then((opened) => {
         if (!terminalsRef.current.has(sessionUuid) || socketsRef.current.has(sessionUuid)) {
@@ -385,7 +481,11 @@ export default function RemoteAccess() {
         socketsRef.current.set(sessionUuid, opened)
         opened.binaryType = "arraybuffer"
         opened.onopen = () => {
-          console.info("[terminal] ws-open", sessionUuid)
+          console.info("[remote-access] stage=websocket_open", {
+            session_uuid: sessionUuid,
+            duration_ms: Number((performance.now() - websocketStartedAt).toFixed(1)),
+            xterm_ready_ms: Number((performance.now() - xtermReadyAt).toFixed(1)),
+          })
           setTerminalTabs((tabs) =>
             tabs.map((tab) =>
               tab.sessionUuid === sessionUuid
@@ -393,7 +493,7 @@ export default function RemoteAccess() {
                 : tab,
             ),
           )
-          toast.success(`${tab.hostname} ${tab.protocol.toUpperCase()} connection established`)
+          toast.success(`${sessionTab.hostname} ${sessionTab.protocol.toUpperCase()} connection established`)
           opened.send(
             JSON.stringify({
               type: "resize",
@@ -438,16 +538,43 @@ export default function RemoteAccess() {
         }
         opened.onclose = () => {
           socketsRef.current.delete(sessionUuid)
+          if (intentionalSocketCloseRef.current.delete(sessionUuid)) return
           console.info("[terminal] ws-close", sessionUuid)
-          const closedTab = terminalTabs.find((item) => item.sessionUuid === sessionUuid) ?? tab
-          terminal.clear()
-          terminal.reset()
-          terminal.dispose()
+          const closedTab = terminalTabs.find((item) => item.sessionUuid === sessionUuid) ?? sessionTab
+          const terminalState = terminalsRef.current.get(sessionUuid)
+          if (terminalState) {
+            terminalState.input.dispose()
+            terminalState.resize.dispose()
+            terminalState.observer.disconnect()
+            terminalState.terminal.clear()
+            terminalState.terminal.reset()
+            terminalState.terminal.dispose()
+          } else {
+            terminal.dispose()
+          }
           terminalsRef.current.delete(sessionUuid)
           setTerminalTabs((tabs) => tabs.map((item) => item.sessionUuid === sessionUuid ? { ...item, status: "disconnected" } : item))
           setActiveSessionUuid((active) => active === sessionUuid ? null : active)
           setTerminalError("Session disconnected. Start a new session to reconnect.")
           toast.info(`Disconnected from ${closedTab.hostname}`)
+          const activeIds = new Set(terminalTabs
+            .filter((item) => item.sessionUuid !== sessionUuid && item.status === "connected")
+            .map((item) => item.sessionUuid))
+          void listRemoteAccessSessionHistory().then((history) => {
+            const deviceById = new Map(devices.map((device) => [device.id, device]))
+            setSessionHistory(history.map((item) => ({
+              sessionUuid: item.session_uuid,
+              deviceId: item.device_id,
+              hostname: deviceById.get(item.device_id)?.hostname ?? String(item.device_id),
+              protocol: item.protocol,
+              port: item.port,
+              status: item.status === "connected" && activeIds.has(item.session_uuid) ? "connected" : "disconnected",
+              startedAt: new Date(item.started_at).getTime(),
+              endedAt: item.ended_at ? new Date(item.ended_at).getTime() : undefined,
+              reason: item.disconnect_reason ?? "—",
+              userId: item.user_id,
+            } as SessionHistoryEntry)))
+          }).catch(() => undefined)
         }
       })
       .catch((error) => {
@@ -471,13 +598,11 @@ export default function RemoteAccess() {
       if (socket?.readyState === WebSocket.OPEN)
         socket.send(JSON.stringify({ type: "resize", cols, rows }))
     })
-    const observer = terminalsRef.current.get(sessionUuid)!.observer
-    observer.observe(host)
     const state = terminalsRef.current.get(sessionUuid)!
     state.input = input
     state.resize = resize
     return undefined
-  }, [activeSessionUuid])
+  }, [activeSessionUuid, tab])
 
   useEffect(() => () => {
     for (const [sessionUuid, state] of terminalsRef.current) {
@@ -489,8 +614,11 @@ export default function RemoteAccess() {
     }
     terminalsRef.current.clear()
     // Detach the browser transport without disconnecting the backend session.
-    for (const socket of socketsRef.current.values()) {
-      if (socket.readyState < WebSocket.CLOSING) socket.close()
+    for (const [sessionUuid, socket] of socketsRef.current) {
+      if (socket.readyState < WebSocket.CLOSING) {
+        intentionalSocketCloseRef.current.add(sessionUuid)
+        socket.close()
+      }
     }
     socketsRef.current.clear()
   }, [])
@@ -622,11 +750,18 @@ export default function RemoteAccess() {
               </button>
             </div>
             <select
-              value={deviceId}
+              value={addingDevice ? "add" : deviceId}
               disabled={formLocked}
-              onChange={(e) =>
-                setDeviceId(e.target.value ? Number(e.target.value) : "")
-              }
+              onChange={(event) => {
+                if (event.target.value === "add") {
+                  setDeviceId("")
+                  setNewDeviceError("")
+                  setAddingDevice(true)
+                  return
+                }
+                setAddingDevice(false)
+                setDeviceId(event.target.value ? Number(event.target.value) : "")
+              }}
               className="w-full rounded-lg px-3 py-3 text-sm"
               style={inputStyle}
             >
@@ -639,6 +774,44 @@ export default function RemoteAccess() {
               <option value="add">+ Add New Remote Device</option>
             </select>
           </div>
+          {addingDevice && (
+            <div className="space-y-3 rounded-lg p-4" style={{ border: "1px solid var(--t-border-alpha)" }}>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-display text-sm" style={{ color: "var(--t-accent)" }}>ADD REMOTE DEVICE</h3>
+                {devices.length > 0 && (
+                  <button type="button" className="text-xs" style={{ color: "var(--t-muted)" }} onClick={() => setAddingDevice(false)}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+              <label className="block text-xs font-display">
+                Device name
+                <input
+                  autoFocus
+                  value={newDevice.hostname}
+                  onChange={(event) => setNewDevice((current) => ({ ...current, hostname: event.target.value }))}
+                  placeholder="Core-switch"
+                  className="mt-2 w-full rounded-lg px-3 py-3 text-sm"
+                  style={inputStyle}
+                />
+              </label>
+              <label className="block text-xs font-display">
+                IP address
+                <input
+                  value={newDevice.ip_address}
+                  onChange={(event) => setNewDevice((current) => ({ ...current, ip_address: event.target.value }))}
+                  placeholder="192.0.2.10"
+                  inputMode="decimal"
+                  className="mt-2 w-full rounded-lg px-3 py-3 text-sm"
+                  style={inputStyle}
+                />
+              </label>
+              {newDeviceError && <p role="alert" className="text-sm text-red-400">{newDeviceError}</p>}
+              <Button primary disabled={addingDeviceBusy} onClick={() => void saveNewDevice()}>
+                {addingDeviceBusy ? "Adding device..." : "Add device"}
+              </Button>
+            </div>
+          )}
           {selected && <>
           <div>
             <label className="block mb-2 text-xs font-display">Protocol</label>
@@ -752,13 +925,21 @@ export default function RemoteAccess() {
             Remember credential for this device
           </label>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Button disabled={testing || formLocked} onClick={() => void runTest()}>
+            <Button disabled={testing || connectingRequest || formLocked} onClick={() => void runTest()}>
               ↗ &nbsp; {testing ? "Testing..." : "Test Connection"}
             </Button>
-            <Button primary disabled={connecting || formLocked} onClick={() => void connectTerminal()}>
-              ▶ &nbsp; {connecting ? "Connecting..." : "Connect Terminal →"}
+            <Button primary disabled={connecting || connectingRequest || formLocked} onClick={() => void connectTerminal()}>
+              ▶ &nbsp; {connecting || connectingRequest ? "Connecting..." : "Connect Terminal →"}
             </Button>
           </div>
+          {(testing || connectingRequest) && (
+            <div role="status" aria-live="polite" className="flex items-center gap-2 text-xs" style={{ color: "var(--t-accent)" }}>
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--t-accent)" }} />
+              {testing
+                ? `Checking ${protocol.toUpperCase()} credentials for ${selected?.hostname ?? host}...`
+                : `Opening ${protocol.toUpperCase()} session to ${selected?.hostname ?? host}...`}
+            </div>
+          )}
           {testResult?.success && (
             <div
               className="rounded-lg p-3 text-sm"

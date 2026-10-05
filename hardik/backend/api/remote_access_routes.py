@@ -77,6 +77,8 @@ def manager_from_request(request: Request):
 def create_remote_session(payload: RemoteAccessSessionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user), manager: SessionManager | None = Depends(manager_from_request)):
     if "remote_access:connect" not in get_user_permission_codes(current_user):
         raise HTTPException(status_code=403, detail="Missing permission: remote_access:connect")
+    if payload.remember_credential and "remote_access:manage_credentials" not in get_user_permission_codes(current_user):
+        raise HTTPException(status_code=403, detail="Missing permission: remote_access:manage_credentials")
     device = db.get(Device, payload.device_id)
     if device is None or not can_access_site(current_user, device.site_id):
         raise HTTPException(status_code=403, detail="Device access denied")
@@ -89,7 +91,21 @@ def create_remote_session(payload: RemoteAccessSessionCreate, db: Session = Depe
     except Exception as exc:
         db.rollback()
         code = getattr(exc, "code", "SESSION_CREATE_FAILED")
+        if manager is not None:
+            try:
+                if code == "DEVICE_ALREADY_CONNECTED" or not manager.db.is_active:
+                    manager.db.rollback()
+                else:
+                    manager.db.commit()
+            except Exception:
+                manager.db.rollback()
         logger.warning("Remote Access session creation failed: code=%s exception_type=%s", code, type(exc).__name__)
+        if code == "DEVICE_ALREADY_CONNECTED":
+            protocol = getattr(exc, "protocol", "")
+            raise HTTPException(
+                status_code=409,
+                detail=f"DEVICE_ALREADY_CONNECTED:{protocol}",
+            ) from exc
         raise HTTPException(status_code=400, detail=code) from exc
 
 
@@ -136,6 +152,7 @@ def delete_remote_session(session_uuid: str, db: Session = Depends(get_db), curr
     # idempotent instead of returning a misleading 404.
     if manager is not None and item is not None:
         result = manager.disconnect_session(session_uuid, reason="API disconnect")
+        manager.db.commit()
     else:
         result = record
     db.commit()

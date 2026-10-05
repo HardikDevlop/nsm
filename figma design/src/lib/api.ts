@@ -99,6 +99,10 @@ function clearRequestCache() {
   }
 }
 
+export function clearApiCache() {
+  clearRequestCache()
+}
+
 function invalidateGetCache() {
   clearRequestCache()
 }
@@ -129,7 +133,10 @@ function friendlyApiMessage(status: number, detail: string): string {
     return normalized || "The request could not be processed."
   }
   if (status === 404) return "Device not found."
-  if (status === 409) return "This item is already being processed."
+  if (status === 409) {
+    if (/^DEVICE_ALREADY_CONNECTED:(ssh|telnet)$/i.test(normalized)) return normalized
+    return "This item is already being processed."
+  }
   if (status === 422) return "The submitted data is incomplete or invalid."
   if (status === 502 || status === 503 || status === 504)
     return "The service is temporarily unavailable. Please retry in a moment."
@@ -1243,11 +1250,11 @@ export interface RemoteAccessSession {
 }
 
 export async function listRemoteAccessSessions(): Promise<RemoteAccessSession[]> {
-  return requestJson<RemoteAccessSession[]>("/remote-access/sessions")
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions", { cache: "no-store" })
 }
 
 export async function listRemoteAccessSessionHistory(): Promise<RemoteAccessSession[]> {
-  return requestJson<RemoteAccessSession[]>("/remote-access/sessions/history")
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions/history", { cache: "no-store" })
 }
 
 export async function createRemoteAccessSession(payload: {
@@ -1257,6 +1264,7 @@ export async function createRemoteAccessSession(payload: {
   credential_id?: number
   username?: string
   secret?: string
+  remember_credential?: boolean
 }): Promise<RemoteAccessSession> {
   console.info("[remote-access] session request", {
     device_id: payload.device_id, protocol: payload.protocol, port: payload.port,
