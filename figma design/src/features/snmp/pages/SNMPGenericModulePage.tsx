@@ -34,8 +34,10 @@ export default function SNMPGenericModulePage() {
   // MAC tables need the authoritative endpoint because the generic monitoring
   // snapshot intentionally contains only persisted metrics, not live FDB/ARP.
   const isMacTable = moduleName === 'mac_table'
-  const { data: monitoringData, isLoading: isMonitoringLoading, error: monitoringError } = useMonitoringData(id, !isMacTable)
+  const isInventory = moduleName === 'inventory'
+  const { data: monitoringData, isLoading: isMonitoringLoading, error: monitoringError } = useMonitoringData(id, !isMacTable && !isInventory)
   const { data: macTableData, isLoading: isMacTableLoading, isFetching: isMacTableFetching, error: macTableError, refetch: refetchMacTable } = useModuleData(id, isMacTable ? 'mac_table' : null)
+  const { data: inventoryData, isLoading: isInventoryLoading, error: inventoryError } = useModuleData(id, isInventory ? 'inventory' : null)
   const isArp = moduleName === 'arp'
   const { data: arpTableData, isFetching: isArpTableFetching, refetch: refetchArpTable } = useModuleData(id, (isMacTable || isArp) ? 'arp' : null)
   const dbModule = monitoringData?.modules?.[moduleName]
@@ -45,6 +47,8 @@ export default function SNMPGenericModulePage() {
 
   const dbCollector = isMacTable
     ? macTableData
+    : isInventory
+    ? inventoryData
     : isArp
     ? arpTableData
     : dbModule
@@ -64,8 +68,8 @@ export default function SNMPGenericModulePage() {
     collectors[0]
   const supported = collector?.supported === true
   const title = titleize(config?.label || moduleName)
-  const isLoading = isMacTable ? isMacTableLoading : isArp ? isArpTableFetching && !arpTableData : isMonitoringLoading
-  const error = isMacTable ? macTableError : isArp ? null : monitoringError
+  const isLoading = isMacTable ? isMacTableLoading : isInventory ? isInventoryLoading : isArp ? isArpTableFetching && !arpTableData : isMonitoringLoading
+  const error = isMacTable ? macTableError : isInventory ? inventoryError : isArp ? null : monitoringError
 
   return (
     <SNMPModuleShell

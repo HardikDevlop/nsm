@@ -155,8 +155,8 @@ export function useDeviceCapabilities(deviceId: number | null) {
 
 export function useModuleData(deviceId: number | null, moduleId: string | null) {
   const monitoringStatus = useModuleMonitoringStatus(deviceId, moduleId)
-  const refetchIntervalSeconds = monitoringStatus?.enabled && monitoringStatus?.status === 'running'
-    ? monitoringStatus.interval_seconds
+  const refetchIntervalSeconds = monitoringStatus.data?.enabled && monitoringStatus.data?.status === 'running'
+    ? monitoringStatus.data.interval_seconds
     : undefined
   return useQuery<SNMPModuleData>({
     queryKey: moduleKeys.moduleData(deviceId!, moduleId!),

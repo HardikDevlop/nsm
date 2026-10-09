@@ -422,8 +422,6 @@ export default function SNMPDeviceDetails() {
                     <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{device.mac_address || '—'}</div>
                   </div>
                   <div>
-                    <div className="font-mono text-[10px] mb-0.5" style={{ color: '#667799' }}>Uptime</div>
-                    <div className="font-mono text-xs" style={{ color: '#c8d8ee' }}>{formatUptimeLocal(liveUptimeSeconds ?? device.uptime_seconds)}</div>
                   </div>
                 </div>
               </div>

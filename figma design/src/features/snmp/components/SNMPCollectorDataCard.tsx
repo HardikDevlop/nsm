@@ -1,4 +1,5 @@
 import GlassCard from "../../../components/GlassCard"
+import { useState } from "react"
 import {
   formatBytes,
   formatSpeed,
@@ -46,6 +47,16 @@ function findRows(data: any): any[] {
   return []
 }
 
+function inventoryRows(data: any): any[] {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return []
+  const groups = ["chassis", "modules", "power_supplies", "fans", "sensors", "cpus", "other"]
+  return groups.flatMap((group) => {
+    const value = data[group]
+    if (Array.isArray(value)) return value
+    return value && typeof value === "object" ? [value] : []
+  }).sort((left, right) => Number(left?.index ?? 0) - Number(right?.index ?? 0))
+}
+
 function getSummaryItems(data: any): Array<[string, any]> {
   if (!data || typeof data !== "object" || Array.isArray(data)) return []
   return Object.entries(data)
@@ -77,6 +88,12 @@ function ipSortKey(value: unknown): [number, ...Array<number | string>] {
   return [1, text]
 }
 
+function inventoryDate(value: unknown): string {
+  if (!value) return "Not available"
+  const date = new Date(String(value))
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: true })
+}
+
 export default function SNMPCollectorDataCard({
   name,
   collector,
@@ -91,10 +108,32 @@ export default function SNMPCollectorDataCard({
   onRefresh?: () => void
 }) {
   const config = getModuleConfig(name)
+  const inventoryData = name === "inventory" ? (collector?.data || {}) : null
+  const inventoryChassis = inventoryData?.chassis || {}
+  const inventoryValues = name === "inventory" ? {
+    total_count: inventoryData?.total_count ?? 0,
+    fru_count: inventoryData?.fru_count ?? 0,
+    port_count: inventoryData?.port_count ?? inventoryData?.ports?.length,
+    loader_date: inventoryData?.loader_date ?? collector?.timestamp,
+    system_uptime: inventoryData?.system_uptime ?? inventoryData?.uptime ?? inventoryData?.system?.uptime,
+    loader_version: inventoryData?.loader_version ?? inventoryChassis.software_rev,
+    firmware_version: inventoryData?.firmware_version ?? inventoryChassis.firmware_rev,
+  } : null
+  const [inventoryView, setInventoryView] = useState<"all" | "ports" | null>(null)
+  const inventoryComponents = name === "inventory" ? inventoryRows(collector?.data) : []
+  const inventoryPorts = name === "inventory" && Array.isArray(collector?.data?.ports)
+    ? collector.data.ports
+    : []
+  const inventoryAllRows = [...inventoryComponents, ...inventoryPorts]
+    .sort((left: any, right: any) => Number(left?.index ?? 0) - Number(right?.index ?? 0))
   const color = collector?.supported ? config?.color || "#00d4ff" : "#ff3366"
-  const rows = findRows(collector?.data)
+  const rows = name === "inventory" ? inventoryRows(collector?.data) : findRows(collector?.data)
   // ARP users need the VLAN identity, not the bridge interface index.
-  const displayRows = name === "arp"
+  const displayRows = name === "interfaces"
+    ? rows.slice().sort((left: any, right: any) =>
+        Number(left?.ifIndex ?? left?.if_index ?? 0) - Number(right?.ifIndex ?? right?.if_index ?? 0),
+      )
+    : name === "arp"
     ? rows.map((row: any) => {
         const next = { ...row }
         delete next.interface
@@ -110,12 +149,13 @@ export default function SNMPCollectorDataCard({
       ([key]) =>
         !configuredSummaryFields || configuredSummaryFields.includes(key),
     )
+    .filter(([key]) => !(name === "interfaces" && /mac/i.test(key)))
     .filter(([, value]) => !isEmptyValue(value))
   const columns =
     displayRows.length > 0
       ? Array.from(
           new Set(displayRows.flatMap((row) => Object.keys(row || {}))),
-        ).slice(0, 12)
+        ).filter((column) => !(name === "mac_table" && /ip_addresses|^ips$/i.test(column))).slice(0, 12)
       : []
   const selfMacs = new Set(
     (collector?.data?.entries || [])
@@ -266,6 +306,42 @@ export default function SNMPCollectorDataCard({
             {dataQuality !== "complete" && <span style={{ color: "#8899bb" }}>MACs retained · ARP enrichment may be pending</span>}
           </div>
         )}
+        {name === "inventory" && (
+          <div className="relative mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              ["Total components", inventoryValues?.total_count],
+              ["Ports", inventoryValues?.port_count],
+              ["Loader date", inventoryDate(inventoryValues?.loader_date)],
+              ["System uptime", inventoryValues?.system_uptime],
+              ["Loader version", inventoryValues?.loader_version],
+              ["Firmware version", inventoryValues?.firmware_version],
+              ["Chassis model", inventoryChassis.model],
+              ["Serial number", inventoryChassis.serial],
+              ["Manufacturer", inventoryChassis.manufacturer],
+              ["Hardware revision", inventoryChassis.hardware_rev],
+              ["Chassis index", inventoryChassis.index],
+            ].map(([label, value]) => {
+              const clickable = label === "Total components" || label === "Ports"
+              return <div
+                key={String(label)}
+                role={clickable ? "button" : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                onClick={clickable ? () => setInventoryView(label === "Ports" ? "ports" : "all") : undefined}
+                onKeyDown={clickable ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") setInventoryView(label === "Ports" ? "ports" : "all")
+                } : undefined}
+                className={`rounded-lg p-3 ${clickable ? "cursor-pointer transition-colors hover:border-cyan-400/50" : ""}`}
+                style={{ background: "var(--t-card)", border: "1px solid var(--t-border-alpha)" }}
+              >
+                <div className="font-mono text-[10px] uppercase tracking-wide" style={{ color: "var(--t-muted)" }}>{label}</div>
+                <div className="mt-1 break-words font-mono text-sm font-semibold" style={{ color: value === undefined || value === null || value === "" ? "var(--t-muted)" : "var(--t-text)" }}>
+                  {value === undefined || value === null || value === "" ? "Not available" : String(value)}
+                </div>
+                {clickable && <div className="mt-1 font-mono text-[9px] uppercase tracking-wider" style={{ color: "var(--t-accent)" }}>View details</div>}
+              </div>
+            })}
+          </div>
+        )}
         {macTableStats && (
           <div className="snmp-mac-stats relative mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
             {([
@@ -285,14 +361,14 @@ export default function SNMPCollectorDataCard({
                   }}
                 >
                   <div
-                    className="font-mono text-[8px] uppercase tracking-wider"
-                    style={{ color: "#667799" }}
+                    className="font-mono text-[9px] uppercase tracking-wider"
+                    style={{ color: "var(--t-text)" }}
                   >
                     {label}
                   </div>
                   <div
-                    className="mt-1 font-display text-lg font-bold"
-                    style={{ color: tone }}
+                    className="mt-1 font-display text-xl font-normal"
+                    style={{ color: "var(--t-text)" }}
                   >
                     {value}
                   </div>
@@ -424,7 +500,39 @@ export default function SNMPCollectorDataCard({
               </div>
             </>
           )}
-          {summary.length > 0 && (
+          {name === "inventory" && inventoryView && (
+            <div className="mx-4 mb-4 overflow-hidden rounded-lg" style={{ border: "1px solid var(--t-border)", background: "var(--t-card)" }}>
+              <div className="flex items-center justify-between gap-3 border-b p-3" style={{ borderColor: "var(--t-border)" }}>
+                <div className="font-display text-xs font-bold uppercase tracking-[.16em]" style={{ color: "var(--t-accent)" }}>
+                  {inventoryView === "ports" ? "Port Details" : "Component Details"}
+                </div>
+                <button type="button" className="font-mono text-[10px] uppercase" style={{ color: "var(--t-muted)" }} onClick={() => setInventoryView(null)}>Close</button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full" style={{ minWidth: inventoryView === "ports" ? 700 : 1100 }}>
+                  <thead>
+                    <tr style={{ background: "var(--t-table-header)" }}>
+                      {(inventoryView === "ports"
+                        ? ["index", "name", "class", "parent_index", "parent_rel_pos"]
+                        : ["index", "name", "description", "class", "model", "serial", "hardware_rev", "firmware_rev", "software_rev", "manufacturer", "is_fru", "parent_index"]
+                      ).map((column) => <th key={column} className="px-3 py-2 text-left font-mono text-[10px] uppercase" style={{ color: "var(--t-text-secondary)" }}>{titleize(column)}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(inventoryView === "ports" ? inventoryPorts : inventoryAllRows).map((row: any, index: number) => {
+                      const columnsForRow = inventoryView === "ports"
+                        ? ["index", "name", "class", "parent_index", "parent_rel_pos"]
+                        : ["index", "name", "description", "class", "model", "serial", "hardware_rev", "firmware_rev", "software_rev", "manufacturer", "is_fru", "parent_index"]
+                      return <tr key={`${row?.index ?? index}`} style={{ borderTop: "1px solid var(--t-border)" }}>
+                        {columnsForRow.map((column) => <td key={column} className="px-3 py-2 font-mono text-[10px]" style={{ color: "var(--t-text)" }}>{formatMetricValue(column, row?.[column])}</td>)}
+                      </tr>
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {name !== "inventory" && summary.length > 0 && (
             <div className="grid grid-cols-2 gap-2 p-4 sm:p-5 md:grid-cols-4">
               {summary.map(([key, value]) => (
                 <div
@@ -451,7 +559,7 @@ export default function SNMPCollectorDataCard({
               ))}
             </div>
           )}
-          {rows.length > 0 && (
+          {rows.length > 0 && name !== "inventory" && (
             <div className="overflow-x-auto">
               <table className="w-full snmp-readable-table snmp-collector-data-table snmp-arp-table" style={{ minWidth: 900 }}>
                 <thead>

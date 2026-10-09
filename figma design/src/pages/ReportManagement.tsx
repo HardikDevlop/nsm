@@ -274,25 +274,6 @@ function Ring({ pct, color, size = 64 }: { pct: number; color: string; size?: nu
   )
 }
 
-function ExportButton({ children, onClick, busy, variant }: { children: ReactNode; onClick: () => void; busy: boolean; variant: 'ghost' | 'solid' }) {
-  const solid = variant === 'solid'
-  return (
-    <button
-      onClick={onClick}
-      disabled={busy}
-      className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3.5 text-[13px] font-medium transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-sky-400/40 disabled:opacity-50"
-      style={{
-        background: solid ? 'var(--t-accent)' : 'rgba(255,255,255,0.04)',
-        color: solid ? '#fff' : 'var(--t-text)',
-        border: `1px solid ${solid ? 'var(--t-accent-border)' : 'var(--t-border-alpha)'}`,
-        boxShadow: solid ? '0 2px 10px rgba(14,165,233,0.22)' : 'none',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
 function Skeleton() {
   return (
     <div className="w-full space-y-5 p-4 md:p-6" aria-busy="true">
@@ -607,7 +588,7 @@ export default function ReportManagement() {
     // --------------------------------------------------
 
     if (format === 'pdf') {
-      exportReportManagementPdf(summary, filters)
+      exportReportManagementPdf(sourceSummary, filters)
       return
     }
 
@@ -897,19 +878,26 @@ export default function ReportManagement() {
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <ExportButton variant="ghost" busy={exporting === 'pdf'} onClick={() => void handleExport('pdf')}>
-            {exporting === 'pdf' ? 'Exporting…' : 'PDF'}
-          </ExportButton>
-          <ExportButton variant="ghost" busy={exporting === 'csv'} onClick={() => void handleExport('csv')}>
-            <IconDownload />
-            {exporting === 'csv' ? 'Exporting…' : 'CSV'}
-          </ExportButton>
-          <ExportButton variant="solid" busy={exporting === 'xlsx'} onClick={() => void handleExport('xlsx')}>
-            <IconDownload />
-            {exporting === 'xlsx' ? 'Exporting…' : 'Excel'}
-          </ExportButton>
-        </div>
+        <label className="relative inline-flex h-9 items-center rounded-lg text-[13px] font-medium" style={{ background: 'var(--t-accent)', color: '#fff', border: '1px solid var(--t-accent-border)', boxShadow: '0 2px 10px rgba(14,165,233,0.22)' }}>
+          <span className="pointer-events-none pl-3">{exporting ? 'Exporting…' : 'Export'}</span>
+          <select
+            aria-label="Export report"
+            value=""
+            disabled={Boolean(exporting)}
+            onChange={event => {
+              const format = event.target.value as 'pdf' | 'csv' | 'xlsx'
+              if (format) void handleExport(format)
+              event.target.value = ''
+            }}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-wait"
+          >
+            <option value="">Choose format</option>
+            <option value="pdf">PDF</option>
+            <option value="csv">CSV</option>
+            <option value="xlsx">Excel</option>
+          </select>
+          <span className="pointer-events-none px-2">⌄</span>
+        </label>
       </div>
 
       {/* Filters */}
@@ -1132,7 +1120,14 @@ export default function ReportManagement() {
                           {row.avg_cpu_percent == null && row.avg_memory_percent == null && row.avg_latency_ms == null && '—'}
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 tabular-nums" style={{ color: 'var(--t-text)' }}>
-                          {row.interface_count ?? 0}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedRecord(row)}
+                            className="rounded px-1.5 py-0.5 font-medium text-sky-300 transition hover:bg-sky-400/10 hover:text-sky-200"
+                            aria-label={`View ${row.interface_count ?? 0} interfaces for ${row.hostname}`}
+                          >
+                            {row.interface_count ?? 0}
+                          </button>
                           {row.interface_down_count ? <span className="ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: tint(C.bad, 0.12), color: C.bad }}>{row.interface_down_count} down</span> : null}
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 tabular-nums" style={{ color: 'var(--t-text)' }}>{row.alert_count} <span className="ml-1 text-[11px]" style={{ color: row.critical_alert_count ? C.bad : 'var(--t-muted)' }}>{row.critical_alert_count} critical</span></td>

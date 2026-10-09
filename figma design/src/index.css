@@ -23,6 +23,28 @@
 }
 
 table { color: var(--t-text); border-color: var(--t-border); }
+
+/* xterm measures its host while fitting. Keep its intrinsic cell/content width
+   from becoming the flex/grid item's minimum width and feeding back into the
+   next fit calculation. */
+.remote-terminal-host {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  contain: layout paint;
+}
+
+.remote-terminal-host .xterm {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.remote-terminal-host .xterm-viewport {
+  overflow: hidden !important;
+}
+
 table thead { background: var(--t-table-header); color: var(--t-text-secondary); }
 table tbody tr { border-color: var(--t-border-light); }
 table tbody tr:hover { background: var(--t-table-row-hover); }
@@ -264,6 +286,30 @@ table tbody tr:hover { background: var(--t-table-row-hover); }
 
 /* Syslog workspace layout */
 .syslog-page { width: 100%; max-width: none; margin-inline: 0; }
+
+.remote-access-workspace:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  overflow: auto;
+  padding: 1rem;
+  background: var(--t-bg, #05070a);
+  grid-template-columns: minmax(280px, 32%) minmax(0, 1fr);
+}
+
+.remote-access-workspace:fullscreen.form-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.remote-access-workspace:fullscreen .connection-panel-hidden {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .remote-access-workspace:fullscreen {
+    grid-template-columns: 1fr;
+  }
+}
 .syslog-hero {
   position: relative;
   padding: 1.15rem 1.35rem 1.35rem;
@@ -1182,7 +1228,7 @@ a:focus-visible {
 
 [data-theme="light"] .dashboard-page h2,
 [data-theme="light"] .dashboard-page h1 {
-  color: #3478e5 !important;
+  color: var(--t-accent) !important;
 }
 
 [data-theme="light"] .dashboard-page .font-display {

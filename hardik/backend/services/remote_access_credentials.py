@@ -93,7 +93,10 @@ class RemoteAccessCredentialService:
         protocol = values["protocol"]
         existing = self.get(device_id=values["device_id"], protocol=protocol)
         if existing:
-            return self.update(existing.id, **{k: v for k, v in values.items() if k not in {"device_id", "protocol"}})
+            return self.update(existing.id, **{
+                k: v for k, v in values.items()
+                if k not in {"device_id", "protocol", "created_by"}
+            })
         try:
             return self.create(**values)
         except RemoteAccessCredentialError as exc:
@@ -101,7 +104,10 @@ class RemoteAccessCredentialService:
                 raise
             existing = self.get(device_id=values["device_id"], protocol=protocol)
             if existing:
-                return self.update(existing.id, **{k: v for k, v in values.items() if k not in {"device_id", "protocol"}})
+                return self.update(existing.id, **{
+                    k: v for k, v in values.items()
+                    if k not in {"device_id", "protocol", "created_by"}
+                })
             raise
 
     def update(self, credential_id: int, *, port: int | None = None, username: str | None = None,

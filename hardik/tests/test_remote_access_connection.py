@@ -153,7 +153,8 @@ def test_handshake_logs_original_sanitized_paramiko_exception(caplog, monkeypatc
     record = next(r for r in caplog.records if "exception_type=SSHException" in r.message)
     assert "Could not agree on a host key algorithm (ssh-rsa)" in record.message
     assert "secret" not in record.message
-    assert "192.168.100.2" not in record.message
+    assert "host=192.168.100.2" in record.message
+    assert "for [REDACTED_HOST]" in record.message
 
 
 def test_live_connect_constructs_scoped_transport_and_starts_it(monkeypatch):

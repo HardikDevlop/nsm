@@ -7,7 +7,7 @@ import { useDeferredSearch } from '../hooks/useDeferredSearch'
 import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
-  listAlerts, createAlert, updateAlert, deleteAlert, acknowledgeAlert, resolveAlert, clearAllAlerts,
+  listAlerts, createAlert, updateAlert, deleteAlert, acknowledgeAlert, resolveAlert,
   listDeviceOptions,
   type AlertRecord,
   type DeviceOptionRecord,
@@ -169,22 +169,6 @@ export default function AlertsManagement() {
     }
   }
 
-  async function handleClearAll() {
-    const ok = await confirmDanger({
-      title: 'Clear all alerts?',
-      text: 'This will remove all alerts from the system.',
-      confirmText: 'Clear All Alerts',
-    })
-    if (!ok) return
-    try {
-      const result = await clearAllAlerts()
-      toast.success(`${result.cleared} alert(s) cleared`)
-      await load()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Clear all failed')
-    }
-  }
-
   const filtered = alerts.filter(a =>
     !normalizedSearch ||
     a.title.toLowerCase().includes(normalizedSearch) ||
@@ -233,15 +217,6 @@ export default function AlertsManagement() {
             onFocus={e => { e.currentTarget.style.borderColor = 'var(--t-accent)' }}
             onBlur={e => { e.currentTarget.style.borderColor = 'var(--t-border-alpha)' }}
           />
-          <PermissionGuard permission="alerts:delete">
-            <button
-              onClick={handleClearAll}
-              disabled={alerts.length === 0}
-              className="rounded-lg px-4 py-2 font-mono text-xs hover:opacity-90 transition-all disabled:opacity-50"
-              style={{ background: 'rgba(255,51,102,0.2)', color: '#ff3366', border: '1px solid rgba(255,51,102,0.3)' }}>
-              Clear All
-            </button>
-          </PermissionGuard>
           <PermissionGuard permission="alerts:create">
             <button
               onClick={openCreate}

@@ -12,7 +12,7 @@ class WebSocket:
         self.sent = []
         self.accepted = False
         self.closed = []
-    async def accept(self): self.accepted = True
+    async def accept(self, **kwargs): self.accepted = True
     async def receive(self):
         try: return next(self.messages)
         except StopIteration: return {"type": "websocket.disconnect"}
@@ -37,7 +37,7 @@ class Manager:
     def __init__(self, owner=7):
         self.adapter = Adapter()
         self.record = SimpleNamespace(status="connected", user_id=owner)
-        self.managed = SimpleNamespace(record=self.record, adapter=self.adapter)
+        self.managed = SimpleNamespace(record=self.record, adapter=self.adapter, output_history=bytearray())
         self.disconnected = []
         self.touches = 0
     def get_session(self, _): return self.managed if self.record.status == "connected" else None
@@ -95,7 +95,7 @@ def test_adapter_read_failure_is_connection_loss_not_websocket_failure(monkeypat
     assert "secret output" not in repr(manager.disconnected)
 
 
-def test_websocket_send_failure_is_recorded_once(monkeypatch):
+def test_websocket_send_failure_does_not_disconnect_remote_session(monkeypatch):
     manager = Manager()
     class BrokenWebSocket(WebSocket):
         async def send_bytes(self, data): raise RuntimeError("socket details")
@@ -103,4 +103,19 @@ def test_websocket_send_failure_is_recorded_once(monkeypatch):
     async def direct(function, *args): return function(*args)
     monkeypatch.setattr("backend.services.remote_access.terminal_websocket.asyncio.to_thread", direct)
     asyncio.run(TerminalWebSocket(manager)._forward_output(ws, "sid", manager.adapter))
-    assert manager.disconnected == ["WebSocket/transport failure"]
+    assert manager.disconnected == []
+    assert manager.record.status == "connected"
+
+
+def test_browser_attachment_open_and_close_does_not_disconnect_session(monkeypatch):
+    manager = Manager()
+    manager.adapter.read = lambda *args: b""
+    ws = WebSocket([])
+    async def direct(function, *args): return function(*args)
+    monkeypatch.setattr("backend.services.remote_access.terminal_websocket.asyncio.to_thread", direct)
+
+    asyncio.run(TerminalWebSocket(manager).serve(ws, "sid", user_id=7))
+
+    assert ws.accepted is True
+    assert manager.record.status == "connected"
+    assert manager.disconnected == []

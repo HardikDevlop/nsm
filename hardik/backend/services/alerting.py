@@ -4,6 +4,7 @@ from email.message import EmailMessage
 from dataclasses import dataclass
 import logging
 import smtplib
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -330,6 +331,8 @@ def _deliver_intent(intent: NotificationIntent) -> tuple[str, datetime | None]:
 
 def deliver_notification_intents(db: Session, intents: list[NotificationIntent]) -> None:
     """Deliver committed intents and persist delivery status separately."""
+    started = time.perf_counter()
+    logger.info("[remote-access][post-create] stage=notification-delivery-start elapsed_ms=0.000 stage_ms=0.000 count=%s", len(intents))
     updates = []
     for intent in intents:
         status, sent_at = _deliver_intent(intent)
@@ -340,6 +343,9 @@ def deliver_notification_intents(db: Session, intents: list[NotificationIntent])
         })
     if updates:
         db.execute(update(Notification), updates)
+    logger.info("[remote-access][post-create] stage=notification-delivery-end elapsed_ms=%.3f stage_ms=%.3f count=%s",
+                (time.perf_counter() - started) * 1000,
+                (time.perf_counter() - started) * 1000, len(intents))
 
 
 def _notify(
@@ -365,3 +371,38 @@ def _notify(
         deferred.extend(intents)
     else:
         deliver_notification_intents(db, intents)
+
+
+def prepare_notification_ids(db: Session, alert: Alert) -> list[int]:
+    """Persist pending notification rows without performing delivery."""
+    ids = []
+    for recipient in _recipients(db):
+        notification = Notification(alert_id=alert.id, channel="email", sent_to=recipient, status="pending")
+        db.add(notification)
+        db.flush()
+        ids.append(notification.id)
+    return ids
+
+
+def deliver_notification_ids(db: Session, notification_ids: list[int]) -> None:
+    """Load committed pending notifications and deliver them in this session."""
+    if not notification_ids:
+        return
+    notifications = (db.query(Notification)
+                     .filter(Notification.id.in_(notification_ids), Notification.status == "pending")
+                     .all())
+    intents = []
+    for notification in notifications:
+        alert = notification.alert
+        if alert is None:
+            continue
+        intents.append(NotificationIntent(
+            notification_id=notification.id,
+            alert_id=alert.id,
+            title=alert.title,
+            description=alert.description or "",
+            severity=alert.severity,
+            status=alert.status,
+            recipient=notification.sent_to,
+        ))
+    deliver_notification_intents(db, intents)

@@ -53,6 +53,7 @@ class RemoteAccessSessionRead(BaseModel):
     ended_at: datetime | None
     disconnect_reason: str | None
     source_ip: str | None
+    user_name: str | None = None
     created_at: datetime
 
 
@@ -78,10 +79,19 @@ class RemoteAccessTestRequest(BaseModel):
     device_id: int = Field(gt=0)
     protocol: Literal["ssh", "telnet"]
     port: int | None = Field(default=None, ge=1, le=65535)
-    username: str = Field(min_length=1, max_length=120)
-    secret: str = Field(min_length=1)
+    credential_id: int | None = Field(default=None, gt=0)
+    username: str | None = Field(default=None, min_length=1, max_length=120)
+    secret: str | None = Field(default=None, min_length=1)
     auth_type: Literal["password", "private_key"] = "password"
     remember_credential: bool = False
+
+    @model_validator(mode="after")
+    def credential_source(self):
+        if self.credential_id is None and (self.username is None or self.secret is None):
+            raise ValueError("credential_id or temporary username and secret is required")
+        if self.credential_id is not None and (self.username is not None or self.secret is not None):
+            raise ValueError("choose a saved credential or temporary credentials")
+        return self
 
 
 class SSHHostKeyScanRequest(BaseModel):

@@ -27,6 +27,14 @@ _REPORT_LOOKBACK = {
 }
 
 
+def _canonical_interface_key(interface: Interface) -> str:
+    """Return a stable identity for report counts, independent of duplicate rows."""
+    name = (interface.interface_name or "").strip().lower()
+    if "·" in name:
+        name = name.rsplit("·", 1)[-1].strip()
+    return name or f"interface-id:{interface.id}"
+
+
 def _report_range(period: str, start_date: datetime | None, end_date: datetime | None) -> tuple[datetime, datetime]:
     now = datetime.now(ZoneInfo(get_settings().report_timezone)).replace(tzinfo=None)
     if period == "custom":
@@ -310,6 +318,17 @@ def build_report_rows(db: Session, filters: ReportManagementFilters) -> tuple[Re
     interface_state_by_device: dict[int, list] = {}
     for row in interface_states:
         interface_state_by_device.setdefault(row.device_id, []).append(row)
+    # A device can contain duplicate Interface rows after repeated discovery
+    # or migration. Reports must count real interfaces, matching the SNMP UI,
+    # rather than counting every persisted row/metric identity.
+    for device_id, rows in interface_state_by_device.items():
+        unique_rows = {}
+        for row in rows:
+            key = _canonical_interface_key(row)
+            existing = unique_rows.get(key)
+            if existing is None or (existing.status or "").lower() != "up" and (row.status or "").lower() == "up":
+                unique_rows[key] = row
+        interface_state_by_device[device_id] = list(unique_rows.values())
 
     records: list[ReportManagementRecord] = []
     protocol_filter = filters.protocol
@@ -366,6 +385,16 @@ def build_report_rows(db: Session, filters: ReportManagementFilters) -> tuple[Re
         sla_breach_seconds = None if availability_pct is None else max(0, downtime - allowed_downtime)
         protocol = "snmp" if protocol_filter == "snmp" else "icmp" if protocol_filter == "icmp" else "mixed"
         device_outages, last_outage_time, last_recovery_time, current_status = availability_details.get(device.id, ([], None, None, str(device.status or "unknown").lower()))
+        if protocol == "mixed":
+            # The realtime ICMP monitor refreshes last_icmp_status on every
+            # probe. SNMP availability must not affect the reachability badge.
+            icmp_status = str(device.last_icmp_status or "").lower()
+            if icmp_status == "reachable":
+                current_status = "online"
+            elif icmp_status in {"unreachable", "offline"}:
+                current_status = "offline"
+            elif str(device.status or "").lower() in {"online", "offline"}:
+                current_status = str(device.status).lower()
         interface_details = []
         for iface in state_rows:
             samples = [row for row in iface_by_device.get(device.id, []) if row.interface_id == iface.id]
@@ -410,7 +439,7 @@ def build_report_rows(db: Session, filters: ReportManagementFilters) -> tuple[Re
             icmp_success_rate=icmp_success_rate,
             snmp_health=snmp_health,
             performance_score=performance_score,
-            interface_count=(len({row.interface_id for row in iface_by_device.get(device.id, [])}) or len(state_rows) or None),
+            interface_count=(len(state_rows) or None),
             interface_down_count=iface_down or None,
             avg_cpu_percent=avg_cpu,
             avg_memory_percent=avg_mem,
@@ -592,6 +621,4 @@ def build_report_rows(db: Session, filters: ReportManagementFilters) -> tuple[Re
     )
     export_rows = [r.model_dump() for r in records]
     return summary, export_rows
-
-
 

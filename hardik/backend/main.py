@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+import os
 import uuid
 
 from fastapi import FastAPI, Request, HTTPException
@@ -60,10 +61,18 @@ from logging_config import configure_logging
 import backend.models  # noqa: F401  (register all tables on Base.metadata)
 
 logger = logging.getLogger(__name__)
+PROCESS_INSTANCE_ID = str(uuid.uuid4())
+_REMOTE_ACCESS_STARTUP_RECONCILIATION_INVOCATIONS = 0
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _REMOTE_ACCESS_STARTUP_RECONCILIATION_INVOCATIONS
+    logger.info(
+        "REMOTE_ACCESS_PROCESS_START pid=%s ppid=%s process_instance_id=%s timestamp=%s",
+        os.getpid(), os.getppid(), PROCESS_INSTANCE_ID,
+        __import__("datetime").datetime.now().isoformat(),
+    )
     # Linux tables are created by their idempotent module migrations below.
     # Keeping them out of the global create_all avoids PostgreSQL attempting
     # to recreate existing Linux indexes during every application startup.
@@ -105,6 +114,23 @@ async def lifespan(app: FastAPI):
 
     app.state.remote_access_db = SessionLocal()
     app.state.remote_access_session_manager = SessionManager(app.state.remote_access_db)
+    # Runtime adapters are process-local. Reconcile durable sessions from a
+    # previous process exactly once at startup; ordinary GET/list calls remain
+    # non-destructive. Remote Access currently requires one owning backend
+    # process for live transport ownership.
+    _REMOTE_ACCESS_STARTUP_RECONCILIATION_INVOCATIONS += 1
+    reconciliation_started = asyncio.get_running_loop().time()
+    logger.info(
+        "REMOTE_ACCESS_STARTUP_RECONCILIATION_START pid=%s ppid=%s process_instance_id=%s invocation_count=%s",
+        os.getpid(), os.getppid(), PROCESS_INSTANCE_ID,
+        _REMOTE_ACCESS_STARTUP_RECONCILIATION_INVOCATIONS,
+    )
+    reconciled_count = app.state.remote_access_session_manager.reconcile_stale_sessions_on_startup()
+    logger.info(
+        "REMOTE_ACCESS_STARTUP_RECONCILIATION_END pid=%s process_instance_id=%s count=%s duration_ms=%.3f",
+        os.getpid(), PROCESS_INSTANCE_ID, reconciled_count,
+        (asyncio.get_running_loop().time() - reconciliation_started) * 1000,
+    )
 
     # Start centralized SNMP polling scheduler
     app.state.scheduler_lease = SchedulerLease()

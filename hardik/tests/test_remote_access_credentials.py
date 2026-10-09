@@ -76,6 +76,18 @@ def test_upsert_is_unique_and_protocols_coexist(db):
     assert telnet.protocol == "telnet"
 
 
+def test_upsert_existing_credential_does_not_forward_created_by_to_update(db):
+    service = RemoteAccessCredentialService(db)
+    first = service.create(device_id=1, protocol="ssh", username="admin", secret="old")
+    updated = service.upsert(
+        device_id=1, protocol="ssh", username="admin", secret="new",
+        created_by=999,
+    )
+    assert updated.id == first.id
+    assert service.resolve_connection_credential(updated.id).secret == "new"
+    assert updated.created_by is None
+
+
 @pytest.mark.parametrize("field,value", [("port", 2200), ("username", "changed"), ("auth_type", "private_key"), ("secret", "changed-secret")])
 def test_credential_changes_invalidate_verification(db, field, value):
     service = RemoteAccessCredentialService(db)

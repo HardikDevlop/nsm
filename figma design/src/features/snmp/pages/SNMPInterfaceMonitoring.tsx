@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useParams } from 'react-router'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
 import { formatBytes, formatSpeed } from '../modules/snmpModuleRegistry'
@@ -28,6 +28,14 @@ function formatInterfaceSpeed(iface: any): string {
   return speed !== undefined ? formatSpeed(speed) : '—'
 }
 
+function formatInterfaceMac(iface: any): string {
+  const value = iface?.mac ?? iface?.mac_address ?? iface?.mac_raw ?? iface?.phys_address ?? iface?.physical_address ?? iface?.hardware_address ?? iface?.ifPhysAddr
+  if (!value) return 'N/A (not advertised)'
+  const compact = String(value).replace(/[^0-9a-f]/gi, '')
+  if (compact.length === 12) return compact.match(/.{2}/g)?.join(':').toUpperCase() ?? String(value)
+  return String(value)
+}
+
 function formatTraffic(iface: any, direction: 'rx' | 'tx'): string {
   const mbps = asNumber(direction === 'rx' ? iface?.rx_mbps : iface?.tx_mbps)
   if (mbps !== undefined) return `${mbps.toFixed(2)} Mbps`
@@ -44,6 +52,11 @@ function canonicalInterfaceName(value: unknown): string {
     .replace(/^[^·]+·\s*/, '')
     .trim()
     .toLowerCase()
+}
+
+function displayInterfaceName(value: unknown, ifIndex?: unknown): string {
+  const name = String(value || `Interface ${ifIndex ?? ''}`).trim()
+  return name.includes('·') ? name.split('·').pop()!.trim() : name
 }
 
 function isPhysicalInterface(iface: any): boolean {
@@ -69,6 +82,7 @@ export default function SNMPInterfaceMonitoring() {
   const { data: caps } = useDeviceCapabilities(id)
   const { data, isLoading, error } = useModuleData(id, 'interfaces')
   const { data: latestInterfaces } = useLatestInterfaces(id)
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'UP' | 'DOWN'>('ALL')
 
   const livePayload = data as any
   const liveData = livePayload?.data ?? {}
@@ -108,9 +122,12 @@ export default function SNMPInterfaceMonitoring() {
 
   const upCount = interfaces.filter(i => (i.oper_status ?? '').toUpperCase() === 'UP').length
   const downCount = interfaces.filter(i => (i.oper_status ?? '').toUpperCase() === 'DOWN' || i.oper_status === 'down').length
+  const visibleInterfaces = (statusFilter === 'ALL'
+    ? interfaces
+    : interfaces.filter(i => (i.oper_status ?? '').toUpperCase() === statusFilter)
+  ).slice().sort((a, b) => Number(a.ifIndex ?? a.if_index ?? 0) - Number(b.ifIndex ?? b.if_index ?? 0))
   const otherCount = Math.max(interfaces.length - upCount - downCount, 0)
   const physicalCount = interfaces.filter(isPhysicalInterface).length
-  const maxSpeed = interfaces.length > 0 ? Math.max(...interfaces.map(i => asNumber(i.speed_bps) || 0)) : 0
   const updatedAt = livePayload?.timestamp || interfaces.find(i => i.last_poll || i.polled_at || i.last_updated)?.last_poll || interfaces.find(i => i.last_updated)?.last_updated
 
   return (
@@ -130,14 +147,13 @@ export default function SNMPInterfaceMonitoring() {
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
         {[
           { label: 'Total', value: interfaces.length, color: '#00d4ff' },
           { label: 'UP', value: upCount, color: '#00ff88' },
           { label: 'DOWN', value: downCount, color: downCount > 0 ? '#ff3366' : '#00ff88' },
           { label: 'OTHER', value: otherCount, color: otherCount > 0 ? '#ffaa00' : '#8899bb' },
           { label: 'PHYSICAL', value: physicalCount, color: '#22d3ee' },
-          { label: 'Max Speed', value: formatSpeed(maxSpeed), color: '#ffaa00' },
         ].map(tile => (
           <GlassCard key={tile.label} className="p-4 text-center">
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
@@ -151,12 +167,17 @@ export default function SNMPInterfaceMonitoring() {
       {/* Interface Table */}
       <GlassCard className="overflow-hidden">
         <div className="p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
-          <div className="font-display font-bold text-sm tracking-wider neon-cyan">
-            INTERFACES ({interfaces.length})
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="font-display font-bold text-sm tracking-wider neon-cyan">INTERFACES ({visibleInterfaces.length})</div>
+            <select value={statusFilter} onChange={event => setStatusFilter(event.target.value as 'ALL' | 'UP' | 'DOWN')} className="rounded px-3 py-1.5 font-mono text-xs" style={{ background: 'var(--t-card)', color: 'var(--t-text)', border: '1px solid var(--t-border-alpha)' }} aria-label="Interface status filter">
+              <option value="ALL">ALL</option>
+              <option value="UP">UP</option>
+              <option value="DOWN">DOWN</option>
+            </select>
           </div>
         </div>
         <div className="overflow-x-auto">
-          {interfaces.length === 0 ? (
+          {visibleInterfaces.length === 0 ? (
             <div className="font-mono text-xs text-center py-8" style={{ color: '#8899bb' }}>
               No interface rows yet. Start interface monitoring or use REFRESH after SNMP credentials are verified.
             </div>
@@ -165,14 +186,12 @@ export default function SNMPInterfaceMonitoring() {
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                 {[
+                  { key: 'if-index', label: 'IF INDEX', sortable: true },
                   { key: 'name', label: 'NAME', sortable: true },
-                  { key: 'description', label: 'DESCRIPTION', sortable: true },
                   { key: 'status', label: 'STATUS' },
                   { key: 'speed', label: 'SPEED', sortable: true },
-                  { key: 'mac', label: 'MAC', sortable: true },
                   { key: 'rx', label: 'RX', sortable: true },
                   { key: 'tx', label: 'TX', sortable: true },
-                  { key: 'util', label: 'UTIL %', sortable: true },
                   { key: 'errors', label: 'ERRORS', sortable: true },
                   { key: 'discards', label: 'DISCARDS', sortable: true },
                 ].map(col => (
@@ -187,7 +206,7 @@ export default function SNMPInterfaceMonitoring() {
               </tr>
             </thead>
             <tbody>
-              {interfaces.map((iface, index) => {
+              {visibleInterfaces.map((iface, index) => {
                 const operStatus = (iface.oper_status ?? '').toUpperCase()
                 const health = interfaceHealth(iface.utilization_percent, operStatus)
                 const hColors = { healthy: '#00ff88', warning: '#ffaa00', critical: '#ff3366', unknown: '#8899bb' }
@@ -200,10 +219,10 @@ export default function SNMPInterfaceMonitoring() {
                     }}
                   >
                     <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: 'var(--t-text, #111827)', opacity: 1 }}>
-                      {iface.name ?? `Interface ${iface.ifIndex}`}
+                      {iface.ifIndex ?? iface.if_index ?? '—'}
                     </td>
-                    <td className="px-4 py-2 font-mono text-xs truncate max-w-[200px]" style={{ color: '#8899bb' }}>
-                      {iface.description ?? iface.alias ?? '—'}
+                    <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: 'var(--t-text, #111827)', opacity: 1 }}>
+                      {displayInterfaceName(iface.name, iface.ifIndex)}
                     </td>
                     <td className="px-4 py-2">
                       <span className="font-mono text-[10px] px-1.5 py-0.5 rounded"
@@ -218,17 +237,11 @@ export default function SNMPInterfaceMonitoring() {
                     <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
                       {formatInterfaceSpeed(iface)}
                     </td>
-                    <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
-                      {iface.mac_address ?? iface.mac ?? 'N/A (not advertised)'}
-                    </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#00ff88' }}>
                       {formatTraffic(iface, 'rx')}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#ff6644' }}>
                       {formatTraffic(iface, 'tx')}
-                    </td>
-                    <td className="px-4 py-2 font-mono text-xs" style={{ color: iface.utilization_percent && iface.utilization_percent >= 90 ? '#ff3366' : iface.utilization_percent && iface.utilization_percent >= 75 ? '#ffaa00' : '#ffaa00' }}>
-                      {iface.utilization_percent !== null && iface.utilization_percent !== undefined ? `${iface.utilization_percent.toFixed(1)}%` : '—'}
                     </td>
                     <td className="px-4 py-2 font-mono text-[10px]" style={{ color: (iface.errors ?? iface.in_errors ?? 0) > 0 ? '#ff3366' : '#8899bb' }}>
                       {(iface.errors ?? iface.in_errors ?? 0)}

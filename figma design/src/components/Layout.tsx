@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router'
 import Sidebar from './Sidebar'
 import { useTheme } from './ThemeContext'
-import { clearAllAlerts, listAlerts, recordPageView, type AlertRecord } from '../lib/api'
+import { listAlerts, recordPageView, type AlertRecord } from '../lib/api'
 import { useI18n } from '../i18n/I18nContext'
 import { useBranding } from './BrandingContext'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
@@ -142,20 +142,14 @@ export default function Layout() {
     })
   }
 
-  const handleClearAllAlerts = async () => {
-    if (!visiblePanelSource.length) return
-    try {
-      await clearAllAlerts()
-      setAlerts(current => current.filter(alert => !visiblePanelSource.some(item => item.id === alert.id)))
-      setHiddenAlertIds(current => {
-        const merged = [...new Set([...current, ...visiblePanelSource.map(alert => alert.id)])]
-        persistHiddenAlertIds(merged)
-        return merged
-      })
-      persistAlerts([])
-    } catch {
-      // Keep the alerts visible when the server could not clear them.
-    }
+  const handleClearAllNotifications = () => {
+    const ids = visiblePanelSource.map(alert => alert.id)
+    if (!ids.length) return
+    setHiddenAlertIds(current => {
+      const nextIds = [...new Set([...current, ...ids])]
+      persistHiddenAlertIds(nextIds)
+      return nextIds
+    })
   }
 
   const handleClearCache = async () => {
@@ -321,7 +315,7 @@ export default function Layout() {
             onClose={() => setNotifOpen(false)}
             onViewAll={(alertId) => { setNotifOpen(false); navigate(alertId ? `/alerts?alert_id=${alertId}` : '/alerts') }}
             onDismiss={handleDismissAlert}
-            onClearAll={handleClearAllAlerts}
+            onClearAll={handleClearAllNotifications}
           />
         </Suspense>
       )}

@@ -183,6 +183,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20261002_0055_remote_access_foundation", description="Create Remote Access credentials and terminal session foundation tables"),
     Migration(migration_id="20261003_0056_ssh_host_keys", description="Persist per-device SSH host-key onboarding state"),
     Migration(migration_id="20261003_0057_remote_access_session_invariants", description="Enforce Remote Access session lifecycle state and active-session uniqueness"),
+    Migration(migration_id="20261006_0058_ssh_host_key_verification_timestamp", description="Add SSH host-key verification timestamp column"),
+    Migration(migration_id="20261006_0059_latest_interface_mac_address", description="Persist interface MAC addresses in scheduler snapshots"),
 )
 
 
@@ -261,9 +263,13 @@ def _ensure_ssh_host_keys(engine: Engine) -> None:
             host VARCHAR(255) NOT NULL, port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
             key_type VARCHAR(64) NOT NULL, public_host_key TEXT NOT NULL, fingerprint VARCHAR(128) NOT NULL,
             status VARCHAR(16) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','TRUSTED','REVOKED')),
-            scanned_at TIMESTAMP NOT NULL, trusted_at TIMESTAMP, trusted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            scanned_at TIMESTAMP NOT NULL, last_verified_at TIMESTAMP, trusted_at TIMESTAMP, trusted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
             CONSTRAINT uq_ssh_host_key_device_port UNIQUE (device_id, port))"""))
         connection.execute(text('CREATE INDEX IF NOT EXISTS ix_ssh_host_keys_device_id ON ssh_host_keys (device_id)'))
+        # Existing installations created before verification timestamps retain
+        # their trust state; this is additive and does not alter known_hosts.
+        if connection.dialect.name == "postgresql":
+            connection.execute(text("ALTER TABLE ssh_host_keys ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMP"))
 
 
 def _ensure_remote_access_session_invariants(engine: Engine) -> None:
@@ -1303,6 +1309,12 @@ def run_migrations(engine: Engine) -> list[str]:
             _ensure_ssh_host_keys(engine)
         elif migration.migration_id == "20261003_0057_remote_access_session_invariants":
             _ensure_remote_access_session_invariants(engine)
+        elif migration.migration_id == "20261006_0058_ssh_host_key_verification_timestamp":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE ssh_host_keys ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMP"))
+        elif migration.migration_id == "20261006_0059_latest_interface_mac_address":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE latest_interface ADD COLUMN IF NOT EXISTS mac_address VARCHAR(32)"))
         elif migration.migration_id == "20260930_0052_audit_log_context_fields":
             with engine.begin() as connection:
                 columns = {

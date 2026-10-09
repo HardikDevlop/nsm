@@ -46,8 +46,6 @@ export default function SNMPMemoryMonitoring() {
   const totalBytes = memoryData?.total_bytes ?? latestMemory?.total_bytes
   const usedBytes = memoryData?.used_bytes ?? latestMemory?.used_bytes
   const freeBytes = memoryData?.free_bytes ?? latestMemory?.free_bytes
-  const cachedBytes = memoryData?.cached_bytes ?? latestMemory?.cached_bytes
-  const bufferBytes = memoryData?.buffer_bytes ?? latestMemory?.buffer_bytes
   
   const health = memoryHealth(utilization)
   const memoryCollector = {
@@ -74,7 +72,7 @@ export default function SNMPMemoryMonitoring() {
             <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
               {tile.value}
             </div>
-            <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{tile.label}</div>
+            <div className="font-mono text-xs mt-1" style={{ color: 'var(--t-text)' }}>{tile.label}</div>
           </GlassCard>
         ))}
       </div>
@@ -86,9 +84,9 @@ export default function SNMPMemoryMonitoring() {
           style={{ background: getHealthColor(health), boxShadow: `0 0 8px ${getHealthColor(health)}` }}
           title={`Health: ${health}`}
         />
-        <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
+        <span className="font-mono text-xs" style={{ color: 'var(--t-text)' }}>Health: {health.toUpperCase()}</span>
         {memoryData?.polled_at && (
-          <span className="font-mono text-xs" style={{ color: '#667799' }}>
+          <span className="font-mono text-xs" style={{ color: 'var(--t-text)' }}>
             Last Poll: {new Date(memoryData.polled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
           </span>
         )}
@@ -97,38 +95,23 @@ export default function SNMPMemoryMonitoring() {
       {/* Swap */}
       {((memoryData?.swap_total ?? latestMemory?.swap_total) !== undefined && (memoryData?.swap_total ?? latestMemory?.swap_total) > 0) && (
         <GlassCard className="p-4 mb-4">
-          <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-4">SWAP</div>
+          <div className="font-display font-bold text-sm tracking-wider mb-4" style={{ color: 'var(--t-text)' }}>SWAP</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3 rounded" style={{ background: 'rgba(0,212,255,0.05)', border: '1px solid rgba(0,212,255,0.1)' }}>
-              <div className="font-mono text-[10px]" style={{ color: '#667799' }}>TOTAL</div>
-              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.swap_total ?? latestMemory?.swap_total)}</div>
+              <div className="font-mono text-[10px]" style={{ color: 'var(--t-text)' }}>TOTAL</div>
+              <div className="font-mono text-xs font-semibold" style={{ color: 'var(--t-text)' }}>{formatBytes(memoryData?.swap_total ?? latestMemory?.swap_total)}</div>
             </div>
             <div className="p-3 rounded" style={{ background: 'rgba(0,255,136,0.05)', border: '1px solid rgba(0,255,136,0.1)' }}>
-              <div className="font-mono text-[10px]" style={{ color: '#667799' }}>FREE</div>
-              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.swap_free ?? latestMemory?.swap_free)}</div>
+              <div className="font-mono text-[10px]" style={{ color: 'var(--t-text)' }}>FREE</div>
+              <div className="font-mono text-xs font-semibold" style={{ color: 'var(--t-text)' }}>{formatBytes(memoryData?.swap_free ?? latestMemory?.swap_free)}</div>
             </div>
             <div className="p-3 rounded" style={{ background: 'rgba(124,58,237,0.05)', border: '1px solid rgba(124,58,237,0.1)' }}>
-              <div className="font-mono text-[10px]" style={{ color: '#667799' }}>USED</div>
-              <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(((memoryData?.swap_total ?? latestMemory?.swap_total) || 0) - ((memoryData?.swap_free ?? latestMemory?.swap_free) || 0))}</div>
+              <div className="font-mono text-[10px]" style={{ color: 'var(--t-text)' }}>USED</div>
+              <div className="font-mono text-xs font-semibold" style={{ color: 'var(--t-text)' }}>{formatBytes(((memoryData?.swap_total ?? latestMemory?.swap_total) || 0) - ((memoryData?.swap_free ?? latestMemory?.swap_free) || 0))}</div>
             </div>
           </div>
         </GlassCard>
       )}
-
-      {/* Buffers & Cache */}
-      <GlassCard className="p-4 mb-4">
-        <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-4">BUFFERS & CACHE</div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="p-3 rounded" style={{ background: 'rgba(0,212,255,0.05)', border: '1px solid rgba(0,212,255,0.1)' }}>
-            <div className="font-mono text-[10px]" style={{ color: '#667799' }}>BUFFERS</div>
-            <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.buffer_bytes ?? latestMemory?.buffer_bytes)}</div>
-          </div>
-          <div className="p-3 rounded" style={{ background: 'rgba(0,255,136,0.05)', border: '1px solid rgba(0,255,136,0.1)' }}>
-            <div className="font-mono text-[10px]" style={{ color: '#667799' }}>CACHED</div>
-            <div className="font-mono text-xs font-semibold" style={{ color: '#c8d8ee' }}>{formatBytes(memoryData?.cached_bytes ?? latestMemory?.cached_bytes)}</div>
-          </div>
-        </div>
-      </GlassCard>
 
       <SNMPCollectorDataCard name="memory" collector={memoryCollector} />
 
@@ -136,7 +119,7 @@ export default function SNMPMemoryMonitoring() {
       {history.length > 0 && (
         <GlassCard className="overflow-hidden">
           <div className="p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
-            <div className="font-display font-bold text-sm tracking-wider neon-cyan">POLL HISTORY</div>
+            <div className="font-display font-bold text-sm tracking-wider" style={{ color: 'var(--t-text)' }}>POLL HISTORY</div>
           </div>
           <div className="max-h-64 overflow-y-auto">
             <table className="w-full">
@@ -144,7 +127,7 @@ export default function SNMPMemoryMonitoring() {
                 <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                   {['Timestamp', 'Used', 'Free', 'Utilization', 'Health'].map(h => (
                     <th key={h} className="text-left px-4 py-2.5 font-mono text-xs sticky top-0"
-                      style={{ color: '#8899bb', background: 'rgba(8,25,55,0.95)' }}>{h}</th>
+                      style={{ color: 'var(--t-text)', background: 'var(--t-table-header)' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -154,13 +137,13 @@ export default function SNMPMemoryMonitoring() {
                   const hColors = { healthy: '#00ff88', warning: '#ffaa00', critical: '#ff3366', unknown: '#8899bb' }
                   return (
                     <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
-                      <td className="px-4 py-2 font-mono text-[10px]" style={{ color: '#8899bb' }}>
+                      <td className="px-4 py-2 font-mono text-[10px]" style={{ color: 'var(--t-text)' }}>
                         {new Date(row.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>
+                      <td className="px-4 py-2 font-mono text-xs" style={{ color: 'var(--t-text)' }}>
                         {formatBytes(history[i]?.used ?? 0)}
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs" style={{ color: '#c8d8ee' }}>
+                      <td className="px-4 py-2 font-mono text-xs" style={{ color: 'var(--t-text)' }}>
                         {formatBytes(history[i]?.free ?? 0)}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: '#00d4ff' }}>

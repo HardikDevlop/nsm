@@ -25,7 +25,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.database.session import SessionLocal
-from backend.models import Interface
+from backend.models import Device, Interface
 from backend.models.snmp import MonitoringConfig, MonitoringStatus, PollingHistory, PollStatus
 from backend.models.identity import DeviceCapabilities
 from backend.snmp.collector import SNMPService
@@ -318,12 +318,52 @@ class SNMPPoller:
             if cap:
                 detail = dict(cap.capability_detail or {})
                 existing = detail.get(module, {}) if isinstance(detail.get(module), dict) else {}
+                persisted_data = dict(data or existing.get("data") or {})
+                if module == "topology":
+                    arp_data = ((detail.get("arp") or {}).get("data") or {})
+                    arp_by_mac: dict[str, str] = {}
+                    for entry in arp_data.get("entries") or []:
+                        raw_mac = entry.get("mac") or entry.get("mac_address")
+                        mac = "".join(ch for ch in str(raw_mac or "").lower() if ch in "0123456789abcdef")
+                        ip = entry.get("ip_address") or entry.get("ip")
+                        if len(mac) == 12 and ip and mac not in arp_by_mac:
+                            arp_by_mac[mac] = str(ip)
+                    if arp_by_mac and isinstance(persisted_data.get("nodes"), list):
+                        nodes = []
+                        for node in persisted_data["nodes"]:
+                            item = dict(node)
+                            raw_mac = item.get("mac_address") or item.get("mac")
+                            mac = "".join(ch for ch in str(raw_mac or "").lower() if ch in "0123456789abcdef")
+                            if not item.get("ip_address") and len(mac) == 12 and mac in arp_by_mac:
+                                item["ip_address"] = arp_by_mac[mac]
+                                item["ip"] = arp_by_mac[mac]
+                            nodes.append(item)
+                        persisted_data["nodes"] = nodes
+                if module == "inventory":
+                    chassis = persisted_data.get("chassis") or {}
+                    ports = persisted_data.get("ports") or []
+                    device = self.db.query(Device).filter(Device.id == device_id).first()
+                    uptime_seconds = getattr(device, "uptime_seconds", None) if device else None
+                    uptime_display = None
+                    if uptime_seconds is not None:
+                        total = int(uptime_seconds)
+                        days, remainder = divmod(total, 86400)
+                        hours, remainder = divmod(remainder, 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        uptime_display = f"{days}d {hours:02d}h {minutes:02d}m {seconds:02d}s"
+                    persisted_data.update({
+                        "port_count": len(ports),
+                        "loader_date": now.isoformat(),
+                        "system_uptime": uptime_display,
+                        "loader_version": chassis.get("loader_version") or chassis.get("software_rev"),
+                        "firmware_version": chassis.get("firmware_version") or chassis.get("firmware_rev"),
+                    })
                 detail[module] = {
                     **existing,
                     "collector": module,
                     "supported": supported,
                     "timestamp": now.isoformat(),
-                    "data": data or existing.get("data") or {},
+                    "data": persisted_data,
                     "missing": existing.get("missing", []),
                     "warnings": existing.get("warnings", []),
                     "reason": None if supported else existing.get("reason") or "Module not supported",
@@ -699,6 +739,7 @@ class SNMPPoller:
                 latest_by_id[iface_rec.id] = latest
             latest.if_index = if_index
             latest.name = str(iface_name)
+            latest.mac_address = iface.get("mac") or iface.get("mac_address")
             latest.oper_status = (iface.get("oper_status") or "UNKNOWN").upper()
             latest.admin_status = (iface.get("admin_status") or "UNKNOWN").upper()
             latest.speed_bps = speed

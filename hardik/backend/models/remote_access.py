@@ -57,6 +57,7 @@ class SSHHostKey(Base):
     fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
     scanned_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     trusted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     trusted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     device = relationship("Device", back_populates="ssh_host_keys")

@@ -288,7 +288,7 @@ export const SNMP_MODULES: Record<string, SNMPModuleConfig> = {
     apiEndpoint: '/snmp/devices/{deviceId}/inventory',
     queryKey: ['snmp', 'inventory'],
     supportedCheck: (caps) => caps.inventory === true,
-    summaryFields: ['items'],
+    summaryFields: ['total_count', 'fru_count', 'port_count', 'loader_date', 'system_uptime', 'loader_version', 'firmware_version'],
   },
   health: {
     id: 'health',

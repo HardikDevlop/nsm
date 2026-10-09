@@ -83,6 +83,28 @@ function normalizePort(
   }
 }
 
+function canonicalPortKey(port: Port): string {
+  const name = port.name
+    .replace(/^[^·]+·\s*/, "")
+    .trim()
+    .toLowerCase()
+  return name || (port.ifIndex == null ? "" : `ifindex-${port.ifIndex}`)
+}
+
+function deduplicatePorts(rows: Port[]): Port[] {
+  const unique = new Map<string, Port>()
+  for (const row of rows) {
+    const key = canonicalPortKey(row)
+    const existing = unique.get(key)
+    // Prefer the row carrying a real ifIndex and live status when an API
+    // response contains the same interface more than once.
+    if (!existing || (existing.ifIndex == null && row.ifIndex != null)) {
+      unique.set(key, row)
+    }
+  }
+  return [...unique.values()]
+}
+
 function manualPort(name: string, device: Device): Port {
   return {
     id: 0,
@@ -307,8 +329,10 @@ export default function DevicePortMap() {
       withTimeout(getLatestInterfaces(current.backendId), []),
     ]).then(([snmp, latest]) => {
       if (!active) return
-      const rows = (snmp.length ? snmp : latest).map((item, index) =>
-        normalizePort(item, index, snmp.length ? "snmp" : "latest"),
+      const rows = deduplicatePorts(
+        (snmp.length ? snmp : latest).map((item, index) =>
+          normalizePort(item, index, snmp.length ? "snmp" : "latest"),
+        ),
       )
       if (rows.length) {
         rows.sort(naturalPortSort)

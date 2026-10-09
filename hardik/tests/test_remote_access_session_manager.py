@@ -195,6 +195,48 @@ def test_transport_reconciliation_is_idempotent_and_stops_duration(db):
     m.reconcile_transport(session.session_uuid, reason="WebSocket/remote transport failure")
 
 
+def test_list_active_sessions_does_not_disconnect_missing_runtime_owner(db):
+    m = manager(db)
+    session = m.create_session(device_id=1, user_id=1, protocol="ssh", username="u", secret="s")
+    m._sessions.pop(session.session_uuid)
+
+    listed = m.list_active_sessions(user_id=1)
+
+    assert [item.session_uuid for item in listed] == [session.session_uuid]
+    assert session.status == "connected"
+    assert session.ended_at is None
+    assert session.disconnect_reason is None
+
+
+def test_startup_reconciliation_ends_persisted_sessions_once(db):
+    m = manager(db)
+    connected = m.create_session(device_id=1, user_id=1, protocol="ssh", username="u", secret="s")
+    started_at = connected.started_at
+    m._sessions.clear()
+
+    assert m.reconcile_stale_sessions_on_startup() == 1
+    assert connected.status == "disconnected"
+    assert connected.disconnect_reason == "Backend service restarted"
+    assert connected.ended_at is not None
+    assert connected.started_at == started_at
+    assert m.reconcile_stale_sessions_on_startup() == 0
+    assert m.list_active_sessions(user_id=1) == []
+
+
+def test_list_active_sessions_reconciles_only_a_proven_dead_adapter(db):
+    m = manager(db)
+    session = m.create_session(device_id=1, user_id=1, protocol="ssh", username="u", secret="s")
+    Adapter.instances[0].disconnect()
+
+    listed = m.list_active_sessions(user_id=1)
+
+    assert listed == []
+    assert session.status == "disconnected"
+    assert session.disconnect_reason == "Adapter health check failed"
+    m.list_active_sessions(user_id=1)
+    assert session.status == "disconnected"
+
+
 def test_auth_failure_persists_safe_human_reason(db):
     class AuthFailure(Adapter):
         def connect(self):

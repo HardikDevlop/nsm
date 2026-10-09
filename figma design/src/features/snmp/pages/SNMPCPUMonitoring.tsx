@@ -40,6 +40,14 @@ export default function SNMPCPUMonitoring() {
   const cpuData = stats?.data || latestCPU || {}
   const currentUsage = cpuData?.overall_percent ?? cpuData?.utilization_percent ?? latestCPU?.current_usage ?? stats?.overall_percent
   const perCore = normalizePerCore(cpuData?.per_core ?? latestCPU?.per_core)
+  const historyValues = history
+    .map((point: any) => Number(point?.usage ?? point?.value))
+    .filter((value: number) => Number.isFinite(value))
+  const averageUsage = cpuData?.average_percent != null
+    ? Number(cpuData.average_percent)
+    : historyValues.length > 0
+      ? historyValues.reduce((sum: number, value: number) => sum + value, 0) / historyValues.length
+      : currentUsage
   const hasCpuData = Object.keys(cpuData || {}).length > 0 || perCore.length > 0 || currentUsage !== undefined
   const supported =
     monitoringData?.capabilities?.cpu === true ||
@@ -67,24 +75,6 @@ export default function SNMPCPUMonitoring() {
 
   return (
     <SNMPModuleShell module="cpu" title="CPU Monitoring" showMonitoringControls={true}>
-      {/* Stat Tiles */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
-        {[
-          { label: 'Current', value: currentUsage !== undefined ? `${currentUsage.toFixed(1)}%` : '—', color: currentUsage !== undefined && currentUsage >= 90 ? '#ff3366' : currentUsage !== undefined && currentUsage >= 70 ? '#ffaa00' : '#00ff88' },
-          { label: 'Average', value: cpuData?.average_percent !== undefined ? `${cpuData.average_percent.toFixed(1)}%` : '—', color: '#00d4ff' },
-          { label: 'Cores', value: String(cpuData?.core_count ?? (perCore.length || '—')), color: '#34d399' },
-          { label: 'Load 1m', value: cpuData?.load_avg?.['1min'] !== undefined ? `${Number(cpuData.load_avg['1min']).toFixed(2)}` : '—', color: '#ffaa00' },
-          { label: 'Source', value: cpuData?.source ?? (latestCPU ? 'DB Latest' : '—'), color: '#00d4ff' },
-        ].map(tile => (
-          <GlassCard key={tile.label} className="p-4 text-center">
-            <div className="font-display font-bold text-xl sm:text-2xl" style={{ color: tile.color }}>
-              {tile.value}
-            </div>
-            <div className="font-mono text-xs mt-1" style={{ color: '#8899bb' }}>{tile.label}</div>
-          </GlassCard>
-        ))}
-      </div>
-
       {/* Health + Poll Info */}
       <div className="flex flex-wrap items-center gap-4 mb-4">
         <div
@@ -92,9 +82,9 @@ export default function SNMPCPUMonitoring() {
           style={{ background: getHealthColor(health), boxShadow: `0 0 8px ${getHealthColor(health)}` }}
           title={`Health: ${health}`}
         />
-        <span className="font-mono text-xs" style={{ color: '#8899bb' }}>Health: {health.toUpperCase()}</span>
+        <span className="font-mono text-xs" style={{ color: 'var(--t-text)' }}>Health: {health.toUpperCase()}</span>
         {cpuData?.polled_at && (
-          <span className="font-mono text-xs" style={{ color: '#667799' }}>
+            <span className="font-mono text-xs" style={{ color: 'var(--t-text)' }}>
             Last Poll: {new Date(cpuData.polled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
           </span>
         )}
@@ -109,8 +99,8 @@ export default function SNMPCPUMonitoring() {
       <GlassCard className="p-4 mb-4">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <div className="font-display font-bold text-sm tracking-wider neon-cyan">CPU UTILIZATION</div>
-            <div className="font-mono text-xs mt-0.5" style={{ color: '#8899bb' }}>
+            <div className="font-display font-bold text-sm tracking-wider" style={{ color: 'var(--t-text)' }}>CPU UTILIZATION</div>
+            <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-text)' }}>
               {history.length} data points
             </div>
           </div>
@@ -124,7 +114,7 @@ export default function SNMPCPUMonitoring() {
               <div><strong>{currentUsage?.toFixed(1) ?? '—'}%</strong><span>CURRENT</span></div>
             </div>
             <div className="flex-1 w-full grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {[['STATUS', health.toUpperCase()], ['CORES', String(cpuData?.core_count ?? (perCore.length || '—'))], ['AVERAGE', cpuData?.average_percent != null ? `${cpuData.average_percent.toFixed(1)}%` : '—'], ['HISTORY', 'COLLECTING']].map(([label, value]) => (
+              {[['STATUS', health.toUpperCase()], ['CORES', String(cpuData?.core_count ?? (perCore.length || '—'))], ['AVERAGE', averageUsage != null && Number.isFinite(Number(averageUsage)) ? `${Number(averageUsage).toFixed(1)}%` : '—'], ['HISTORY', 'COLLECTING']].map(([label, value]) => (
                 <div key={label} className="cpu-summary-stat"><span>{label}</span><strong>{value}</strong></div>
               ))}
             </div>
@@ -138,7 +128,7 @@ export default function SNMPCPUMonitoring() {
       {/* Per Core */}
       {perCore.length > 0 && (
         <GlassCard className="p-4 mb-4">
-          <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-4">PER CORE USAGE</div>
+          <div className="font-display font-bold text-sm tracking-wider mb-4" style={{ color: 'var(--t-text)' }}>PER CORE USAGE</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
             {perCore.map(core => {
                   const pct = core.percent
@@ -150,7 +140,7 @@ export default function SNMPCPUMonitoring() {
                           <span style={{ color: coreColor }}>{pct.toFixed(0)}%</span>
                         </div>
                       </div>
-                      <div className="font-mono text-[10px] mt-1" style={{ color: '#8899bb' }}>
+                      <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--t-text)' }}>
                         Core {core.id}
                       </div>
                     </div>
@@ -166,7 +156,7 @@ export default function SNMPCPUMonitoring() {
       {history.length > 0 && (
         <GlassCard className="overflow-hidden">
           <div className="p-4" style={{ borderBottom: '1px solid rgba(0,212,255,0.1)' }}>
-            <div className="font-display font-bold text-sm tracking-wider neon-cyan">POLL HISTORY</div>
+            <div className="font-display font-bold text-sm tracking-wider" style={{ color: 'var(--t-text)' }}>POLL HISTORY</div>
           </div>
           <div className="max-h-64 overflow-y-auto">
             <table className="w-full">
@@ -174,7 +164,7 @@ export default function SNMPCPUMonitoring() {
                 <tr style={{ borderBottom: '1px solid rgba(0,212,255,0.08)' }}>
                   {['Timestamp', 'CPU Usage', 'Health'].map(h => (
                     <th key={h} className="text-left px-4 py-2.5 font-mono text-xs sticky top-0"
-                      style={{ color: '#8899bb', background: 'rgba(8,25,55,0.95)' }}>{h}</th>
+                      style={{ color: 'var(--t-text)', background: 'var(--t-table-header)' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -184,7 +174,7 @@ export default function SNMPCPUMonitoring() {
                   const hColors = { healthy: '#00ff88', warning: '#ffaa00', critical: '#ff3366', unknown: '#8899bb' }
                   return (
                     <tr key={i} style={{ borderBottom: '1px solid rgba(0,212,255,0.04)' }}>
-                      <td className="px-4 py-2 font-mono text-xs" style={{ color: '#8899bb' }}>
+                      <td className="px-4 py-2 font-mono text-xs" style={{ color: 'var(--t-text)' }}>
                         {new Date(row.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs font-semibold" style={{ color: '#00d4ff' }}>

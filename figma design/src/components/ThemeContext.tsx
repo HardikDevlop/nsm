@@ -59,9 +59,10 @@ const ThemeContext = createContext<ThemeContextType>({
 })
 
 function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
+  const normalized = /^#[0-9a-f]{6}$/i.test(hex) ? hex : '#000000'
+  const r = parseInt(normalized.slice(1, 3), 16)
+  const g = parseInt(normalized.slice(3, 5), 16)
+  const b = parseInt(normalized.slice(5, 7), 16)
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
@@ -131,6 +132,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         const parsed = JSON.parse(saved) as ThemeColors | Partial<ThemePalettes>
         const migrate = (value: ThemeColors, fallback: ThemeColors): ThemeColors => {
           const next = { ...fallback, ...value }
+          // Only hex colors are safe for the native color input and derived
+          // rgba tokens. Older picker versions could persist CSS variables.
+          ;(Object.keys(fallback) as (keyof ThemeColors)[]).forEach(key => {
+            if (!/^#[0-9a-f]{6}$/i.test(next[key])) next[key] = fallback[key]
+          })
           // Migrate the previous stock light palette while preserving genuine
           // user customizations and all dark/custom theme behavior.
           if (fallback.bg === LIGHT_DEFAULTS.bg && ['#eef2f6', '#f1f5f9'].includes(next.bg.toLowerCase())) next.bg = LIGHT_DEFAULTS.bg
@@ -198,8 +204,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [canToggle])
 
   const setColor = useCallback((key: keyof ThemeColors, value: string) => {
+    if (!/^#[0-9a-f]{6}$/i.test(value)) return
+    // Update the document immediately as well as React state. This keeps the
+    // picker responsive even while a large dashboard is rendering.
+    applyCSS({ ...palettes[theme], [key]: value }, theme)
     setPalettes(prev => ({ ...prev, [theme]: { ...prev[theme], [key]: value } }))
-  }, [theme])
+  }, [palettes, theme])
 
   const resetColors = useCallback(() => {
     setPalettes(prev => ({ ...prev, [theme]: theme === 'dark' ? DARK_DEFAULTS : LIGHT_DEFAULTS }))

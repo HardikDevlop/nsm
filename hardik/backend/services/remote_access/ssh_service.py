@@ -48,15 +48,27 @@ def _safe_paramiko_message(exc: BaseException, *, host: str, username: str, pass
     return message[:512]
 
 
-def _log_handshake_diagnostics(transport: Any, exc: BaseException, *, host: str,
+def _log_handshake_diagnostics(transport: Any, exc: BaseException, *, host: str, port: int,
                                username: str, password: str) -> None:
     """Log negotiation diagnostics without logging credentials or key material."""
+    transport_exc = None
+    if transport is not None:
+        try:
+            transport_exc = transport.get_exception()
+        except Exception:
+            transport_exc = None
+    diagnostic_exc = transport_exc or exc
     if transport is None:
         logger.warning(
-            "Remote Access SSH handshake_diagnostics transport=UNAVAILABLE "
+            "Remote Access SSH handshake_diagnostics stage=SSH_HANDSHAKE host=%s port=%s "
+            "paramiko_version=%s transport=UNAVAILABLE remote_version=UNAVAILABLE local_version=%s "
+            "host_key_type=UNAVAILABLE kex=UNAVAILABLE cipher_in=UNAVAILABLE cipher_out=UNAVAILABLE "
+            "mac_in=UNAVAILABLE mac_out=UNAVAILABLE compression_in=UNAVAILABLE compression_out=UNAVAILABLE "
             "exception_type=%s exception_message=%s",
-            type(exc).__name__,
-            _safe_paramiko_message(exc, host=host, username=username, password=password),
+            host, port, paramiko.__version__,
+            getattr(paramiko.Transport, "__version__", "UNAVAILABLE"),
+            type(diagnostic_exc).__name__,
+            _safe_paramiko_message(diagnostic_exc, host=host, username=username, password=password),
         )
         return
     try:
@@ -72,24 +84,30 @@ def _log_handshake_diagnostics(transport: Any, exc: BaseException, *, host: str,
         key_types = kex = ciphers = macs = ()
     values = {
         "remote_version": getattr(transport, "remote_version", "") or "UNAVAILABLE",
+        "local_version": getattr(transport, "local_version", "") or "UNAVAILABLE",
         "local_cipher": getattr(transport, "local_cipher", "") or "UNAVAILABLE",
         "remote_cipher": getattr(transport, "remote_cipher", "") or "UNAVAILABLE",
         "local_kex": getattr(transport, "local_kex", "") or "UNAVAILABLE",
         "remote_kex": getattr(transport, "remote_kex", "") or "UNAVAILABLE",
         "host_key_type": getattr(transport, "host_key_type", "") or "UNAVAILABLE",
-        "remote_macs": getattr(transport, "remote_mac", "") or "UNAVAILABLE",
+        "local_mac": getattr(transport, "local_mac", "") or "UNAVAILABLE",
+        "remote_mac": getattr(transport, "remote_mac", "") or "UNAVAILABLE",
+        "local_compression": getattr(transport, "local_compression", "") or "UNAVAILABLE",
+        "remote_compression": getattr(transport, "remote_compression", "") or "UNAVAILABLE",
     }
     logger.warning(
-        "Remote Access SSH handshake_diagnostics transport_factory=%s "
-        "remote_version=%s host_key_type=%s local_kex=%s remote_kex=%s "
-        "local_cipher=%s remote_cipher=%s remote_mac=%s local_host_keys=%s remote_offered_host_keys=%s "
+        "Remote Access SSH handshake_diagnostics stage=SSH_HANDSHAKE host=%s port=%s "
+        "paramiko_version=%s transport_factory=%s remote_version=%s local_version=%s host_key_type=%s "
+        "local_kex=%s remote_kex=%s local_cipher=%s remote_cipher=%s local_mac=%s remote_mac=%s "
+        "local_compression=%s remote_compression=%s local_host_keys=%s remote_offered_host_keys=%s "
         "available_kex=%s available_ciphers=%s available_macs=%s "
         "exception_type=%s exception_message=%s",
-        type(transport).__name__, values["remote_version"], values["host_key_type"],
+        host, port,
+        paramiko.__version__, type(transport).__name__, values["remote_version"], values["local_version"], values["host_key_type"],
         values["local_kex"], values["remote_kex"], values["local_cipher"], values["remote_cipher"],
-        values["remote_macs"], key_types, getattr(transport, "_preferred_keys", ()) or "UNAVAILABLE",
-        kex, ciphers, macs, type(exc).__name__,
-        _safe_paramiko_message(exc, host=host, username=username, password=password),
+        values["local_mac"], values["remote_mac"], values["local_compression"], values["remote_compression"],
+        key_types, getattr(transport, "_preferred_keys", ()) or "UNAVAILABLE", kex, ciphers, macs,
+        type(diagnostic_exc).__name__, _safe_paramiko_message(diagnostic_exc, host=host, username=username, password=password),
     )
 
 
@@ -139,6 +157,16 @@ class SSHConnectionAdapter:
         self._client: paramiko.SSHClient | None = None
         self._channel: paramiko.Channel | None = None
         self._pending_output = bytearray()
+        self._metrics: dict[str, float] = {}
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Safe connection timings; never includes credentials or shell data."""
+        return {
+            "ssh_authentication_completed": self._auth_completed,
+            "cli_bootstrap_auth": self._cli_bootstrap_auth,
+            "timings_ms": dict(self._metrics),
+        }
 
     @property
     def channel(self) -> paramiko.Channel:
@@ -149,12 +177,13 @@ class SSHConnectionAdapter:
     def connect(self) -> "SSHConnectionAdapter":
         if self.is_alive():
             return self
+        self._auth_completed = False
+        self._cli_bootstrap_auth = False
+        started = time.perf_counter()
         client = paramiko.SSHClient()
         try:
             if self.known_hosts:
                 client.load_host_keys(self.known_hosts)
-            else:
-                client.load_system_host_keys()
         except (OSError, paramiko.SSHException) as exc:
             client.close()
             logger.info("Remote Access SSH stage=HOST_KEY_VERIFY status=FAILED code=HOST_KEY_FAILED")
@@ -166,6 +195,7 @@ class SSHConnectionAdapter:
         transport = None
         try:
             sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+            self._metrics["tcp_connect_ms"] = round((time.perf_counter() - started) * 1000, 3)
             logger.info("Remote Access SSH stage=TCP_CONNECT status=SUCCESS host=%s port=%s", self.host, self.port)
             transport = _RemoteAccessTransport(sock)
             logger.info("Remote Access SSH transport_factory=%s instantiated=true", type(transport).__name__)
@@ -174,6 +204,7 @@ class SSHConnectionAdapter:
             logger.info("Remote Access SSH stage=SSH_HANDSHAKE status=START local_host_keys=%s",
                         tuple(transport.get_security_options().key_types))
             transport.start_client(timeout=self.timeout)
+            self._metrics["handshake_ms"] = round((time.perf_counter() - started) * 1000, 3) - self._metrics["tcp_connect_ms"]
             logger.info("Remote Access SSH banner remote_version=%s", transport.remote_version or "UNAVAILABLE")
             server_key = transport.get_remote_server_key()
             verified_by_fingerprint = False
@@ -240,7 +271,7 @@ class SSHConnectionAdapter:
         except (paramiko.SSHException, OSError) as exc:
             _log_handshake_diagnostics(
                 client.get_transport() if hasattr(client, "get_transport") else None,
-                exc, host=self.host, username=self.username, password=self.password
+                exc, host=self.host, port=self.port, username=self.username, password=self.password
             )
             client.close()
             logger.warning(
@@ -259,13 +290,17 @@ class SSHConnectionAdapter:
                 raise paramiko.SSHException("SSH transport unavailable")
             try:
                 transport.auth_password(self.username, self.password)
+                self._auth_completed = True
+                self._metrics["auth_ms"] = round((time.perf_counter() - started) * 1000, 3) - self._metrics["tcp_connect_ms"] - self._metrics.get("handshake_ms", 0)
                 logger.info("Remote Access SSH stage=SSH_TRANSPORT_AUTH status=SUCCESS method=password")
             except paramiko.AuthenticationException:
                 logger.info("Remote Access SSH stage=SSH_TRANSPORT_AUTH status=FAILED code=SSH_AUTH_FAILED")
                 transport.auth_none(self.username)
+                self._auth_completed = True
+                self._metrics["auth_ms"] = round((time.perf_counter() - started) * 1000, 3) - self._metrics["tcp_connect_ms"] - self._metrics.get("handshake_ms", 0)
                 logger.info("Remote Access SSH stage=SSH_TRANSPORT_AUTH status=SUCCESS method=auth_none")
         except (paramiko.AuthenticationException, paramiko.SSHException, OSError) as exc:
-            _log_handshake_diagnostics(transport, exc, host=self.host, username=self.username, password=self.password)
+            _log_handshake_diagnostics(transport, exc, host=self.host, port=self.port, username=self.username, password=self.password)
             client.close()
             raise SSHConnectionError("SSH authentication failed", "SSH_AUTH_FAILED", "SSH_TRANSPORT_AUTH") from exc
 
@@ -278,7 +313,9 @@ class SSHConnectionAdapter:
                 raise paramiko.SSHException("SSH transport unavailable")
             channel = transport.open_session()
             channel.get_pty(term=self.term, width=self.width, height=self.height)
+            logger.info("Remote Access SSH PTY initial_geometry width=%s height=%s", self.width, self.height)
             channel.settimeout(self.timeout)
+            self._metrics["shell_open_ms"] = round((time.perf_counter() - started) * 1000, 3) - self._metrics["tcp_connect_ms"] - self._metrics.get("handshake_ms", 0) - self._metrics.get("auth_ms", 0)
         except (paramiko.SSHException, OSError, socket.timeout) as exc:
             client.close()
             logger.info("Remote Access SSH stage=PTY_OPEN status=FAILED code=PTY_OPEN_FAILED")
@@ -298,6 +335,7 @@ class SSHConnectionAdapter:
             client.close()
             raise
         self._client, self._channel = client, channel
+        self._metrics["total_connect_ms"] = round((time.perf_counter() - started) * 1000, 3)
         logger.info("Remote Access SSH stage=CLI_PROMPT_READY status=SUCCESS host=%s", self.host)
         logger.info("SSH interactive shell established for %s:%s", self.host, self.port)
         return self
@@ -310,7 +348,13 @@ class SSHConnectionAdapter:
         consumes only a small initial window; unrecognized output is retained
         for the normal terminal reader.
         """
+        # Do not impose a five-second login delay on normal Unix/Windows
+        # shells.  Appliances that need the second-stage login emit a prompt;
+        # after receiving initial output, a short quiet period is enough to
+        # hand the raw PTY to xterm. The overall timeout remains a safety net
+        # for a device that has started a prompt but stopped responding.
         deadline = time.monotonic() + min(max(self.timeout, 0.1), 5.0)
+        quiet_deadline: float | None = None
         captured = bytearray()
         username_sent = password_sent = False
         prompt_seen = False
@@ -330,14 +374,17 @@ class SSHConnectionAdapter:
                     if not chunk:
                         break
                     captured.extend(chunk)
+                    quiet_deadline = time.monotonic() + 0.25
                     tail = bytes(captured[-512:])
                     if not username_sent and username_prompt.search(tail):
                         channel.sendall((self.username + "\r").encode())
                         username_sent = prompt_seen = True
+                        self._cli_bootstrap_auth = True
                         continue
                     if username_sent and not password_sent and password_prompt.search(tail):
                         channel.sendall((self.password + "\r").encode())
                         password_sent = prompt_seen = True
+                        self._cli_bootstrap_auth = True
                         continue
                     if password_sent and cli_prompt.search(tail):
                         preserve_safe_output()
@@ -346,6 +393,9 @@ class SSHConnectionAdapter:
                         preserve_safe_output()
                         return
                 else:
+                    if captured and quiet_deadline is not None and time.monotonic() >= quiet_deadline:
+                        preserve_safe_output()
+                        return
                     time.sleep(0.01)
             except (socket.timeout, paramiko.SSHException, OSError) as exc:
                 raise SSHConnectionError("SSH CLI login bootstrap failed", "CLI_BOOTSTRAP_FAILED", "CLI_BOOTSTRAP") from exc
@@ -387,6 +437,7 @@ class SSHConnectionAdapter:
             raise ValueError("PTY dimensions must be positive")
         try:
             self.channel.resize_pty(width=width, height=height)
+            self.width, self.height = width, height
         except (paramiko.SSHException, OSError) as exc:
             raise SSHConnectionError("Could not resize SSH PTY") from exc
 

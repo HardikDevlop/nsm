@@ -18,7 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import case, func, select, text
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, load_only
 
@@ -1709,9 +1709,21 @@ def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 10
         Alert.deleted_at,
     )).filter(Alert.deleted_at.is_(None))
     accessible_site_ids = get_accessible_site_ids(current_user)
-    query = query.join(Device, Alert.device_id == Device.id).filter(Device.deleted_at.is_(None))
+    # Alerts created for an operational condition may intentionally have no
+    # device_id.  An inner join made those alerts invisible in Alert
+    # Management even though _notify() still created and emailed them.
+    # Keep device-scoped access checks, while retaining valid device-less
+    # alerts in the result set.
+    query = query.outerjoin(Device, Alert.device_id == Device.id).filter(
+        or_(Alert.device_id.is_(None), Device.deleted_at.is_(None))
+    )
     if accessible_site_ids is not None:
-        query = query.filter(Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False)
+        query = query.filter(
+            or_(
+                Alert.device_id.is_(None),
+                Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False,
+            )
+        )
     if status_filter:
         query = query.filter(Alert.status == status_filter)
     return query.order_by(Alert.created_at.desc()).offset(skip).limit(min(limit, 500)).all()

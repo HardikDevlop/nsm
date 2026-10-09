@@ -290,6 +290,7 @@ class LatestInterface(SNMPBase, Base):
     interface_id: Mapped[int] = mapped_column(ForeignKey("interfaces.id", ondelete="CASCADE"), index=True)
     if_index: Mapped[int] = mapped_column(Integer)
     name: Mapped[str | None] = mapped_column(String(160))
+    mac_address: Mapped[str | None] = mapped_column(String(32))
     oper_status: Mapped[str] = mapped_column(String(30))
     admin_status: Mapped[str] = mapped_column(String(30))
     speed_bps: Mapped[float | None] = mapped_column(Float)

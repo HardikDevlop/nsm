@@ -1318,6 +1318,7 @@ def get_snmp_overview(
     device = _get_device_or_404(device_id, db)
     di = db.query(DeviceIdentity).filter(DeviceIdentity.device_id == device_id).first()
     dc = db.query(DeviceCapabilities).filter(DeviceCapabilities.device_id == device_id).first()
+    credential = _get_credentials(device_id, db)
     last_polls = (
         db.query(PollingHistory)
         .filter(PollingHistory.device_id == device_id)
@@ -1345,6 +1346,7 @@ def get_snmp_overview(
         "hostname":     device.hostname,
         "ip_address":   device.ip_address,
         "vendor":       vendor_name,
+        "snmp_version": credential.snmp_version if credential else None,
         "model":        device.model or (di.model if di else None),
         "device_type":  (di.device_type if di else None) or (device.device_type.name if device.device_type else None),
         "uptime_seconds": device.uptime_seconds,
@@ -1559,6 +1561,7 @@ def get_snmp_interfaces(device_id: int, limit: int = Query(default=MAX_SNMP_TABL
         for row in db.query(LatestInterface).options(load_only(
             LatestInterface.interface_id,
             LatestInterface.if_index,
+            LatestInterface.mac_address,
             LatestInterface.speed_bps,
             LatestInterface.rx_octets,
             LatestInterface.tx_octets,
@@ -1996,6 +1999,25 @@ def get_snmp_inventory(device_id: int, db: Session = Depends(get_db), _: Any = D
     result = _live_collect(device, _get_credentials(device_id, db), domain="inventory")
     col      = _collector_data(result, "inventory")
     col_data = col.get("data") or {}
+    chassis = col_data.get("chassis") or {}
+    # Prefer the live device value, with collector/result fallbacks for SNMP
+    # implementations that return uptime during inventory collection.
+    uptime_seconds = (
+        device.uptime_seconds
+        if device.uptime_seconds is not None
+        else col_data.get("uptime_seconds")
+        or col_data.get("system_uptime_seconds")
+        or result.get("uptime_seconds")
+    )
+    if isinstance(uptime_seconds, dict):
+        uptime_seconds = uptime_seconds.get("seconds") or uptime_seconds.get("value")
+    uptime_display = None
+    if uptime_seconds is not None:
+        total = int(uptime_seconds)
+        days, remainder = divmod(total, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        uptime_display = f"{days}d {hours:02d}h {minutes:02d}m {seconds:02d}s"
     return {
         "api_version":   result.get("api_version", "2.0"),
         "ip":            result.get("ip"),
@@ -2015,6 +2037,11 @@ def get_snmp_inventory(device_id: int, db: Session = Depends(get_db), _: Any = D
         "data": {
             "total_count":   col_data.get("total_count", 0),
             "fru_count":     col_data.get("fru_count", 0),
+            "port_count":    len(col_data.get("ports") or []),
+            "loader_date":   col.get("timestamp") or result.get("timestamp"),
+            "system_uptime": uptime_display,
+            "loader_version": chassis.get("loader_version") or chassis.get("software_rev"),
+            "firmware_version": chassis.get("firmware_version") or chassis.get("firmware_rev"),
             "chassis":       col_data.get("chassis"),
             "modules":       col_data.get("modules", []),
             "power_supplies":col_data.get("power_supplies", []),
@@ -2222,6 +2249,26 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
         .all()
     } if all_device_ids else {}
 
+    # ARP is the authoritative fallback for topology nodes whose discovery
+    # record contains a MAC but no management IP. Keep this join live from the
+    # latest persisted ARP collector data; never invent an address.
+    arp_ip_by_mac: dict[str, str] = {}
+    for capability in capability_map.values():
+        arp_snapshot = (capability.capability_detail or {}).get("arp") or {}
+        arp_data = arp_snapshot.get("data") or {}
+        for entry in arp_data.get("entries") or []:
+            mac = _normalize_mac(entry.get("mac") or entry.get("mac_address"))
+            ip = entry.get("ip_address") or entry.get("ip")
+            if mac and ip and mac not in arp_ip_by_mac:
+                arp_ip_by_mac[mac] = str(ip)
+
+    def apply_arp_ip(node: dict[str, Any]) -> dict[str, Any]:
+        if not node.get("ip_address"):
+            mac = _normalize_mac(node.get("mac_address") or node.get("mac"))
+            if mac and arp_ip_by_mac.get(mac):
+                node = {**node, "ip_address": arp_ip_by_mac[mac], "ip": arp_ip_by_mac[mac]}
+        return node
+
     # A forced refresh is a rebuild, not a merge. Remove only the persisted
     # topology snapshot so stale MAC/ARP/LLDP nodes cannot survive a fresh
     # collection. Device identity, credentials, and other SNMP modules remain
@@ -2280,8 +2327,9 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
             len(cached_data.get("links") or []),
         )
         if cached_data.get("nodes") or cached_data.get("links"):
+            cached_devices = [apply_arp_ip(dict(node)) for node in cached_data.get("nodes", [])]
             return {
-                "devices": cached_data.get("nodes", []),
+                "devices": cached_devices,
                 "links": cached_data.get("links", []),
                 "verified_only": True,
                 "cached": True,
@@ -2453,6 +2501,7 @@ def get_snmp_topology(device_id: int | None = Query(default=None), refresh: bool
                     links.append({**link, "verified": True})
             continue
     db.commit()
+    nodes = {node_id: apply_arp_ip(node) for node_id, node in nodes.items()}
     logger.info(
         "[TOPOLOGY-BE] GET live/assembled selected_device_ids=%s timestamp=%s nodes=%s links=%s",
         [device.id for device in d_list],
@@ -2733,7 +2782,7 @@ def get_latest_metrics(
                     SELECT json_agg(row_to_json(interface_row))
                     FROM (
                         SELECT interface_id, if_index, name, oper_status,
-                               admin_status, speed_bps, rx_mbps, tx_mbps,
+                               admin_status, mac_address, speed_bps, rx_mbps, tx_mbps,
                                rx_octets, tx_octets, rx_packets, tx_packets,
                                errors, discards, utilization_percent, polled_at
                         FROM latest_interface
@@ -2801,6 +2850,7 @@ def get_latest_metrics(
                 "interface_id": i["interface_id"],
                 "if_index": i["if_index"],
                 "name": i["name"],
+                "mac": i["mac_address"],
                 "oper_status": i["oper_status"],
                 "admin_status": i["admin_status"],
                 "speed_bps": i["speed_bps"],
@@ -2906,6 +2956,7 @@ def get_latest_interfaces(
             "interface_id": i.interface_id,
             "if_index": i.if_index,
             "name": i.name,
+            "mac": i.mac_address,
             "oper_status": i.oper_status,
             "admin_status": i.admin_status,
             "speed_bps": i.speed_bps,

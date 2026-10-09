@@ -244,7 +244,10 @@ export async function requestJson<T>(
   }
 
   const timeoutController = new AbortController()
-  const timeoutMs = 15_000
+  // Report ranges can legitimately span months/years and require larger
+  // aggregate queries than normal UI reads. Keep the normal guard for the
+  // rest of the app, but allow report generation enough time to finish.
+  const timeoutMs = path.startsWith('/reports/management') ? 120_000 : 15_000
   let didTimeout = false
   const timeoutId = window.setTimeout(() => {
     didTimeout = true
@@ -272,10 +275,6 @@ export async function requestJson<T>(
     },
   })
     .then(async (response) => {
-      const elapsedMs = performance.now() - startedAt
-      if (import.meta.env.DEV) {
-        console.debug(`[NMS API] ${method} ${path} ${response.status} ${Math.round(elapsedMs)}ms`)
-      }
       if (response.status === 401) {
         authToken = null
         window.localStorage.removeItem("nms_access_token")
@@ -1235,6 +1234,48 @@ export interface RemoteAccessTestResponse {
   message?: string | null
   credential_id?: number | null
   connection_metadata?: Record<string, unknown>
+  requires_trust?: boolean
+  key_type?: string
+  fingerprint?: string
+  stored_fingerprint?: string
+  received_fingerprint?: string
+  host_key_id?: number
+}
+
+export interface RemoteAccessCredentialRecord {
+  id: number
+  device_id: number
+  protocol: "ssh" | "telnet"
+  port: number
+  username: string
+  auth_type: "password" | "private_key"
+  is_verified: boolean
+  last_verified_at: string | null
+  created_by: number | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listRemoteAccessCredentials(deviceId?: number): Promise<RemoteAccessCredentialRecord[]> {
+  const suffix = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""
+  return requestJson<RemoteAccessCredentialRecord[]>(`/remote-access/credentials${suffix}`)
+}
+
+export async function updateRemoteAccessCredential(id: number, payload: {
+  username?: string
+  secret?: string
+  port?: number
+  auth_type?: "password" | "private_key"
+}): Promise<RemoteAccessCredentialRecord> {
+  return requestJson<RemoteAccessCredentialRecord>(`/remote-access/credentials/${id}`, {
+    method: "PATCH", body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteRemoteAccessCredential(id: number): Promise<{ deleted: boolean; credential_id: number }> {
+  return requestJson(`/remote-access/credentials/${id}`, {
+    method: "DELETE",
+  })
 }
 
 export interface RemoteAccessSession {
@@ -1247,6 +1288,9 @@ export interface RemoteAccessSession {
   started_at: string
   ended_at: string | null
   disconnect_reason: string | null
+  user_id: number
+  source_ip: string | null
+  user_name?: string | null
 }
 
 export async function listRemoteAccessSessions(): Promise<RemoteAccessSession[]> {
@@ -1266,12 +1310,6 @@ export async function createRemoteAccessSession(payload: {
   secret?: string
   remember_credential?: boolean
 }): Promise<RemoteAccessSession> {
-  console.info("[remote-access] session request", {
-    device_id: payload.device_id, protocol: payload.protocol, port: payload.port,
-    credential_id: payload.credential_id,
-    credential_id_present: payload.credential_id != null,
-    username_present: Boolean(payload.username), secret_present: Boolean(payload.secret),
-  })
   return requestJson<RemoteAccessSession>("/remote-access/sessions", {
     method: "POST",
     body: JSON.stringify({
@@ -1306,16 +1344,12 @@ export async function testRemoteAccess(payload: {
   device_id: number
   protocol: "ssh" | "telnet"
   port: number
-  username: string
-  secret: string
+  credential_id?: number
+  username?: string
+  secret?: string
   auth_type?: "password" | "private_key"
   remember_credential: boolean
 }): Promise<RemoteAccessTestResponse> {
-  console.info("[remote-access] test request", {
-    device_id: payload.device_id, protocol: payload.protocol, port: payload.port,
-    username_present: Boolean(payload.username), secret_present: Boolean(payload.secret),
-    auth_type: payload.auth_type ?? "password", remember_credential: payload.remember_credential,
-  })
   return requestJson<RemoteAccessTestResponse>("/remote-access/test", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -1724,6 +1758,7 @@ export async function streamChunkedDiscovery(
 export async function getDevice(deviceId: number): Promise<DeviceRecord> {
   return requestJson<DeviceRecord>(`/devices/${deviceId}`)
 }
+
 
 export interface DeviceHistoryResponse {
   device: Record<string, unknown>
@@ -2505,7 +2540,7 @@ export interface SNMPTopologyGraph {
 export async function getSNMPDeviceOverview(
   deviceId: number,
 ): Promise<SNMPDeviceOverview> {
-  return requestJson<SNMPDeviceOverview>(`/snmp/devices/${deviceId}/overview`)
+  return requestJson<SNMPDeviceOverview>(`/snmp/devices/${deviceId}/overview`, { cache: "no-store" })
 }
 
 export async function getSNMPSystemInfo(
