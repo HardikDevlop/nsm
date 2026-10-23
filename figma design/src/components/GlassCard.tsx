@@ -9,14 +9,16 @@ type Props = {
   role?: string
   tabIndex?: number
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void
+  id?: string
 }
 
 const GlassCard = forwardRef<HTMLDivElement, Props>(function GlassCard({
-  children, className = '', style, glow, onClick, role, tabIndex, onKeyDown,
+  children, className = '', style, glow, onClick, role, tabIndex, onKeyDown, id,
 }, ref) {
   return (
     <div
       ref={ref}
+      id={id}
       onClick={onClick}
       role={role}
       tabIndex={tabIndex}

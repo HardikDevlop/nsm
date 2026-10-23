@@ -13,6 +13,11 @@ const getCache = new Map<string, { expiresAt: number value: unknown }>()
 const inflightRequests = new Map<string, Promise<unknown>>()
 
 function buildUrl(path: string) {
+  // Windows Monitoring is mounted at the backend root (/windows), while the
+  // main CRUD API is mounted under /api/v1.
+  if (path.startsWith("/windows/")) {
+    return `${API_BASE.replace(/\/api\/v1$/, "")}${path}`
+  }
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`
 }
 
@@ -132,9 +137,10 @@ function friendlyApiMessage(status: number, detail: string): string {
     }
     return normalized || "The request could not be processed."
   }
-  if (status === 404) return "Device not found."
+  if (status === 404) return normalized || "Device not found."
   if (status === 409) {
-    if (/^DEVICE_ALREADY_CONNECTED:(ssh|telnet)$/i.test(normalized)) return normalized
+    if (/^DEVICE_ALREADY_CONNECTED:(ssh|telnet)$/i.test(normalized))
+      return normalized
     return "This item is already being processed."
   }
   if (status === 422) return "The submitted data is incomplete or invalid."
@@ -247,7 +253,13 @@ export async function requestJson<T>(
   // Report ranges can legitimately span months/years and require larger
   // aggregate queries than normal UI reads. Keep the normal guard for the
   // rest of the app, but allow report generation enough time to finish.
-  const timeoutMs = path.startsWith('/reports/management') ? 120_000 : 15_000
+  const timeoutMs = path.startsWith("/reports/management")
+    ? 120_000
+    : path.includes("/hardware/disks/inventory")
+      ? 45_000
+      : path.includes("/hardware/disks/health")
+        ? 30_000
+        : 15_000
   let didTimeout = false
   const timeoutId = window.setTimeout(() => {
     didTimeout = true
@@ -703,6 +715,7 @@ export interface DeviceRecord {
   firmware_version?: string | null
   vendor_name?: string | null
   device_type?: string | null
+  topology_metadata?: Record<string, unknown> | null
   last_status_change?: string | null
   topology_metadata?: {
     port?: string
@@ -1256,23 +1269,36 @@ export interface RemoteAccessCredentialRecord {
   updated_at: string
 }
 
-export async function listRemoteAccessCredentials(deviceId?: number): Promise<RemoteAccessCredentialRecord[]> {
+export async function listRemoteAccessCredentials(
+  deviceId?: number,
+): Promise<RemoteAccessCredentialRecord[]> {
   const suffix = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""
-  return requestJson<RemoteAccessCredentialRecord[]>(`/remote-access/credentials${suffix}`)
+  return requestJson<RemoteAccessCredentialRecord[]>(
+    `/remote-access/credentials${suffix}`,
+  )
 }
 
-export async function updateRemoteAccessCredential(id: number, payload: {
-  username?: string
-  secret?: string
-  port?: number
-  auth_type?: "password" | "private_key"
-}): Promise<RemoteAccessCredentialRecord> {
-  return requestJson<RemoteAccessCredentialRecord>(`/remote-access/credentials/${id}`, {
-    method: "PATCH", body: JSON.stringify(payload),
-  })
+export async function updateRemoteAccessCredential(
+  id: number,
+  payload: {
+    username?: string
+    secret?: string
+    port?: number
+    auth_type?: "password" | "private_key"
+  },
+): Promise<RemoteAccessCredentialRecord> {
+  return requestJson<RemoteAccessCredentialRecord>(
+    `/remote-access/credentials/${id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  )
 }
 
-export async function deleteRemoteAccessCredential(id: number): Promise<{ deleted: boolean; credential_id: number }> {
+export async function deleteRemoteAccessCredential(
+  id: number,
+): Promise<{ deleted: boolean credential_id: number }> {
   return requestJson(`/remote-access/credentials/${id}`, {
     method: "DELETE",
   })
@@ -1294,11 +1320,15 @@ export interface RemoteAccessSession {
 }
 
 export async function listRemoteAccessSessions(): Promise<RemoteAccessSession[]> {
-  return requestJson<RemoteAccessSession[]>("/remote-access/sessions", { cache: "no-store" })
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions", {
+    cache: "no-store",
+  })
 }
 
 export async function listRemoteAccessSessionHistory(): Promise<RemoteAccessSession[]> {
-  return requestJson<RemoteAccessSession[]>("/remote-access/sessions/history", { cache: "no-store" })
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions/history", {
+    cache: "no-store",
+  })
 }
 
 export async function createRemoteAccessSession(payload: {
@@ -1366,18 +1396,30 @@ export interface SSHHostKeyMetadata {
   status: "PENDING" | "TRUSTED" | "REVOKED"
 }
 
-export async function scanSSHHostKey(deviceId: number, port: number): Promise<SSHHostKeyMetadata> {
+export async function scanSSHHostKey(
+  deviceId: number,
+  port: number,
+): Promise<SSHHostKeyMetadata> {
   return requestJson<SSHHostKeyMetadata>("/remote-access/host-keys/scan", {
-    method: "POST", body: JSON.stringify({ device_id: deviceId, port }),
+    method: "POST",
+    body: JSON.stringify({ device_id: deviceId, port }),
   })
 }
 
 export async function trustSSHHostKey(id: number): Promise<SSHHostKeyMetadata> {
-  return requestJson<SSHHostKeyMetadata>(`/remote-access/host-keys/${id}/trust`, { method: "POST" })
+  return requestJson<SSHHostKeyMetadata>(
+    `/remote-access/host-keys/${id}/trust`,
+    { method: "POST" },
+  )
 }
 
-export async function revokeSSHHostKey(id: number): Promise<SSHHostKeyMetadata> {
-  return requestJson<SSHHostKeyMetadata>(`/remote-access/host-keys/${id}/revoke`, { method: "POST" })
+export async function revokeSSHHostKey(
+  id: number,
+): Promise<SSHHostKeyMetadata> {
+  return requestJson<SSHHostKeyMetadata>(
+    `/remote-access/host-keys/${id}/revoke`,
+    { method: "POST" },
+  )
 }
 
 /** Devices with an explicitly configured SNMP credential only. */
@@ -1759,6 +1801,346 @@ export async function getDevice(deviceId: number): Promise<DeviceRecord> {
   return requestJson<DeviceRecord>(`/devices/${deviceId}`)
 }
 
+export interface WindowsCredentialRecord {
+  id: number
+  device_id: number
+  auth_method: "password"
+  username: string
+  domain?: string | null
+  connection_host?: string | null
+  enabled: boolean
+  is_verified: boolean
+  last_verified_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WindowsConnectionTestResult {
+  ok: boolean
+  category: string
+  message: string
+}
+
+export async function listWindowsCredentials(
+  deviceId: number,
+): Promise<WindowsCredentialRecord[]> {
+  return requestJson<WindowsCredentialRecord[]>(
+    `/windows/devices/${deviceId}/credentials`,
+    { cache: "no-store" },
+  )
+}
+export async function listEnrolledWindowsDeviceIds(): Promise<number[]> {
+  const result = await requestJson<{ device_ids: number[] }>(
+    "/windows/devices/enrolled",
+    { cache: "no-store" },
+  )
+  return result.device_ids
+}
+
+export async function createWindowsCredential(
+  deviceId: number,
+  data: {
+    device_id: number
+    username: string
+    domain?: string
+    connection_host?: string
+    secret: string
+    enabled: boolean
+  },
+): Promise<WindowsCredentialRecord> {
+  return requestJson<WindowsCredentialRecord>(
+    `/windows/devices/${deviceId}/credentials`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+  )
+}
+
+export async function updateWindowsCredential(
+  deviceId: number,
+  credentialId: number,
+  data: {
+    username?: string
+    domain?: string
+    connection_host?: string
+    secret?: string
+    enabled?: boolean
+  },
+): Promise<WindowsCredentialRecord> {
+  return requestJson<WindowsCredentialRecord>(
+    `/windows/devices/${deviceId}/credentials/${credentialId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    },
+  )
+}
+
+export async function testWindowsConnection(
+  deviceId: number,
+): Promise<WindowsConnectionTestResult> {
+  return requestJson<WindowsConnectionTestResult>(
+    `/windows/devices/${deviceId}/connection-test`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  )
+}
+
+export interface WindowsSystemSnapshot {
+  device_id: number
+  collected_at: string | null
+  system_info: { hostname?: string caption?: string version?: string }
+  cpu: { usage_percent?: number logical_processors?: number }
+  memory: { total_bytes?: number free_bytes?: number usage_percent?: number }
+  disks: Array<{
+    device_id: string
+    volume_name?: string
+    size_bytes?: number
+    free_bytes?: number
+    usage_percent?: number
+  }>
+}
+export async function getWindowsSystemInfo(
+  deviceId: number,
+): Promise<WindowsSystemSnapshot> {
+  return requestJson(`/windows/devices/${deviceId}/system-info`, {
+    cache: "no-store",
+  })
+}
+export async function fetchWindowsSystemInfo(
+  deviceId: number,
+): Promise<WindowsSystemSnapshot> {
+  return requestJson(`/windows/devices/${deviceId}/system-info/fetch`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+}
+
+export type WindowsMetricModule = "system" | "cpu" | "memory" | "disk" | "network"
+
+export type WindowsMemoryCounterStatus = "ok" | "unsupported" | "unavailable" | "permission_denied" | "collection_failed"
+export interface WindowsMemoryCounter {
+  value: number | null
+  unit: string
+  status: WindowsMemoryCounterStatus
+  source?: string
+  error?: string | null
+}
+export type WindowsMemoryCounterName = "available_mbytes" | "pages_per_sec" | "page_reads_per_sec" | "page_writes_per_sec" | "page_faults_per_sec" | "committed_bytes" | "commit_limit" | "cache_bytes" | "pool_paged_bytes" | "pool_nonpaged_bytes" | "percent_committed_bytes_in_use"
+export interface WindowsMemoryData {
+  total_bytes: number | null
+  free_bytes: number | null
+  used_bytes: number | null
+  usage_percent: number | null
+  counters?: Partial<Record<WindowsMemoryCounterName, WindowsMemoryCounter>>
+}
+export type WindowsDiskCounterStatus = "ok" | "unsupported" | "unavailable" | "permission_denied" | "collection_failed"
+export interface WindowsDiskCounter {
+  value: number | null
+  unit: string
+  status: WindowsDiskCounterStatus
+  source?: string
+  error?: string | null
+}
+export type WindowsDiskMetricName = "read_iops" | "write_iops" | "total_iops" | "read_bytes_per_sec" | "write_bytes_per_sec" | "total_bytes_per_sec" | "read_latency_ms" | "write_latency_ms" | "average_latency_ms" | "average_queue_length" | "current_queue_length" | "split_io_per_sec" | "percent_disk_time"
+export interface WindowsDiskPerformanceInstance {
+  instance: string
+  metrics: Partial<Record<WindowsDiskMetricName, WindowsDiskCounter>>
+}
+export interface WindowsDiskAggregatePerformance {
+  logical: Partial<Record<WindowsDiskMetricName, WindowsDiskCounter>> | null
+  physical: Partial<Record<WindowsDiskMetricName, WindowsDiskCounter>> | null
+}
+export interface WindowsDiskPerformance {
+  logical: WindowsDiskPerformanceInstance[]
+  physical: WindowsDiskPerformanceInstance[]
+  aggregate: WindowsDiskAggregatePerformance
+}
+export interface WindowsDiskCapacity {
+  device_id: string
+  volume_name: string
+  size_bytes: number
+  free_bytes: number
+  used_bytes: number
+  usage_percent: number | null
+  performance?: WindowsDiskPerformance
+}
+export interface WindowsDiskInventoryPhysical {
+  device_id: string | null; index: number | null; model: string | null; serial_number: string | null
+  pnp_device_id: string | null; interface_type: string | null; media_type: string | null; size_bytes: number | null
+  firmware_revision: string | null; status: string | null; partitions: number | null; bytes_per_sector: number | null
+}
+export interface WindowsDiskInventoryPartition {
+  device_id: string | null; disk_index: number | null; index: number | null; name: string | null
+  size_bytes: number | null; starting_offset: number | null; type: string | null
+  boot_partition: boolean | null; primary_partition: boolean | null; logical_volumes: string[]
+}
+export interface WindowsDiskInventoryModern {
+  FriendlyName?: string | null; MediaType?: string | null; BusType?: string | null; HealthStatus?: string | null
+  OperationalStatus?: string | null; Size?: string | null; FirmwareVersion?: string | null
+}
+export interface WindowsDiskInventory {
+  device_id: number
+  physical_disks: WindowsDiskInventoryPhysical[]
+  partitions: WindowsDiskInventoryPartition[]
+  modern_physical_disks: WindowsDiskInventoryModern[]
+  modern_status: "ok" | "unsupported" | "unavailable" | "permission_denied" | string
+  modern_error: string | null
+}
+
+export interface WindowsMetricSnapshot {
+  device_id: number
+  module: WindowsMetricModule
+  collected_at: string | null
+  data: any
+}
+export async function getWindowsMetric(
+  deviceId: number,
+  module: WindowsMetricModule,
+): Promise<WindowsMetricSnapshot> {
+  return requestJson(`/windows/devices/${deviceId}/metrics/${module}`, {
+    cache: "no-store",
+  })
+}
+export async function fetchWindowsMetric(
+  deviceId: number,
+  module: WindowsMetricModule,
+): Promise<WindowsMetricSnapshot> {
+  return requestJson(`/windows/devices/${deviceId}/metrics/${module}/fetch`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+}
+export async function getWindowsDiskInventory(deviceId: number): Promise<WindowsDiskInventory> {
+  return requestJson(`/windows/devices/${deviceId}/hardware/disks/inventory`, { cache: "no-store" })
+}
+export type WindowsDiskHealthStatus = "ok" | "unsupported" | "unavailable" | "permission_denied" | "collection_failed"
+export interface WindowsDiskHealthMetric {
+  value: number | null
+  unit: string
+  status: WindowsDiskHealthStatus
+  source?: string
+  error?: string | null
+}
+export interface WindowsDiskHealthPhysical {
+  device_id: string | null
+  friendly_name: string | null
+  health_status: string | null
+  operational_status: string | null
+  media_type: string | null
+  bus_type: string | null
+  size: string | number | null
+  firmware_version: string | null
+  status: WindowsDiskHealthStatus
+  source: string
+  error: string | null
+}
+export interface WindowsDiskReliabilityRecord {
+  device_id: string | null
+  physical_disk_device_id: string | null
+  association_status: "matched" | "unavailable" | string
+  metrics: Record<string, WindowsDiskHealthMetric>
+}
+export interface WindowsDiskHealthResponse {
+  device_id: number
+  collected_at: string | null
+  provider_status: Record<string, WindowsDiskHealthStatus | string>
+  physical_disks: WindowsDiskHealthPhysical[]
+  reliability_counters: WindowsDiskReliabilityRecord[]
+  correlation_status: "reliable" | "unavailable" | string
+  provider_error: string | null
+}
+export async function getWindowsDiskHealth(deviceId: number): Promise<WindowsDiskHealthResponse> {
+  return requestJson(`/windows/devices/${deviceId}/hardware/disks/health`, { cache: "no-store" })
+}
+
+export interface WindowsHardwareSnapshot {
+  device_id: number
+  collected_at: string | null
+  computer_system: Record<string, unknown>
+  system_product: Record<string, unknown>
+  baseboard: Record<string, unknown>
+  bios: Record<string, unknown>
+  processors: Array<Record<string, unknown>>
+  memory_modules: Array<Record<string, unknown>>
+  memory_arrays: Array<Record<string, unknown>>
+}
+export async function getWindowsHardware(deviceId: number): Promise<WindowsHardwareSnapshot> {
+  return requestJson(`/windows/devices/${deviceId}/hardware`, { cache: "no-store" })
+}
+export async function fetchWindowsHardware(deviceId: number): Promise<WindowsHardwareSnapshot> {
+  return requestJson(`/windows/devices/${deviceId}/hardware/fetch`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+}
+export interface WindowsNativeSensor {
+  sensor_id: string; sensor_name: string; name?: string; sensor_type: string; value: number | null; unit: string; source: string
+  status: "ok" | "unsupported" | "unavailable" | "permission_denied" | "provider_not_installed" | "collection_failed"; error?: string | null; collected_at: string
+  identifier?: string | null; hardware_id?: string | null
+}
+export interface WindowsSensorProviderStatus { provider: string; status: WindowsNativeSensor["status"]; error?: string | null; sensors: WindowsNativeSensor[] }
+export async function discoverWindowsHardwareSensors(deviceId: number): Promise<{ device_id: number; sensors: WindowsNativeSensor[]; providers?: WindowsSensorProviderStatus[] }> {
+  return requestJson(`/windows/devices/${deviceId}/hardware/sensors/discover`, { cache: "no-store" })
+}
+
+export interface WindowsSystemEvent {
+  id?: number
+  record_id: number
+  time_created: string
+  event_id: number
+  provider: string | null
+  level: string | null
+  machine_name: string | null
+  message: string | null
+  user_id?: string | null
+}
+
+export interface WindowsSystemEventsResponse {
+  device_id: number
+  channel: string
+  items: WindowsSystemEvent[]
+  offset: number
+  limit: number
+}
+
+export interface WindowsSystemEventsFetchResponse {
+  device_id: number
+  channel: string
+  fetched_count: number
+  inserted_count: number
+  truncated: boolean
+  collected_at: string
+}
+
+export function getWindowsSystemEvents(
+  deviceId: number,
+  offset = 0,
+  limit = 50,
+  filters: { eventId?: number; level?: string; startTime?: string; endTime?: string } = {},
+): Promise<WindowsSystemEventsResponse> {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (filters.eventId != null) params.set("event_ids", String(filters.eventId))
+  if (filters.level) params.set("level", filters.level)
+  if (filters.startTime) params.set("start_time", filters.startTime)
+  if (filters.endTime) params.set("end_time", filters.endTime)
+  return requestJson(
+    `/windows/devices/${deviceId}/events/system?${params.toString()}`,
+    { cache: "no-store" },
+  )
+}
+
+export function fetchWindowsSystemEvents(
+  deviceId: number,
+  maxRecords = 100,
+): Promise<WindowsSystemEventsFetchResponse> {
+  return requestJson(`/windows/devices/${deviceId}/events/system/fetch?max_records=${Math.min(maxRecords, 20)}`, {
+    method: "POST",
+  })
+}
 
 export interface DeviceHistoryResponse {
   device: Record<string, unknown>
@@ -1996,6 +2378,7 @@ export async function createDevice(data: {
   serial_number?: string
   firmware_version?: string
   site_id?: number
+  topology_metadata?: Record<string, unknown>
 }): Promise<DeviceRecord> {
   return requestJson("/devices", {
     method: "POST",
@@ -2540,7 +2923,9 @@ export interface SNMPTopologyGraph {
 export async function getSNMPDeviceOverview(
   deviceId: number,
 ): Promise<SNMPDeviceOverview> {
-  return requestJson<SNMPDeviceOverview>(`/snmp/devices/${deviceId}/overview`, { cache: "no-store" })
+  return requestJson<SNMPDeviceOverview>(`/snmp/devices/${deviceId}/overview`, {
+    cache: "no-store",
+  })
 }
 
 export async function getSNMPSystemInfo(

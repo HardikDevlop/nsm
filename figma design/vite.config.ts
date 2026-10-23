@@ -40,6 +40,15 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           xfwd: true,
         },
+        '/windows': {
+          target: 'http://127.0.0.1:8000',
+          ws: true,
+          changeOrigin: true,
+          xfwd: true,
+          // Do not proxy the React route /windows-devices. Only backend
+          // endpoints under /windows/ belong on this proxy.
+          bypass: (req) => req.url?.startsWith('/windows/') ? undefined : req.url,
+        },
       },
       watch: { ignored: ['**/.figma/**'] },
     },

@@ -22,6 +22,7 @@ const DeviceMonitoringList = lazyRetry(
   () => import("./pages/DeviceMonitoringList"),
 )
 const AllDevices = lazyRetry(() => import("./pages/AllDevices"))
+const WindowsDevices = lazyRetry(() => import("./pages/WindowsDevices"))
 const DeviceDetails = lazyRetry(() => import("./pages/DeviceDetails"))
 const RoleManagement = lazyRetry(() => import("./pages/RoleManagement"))
 const UserManagement = lazyRetry(() => import("./pages/UserManagement"))
@@ -143,6 +144,18 @@ export const router = createBrowserRouter([
           {
             path: "devices",
             Component: withPermission(AllDevices, "device_monitoring:read"),
+          },
+          {
+            path: "windows-devices",
+            Component: withPermission(WindowsDevices, "device_monitoring:read"),
+          },
+          {
+            path: "windows-devices/:deviceId",
+            Component: withPermission(WindowsDevices, "device_monitoring:read"),
+          },
+          {
+            path: "windows-devices/:deviceId/:section",
+            Component: withPermission(WindowsDevices, "device_monitoring:read"),
           },
           {
             path: "devices/:deviceId",

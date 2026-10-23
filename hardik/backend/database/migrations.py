@@ -185,6 +185,12 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20261003_0057_remote_access_session_invariants", description="Enforce Remote Access session lifecycle state and active-session uniqueness"),
     Migration(migration_id="20261006_0058_ssh_host_key_verification_timestamp", description="Add SSH host-key verification timestamp column"),
     Migration(migration_id="20261006_0059_latest_interface_mac_address", description="Persist interface MAC addresses in scheduler snapshots"),
+    Migration(migration_id="20261013_0060_windows_credentials", description="Create additive encrypted Windows credential table"),
+    Migration(migration_id="20261016_0061_windows_connection_host", description="Add dedicated Windows WinRM connection hostname"),
+    Migration(migration_id="20261016_0062_windows_system_snapshots", description="Persist manual Windows system metric snapshots"),
+    Migration(migration_id="20261016_0063_windows_metric_snapshots", description="Persist independent Windows monitoring modules"),
+    Migration(migration_id="20261017_0064_windows_event_logs", description="Persist deduplicated historical Windows event logs"),
+    Migration(migration_id="20261017_0065_windows_hardware_snapshots", description="Persist latest Windows hardware identity snapshots"),
 )
 
 
@@ -381,6 +387,27 @@ def _ensure_linux_server_monitoring_tables(engine: Engine) -> None:
     for table in LINUX_MONITORING_TABLES:
         if table.name not in present_tables:
             table.create(bind=engine)
+
+
+def _ensure_windows_credentials_table(engine: Engine) -> None:
+    from backend.windows_monitoring.models import WINDOWS_MONITORING_TABLES
+
+    present_tables = set(inspect(engine).get_table_names())
+    for table in WINDOWS_MONITORING_TABLES:
+        if table.name not in present_tables:
+            table.create(bind=engine)
+
+
+def _ensure_windows_hardware_table(engine: Engine) -> None:
+    # The application imports backend.models during startup, but this helper
+    # must also be safe when invoked directly by a migration/preflight tool.
+    # Importing it registers Device on the shared Base.metadata so the FK can
+    # resolve while compiling WindowsHardwareSnapshot.__table__.create().
+    import backend.models  # noqa: F401
+    from backend.windows_monitoring.models import WindowsHardwareSnapshot
+
+    if "windows_hardware_snapshots" not in set(inspect(engine).get_table_names()):
+        WindowsHardwareSnapshot.__table__.create(bind=engine)
 
 
 def _ensure_linux_metric_columns(engine: Engine) -> None:
@@ -1315,6 +1342,48 @@ def run_migrations(engine: Engine) -> list[str]:
         elif migration.migration_id == "20261006_0059_latest_interface_mac_address":
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE latest_interface ADD COLUMN IF NOT EXISTS mac_address VARCHAR(32)"))
+        elif migration.migration_id == "20261013_0060_windows_credentials":
+            _ensure_windows_credentials_table(engine)
+        elif migration.migration_id == "20261016_0061_windows_connection_host":
+            with engine.begin() as connection:
+                inspector = inspect(connection)
+                if "windows_credentials" in inspector.get_table_names():
+                    columns = {column["name"] for column in inspector.get_columns("windows_credentials")}
+                    if "connection_host" not in columns:
+                        connection.execute(text('ALTER TABLE windows_credentials ADD COLUMN "connection_host" VARCHAR(255)'))
+        elif migration.migration_id == "20261016_0062_windows_system_snapshots":
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE IF NOT EXISTS windows_system_snapshots (id SERIAL PRIMARY KEY, device_id INTEGER NOT NULL UNIQUE REFERENCES devices(id) ON DELETE CASCADE, collected_at TIMESTAMP NOT NULL, system_info JSON NOT NULL DEFAULT '{}', cpu JSON NOT NULL DEFAULT '{}', memory JSON NOT NULL DEFAULT '{}', disks JSON NOT NULL DEFAULT '[]')"))
+        elif migration.migration_id == "20261016_0063_windows_metric_snapshots":
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE IF NOT EXISTS windows_metric_snapshots (id SERIAL PRIMARY KEY, device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE, module VARCHAR(20) NOT NULL, collected_at TIMESTAMP NOT NULL, data JSON NOT NULL DEFAULT '{}', CONSTRAINT uq_windows_metric_snapshots_device_module UNIQUE (device_id, module))"))
+        elif migration.migration_id == "20261017_0064_windows_event_logs":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS windows_event_logs (
+                    id SERIAL PRIMARY KEY,
+                    device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                    channel VARCHAR(120) NOT NULL,
+                    record_id BIGINT NOT NULL,
+                    time_created TIMESTAMP NOT NULL,
+                    event_id INTEGER NOT NULL,
+                    provider VARCHAR(255),
+                    level VARCHAR(80),
+                    machine_name VARCHAR(255),
+                    message TEXT,
+                    user_id VARCHAR(255),
+                    collected_at TIMESTAMP NOT NULL,
+                    CONSTRAINT uq_windows_event_logs_device_channel_record UNIQUE (device_id, channel, record_id)
+                )"""))
+                for statement in (
+                    'CREATE INDEX IF NOT EXISTS ix_windows_event_logs_device_id ON windows_event_logs (device_id)',
+                    'CREATE INDEX IF NOT EXISTS ix_windows_event_logs_channel ON windows_event_logs (channel)',
+                    'CREATE INDEX IF NOT EXISTS ix_windows_event_logs_time_created ON windows_event_logs (time_created)',
+                    'CREATE INDEX IF NOT EXISTS ix_windows_event_logs_event_id ON windows_event_logs (event_id)',
+                    'CREATE INDEX IF NOT EXISTS ix_windows_event_logs_level ON windows_event_logs (level)',
+                ):
+                    connection.execute(text(statement))
+        elif migration.migration_id == "20261017_0065_windows_hardware_snapshots":
+            _ensure_windows_hardware_table(engine)
         elif migration.migration_id == "20260930_0052_audit_log_context_fields":
             with engine.begin() as connection:
                 columns = {

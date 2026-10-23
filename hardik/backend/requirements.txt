@@ -1,4 +1,5 @@
 fastapi>=0.111
+httpx==0.28.1
 uvicorn[standard]>=0.30
 SQLAlchemy>=2.0
 psycopg[binary]>=3.1
@@ -14,6 +15,8 @@ APScheduler>=3.10,<4.0
 openpyxl>=3.1,<4.0
 paramiko>=3.4,<4.0
 redis>=5.0,<6.0
+pywinrm==0.5.0
+pypsrp==0.9.1
 
 # Test-only property-based checks
 hypothesis>=6.100
@@ -70,7 +73,42 @@ hypothesis>=6.100
 
 
 
+Implement Phase 2A: Native Windows Hardware Sensor Discovery in Agnigate NMS.
 
+Scope: Windows hardware sensors only.
+
+Requirements:
+1. Reuse existing secure WinRM HTTPS/CIM infrastructure.
+2. Discover available native sensor classes:
+   - Win32_TemperatureProbe
+   - Win32_Fan
+   - Win32_VoltageProbe
+   - MSAcpi_ThermalZoneTemperature (root/wmi)
+3. Check namespace availability, permissions and actual returned values.
+4. Normalize available readings into:
+   - sensor_name
+   - sensor_type
+   - value
+   - unit
+   - source
+   - status
+   - collected_at
+5. Convert thermal-zone values correctly where applicable.
+6. Do not label ACPI thermal-zone values as CPU package temperature.
+7. Return unsupported, unavailable or permission_denied when appropriate.
+8. Add a read-only sensor discovery API.
+9. Display discovered sensors and their availability in the existing Windows Hardware UI.
+10. Add focused tests for missing classes, invalid readings, namespace failures and compatibility.
+
+Restrictions:
+- Do not install LibreHardwareMonitor or any agent yet.
+- Do not modify unrelated modules.
+- Do not weaken TLS, credentials or RBAC.
+- Preserve all Phase 1 CPU functionality.
+- Do not restart services.
+- Keep changes small and backward compatible.
+
+After implementation, report changed files, supported sensors, limitations and test results.
 
 
 

@@ -15,6 +15,10 @@ def configure_logging() -> None:
     if any(isinstance(handler, logging.FileHandler) and str(log_dir) in handler.baseFilename for handler in root.handlers):
         return
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    if not any(isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler) for handler in root.handlers):
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+        root.addHandler(console)
     root_file = TimedRotatingFileHandler(
         log_dir / "events.log", when="midnight", interval=1,
         backupCount=31, encoding="utf-8", delay=True,

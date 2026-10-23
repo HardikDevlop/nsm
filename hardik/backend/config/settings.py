@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     secret_key: str = "change-this-secret-key"
     access_token_expire_minutes: int = 1440
     credential_encryption_key: str = ""
+    # Server-side trust anchor for Windows WinRM HTTPS; never supplied by API callers.
+    windows_ca_trust_path: str = ""
     backend_cors_origins: str = "http://localhost:3000,http://localhost:5173"
     trusted_proxy_ips: str = ""
     smtp_host: str = ""
