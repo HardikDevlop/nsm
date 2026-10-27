@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import GlassCard from '../components/GlassCard'
 import { getDailyReport, type DailyReport, type DailyReportDevice } from '../lib/api'
+import { formatBytesDecimal, formatLatency, formatPercentage, formatUptime } from '../unitFormatting'
 
 let xlsxModulePromise: Promise<typeof import('xlsx')> | null = null
 
@@ -23,20 +24,10 @@ const statusStyle = (s: string) =>
 
 /* ── tiny helpers ───────────────────────────────────────────────────────── */
 const na = (v: unknown): string => (v === null || v === undefined) ? 'N/A' : String(v)
-const pct = (v: number | null | undefined) => v != null ? `${v.toFixed(1)}%` : 'N/A'
-const ms  = (v: number | null | undefined) => v != null ? `${v.toFixed(1)} ms` : 'N/A'
-const fmtBytes = (b: number | undefined | null) => {
-  if (!b) return '0 B'
-  if (b >= 1_073_741_824) return `${(b / 1_073_741_824).toFixed(2)} GB`
-  if (b >= 1_048_576)     return `${(b / 1_048_576).toFixed(1)} MB`
-  if (b >= 1024)          return `${(b / 1024).toFixed(1)} KB`
-  return `${b} B`
-}
-const fmtSec = (s: number) => {
-  if (!s) return '0s'
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
-  return h ? `${h}h ${m}m ${sec}s` : m ? `${m}m ${sec}s` : `${sec}s`
-}
+const pct = (v: number | null | undefined) => formatPercentage(v)
+const ms  = (v: number | null | undefined) => formatLatency(v)
+const fmtBytes = (b: number | undefined | null) => formatBytesDecimal(b)
+const fmtSec = (s: number | null | undefined) => formatUptime(s)
 const ts = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '—'
 

@@ -65,6 +65,61 @@ PROCESS_INSTANCE_ID = str(uuid.uuid4())
 _REMOTE_ACCESS_STARTUP_RECONCILIATION_INVOCATIONS = 0
 
 
+async def _cleanup_partial_startup(
+    *, flow_ingest=None, flow_receiver=None, syslog_service=None,
+    remote_access_db=None, remote_access_session_manager=None,
+    scheduler_lease=None, scheduler_lease_owned=False, lease_task=None,
+    linux_scheduler=None,
+) -> None:
+    """Best-effort cleanup for resources created before lifespan yield."""
+    if flow_receiver is not None:
+        try:
+            await flow_receiver.stop()
+        except Exception:
+            logger.exception("partial_startup_flow_receiver_cleanup_failed")
+    if flow_ingest is not None:
+        try:
+            await flow_ingest.stop()
+        except Exception:
+            logger.exception("partial_startup_flow_cleanup_failed")
+    if syslog_service is not None:
+        try:
+            await syslog_service.stop()
+        except Exception:
+            logger.exception("partial_startup_syslog_cleanup_failed")
+    if linux_scheduler is not None:
+        try:
+            await linux_scheduler.shutdown()
+        except Exception:
+            logger.exception("partial_startup_linux_scheduler_cleanup_failed")
+    if lease_task is not None:
+        lease_task.cancel()
+        await asyncio.gather(lease_task, return_exceptions=True)
+    if scheduler_lease_owned:
+        try:
+            await shutdown_polling_scheduler()
+        except Exception:
+            logger.exception("partial_startup_polling_cleanup_failed")
+    if scheduler_lease is not None and scheduler_lease_owned:
+        try:
+            scheduler_lease.release()
+        except Exception:
+            logger.exception("partial_startup_scheduler_lease_release_failed")
+    if remote_access_session_manager is not None:
+        try:
+            for item in list(remote_access_session_manager.list_active_sessions()):
+                remote_access_session_manager.disconnect_session(item.session_uuid, reason="Startup failed")
+            if remote_access_db is not None:
+                remote_access_db.commit()
+        except Exception:
+            logger.exception("partial_startup_remote_access_cleanup_failed")
+    if remote_access_db is not None:
+        try:
+            remote_access_db.close()
+        except Exception:
+            logger.exception("partial_startup_remote_access_db_cleanup_failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _REMOTE_ACCESS_STARTUP_RECONCILIATION_INVOCATIONS
@@ -91,26 +146,33 @@ async def lifespan(app: FastAPI):
     flow_ingest = None
     flow_receiver = None
     if settings.flow_enabled:
-        flow_ingest = FlowIngestService(SessionLocal)
-        await flow_ingest.start()
-        flow_receiver = FlowReceiver(
-            flow_ingest,
-            bind_host=settings.flow_bind_host,
-            ipfix_port=settings.flow_ipfix_port,
-            sflow_port=settings.flow_sflow_port,
-        )
-        await flow_receiver.start()
+        try:
+            flow_ingest = FlowIngestService(SessionLocal)
+            await flow_ingest.start()
+            flow_receiver = FlowReceiver(
+                flow_ingest,
+                bind_host=settings.flow_bind_host,
+                ipfix_port=settings.flow_ipfix_port,
+                sflow_port=settings.flow_sflow_port,
+            )
+            await flow_receiver.start()
+        except Exception:
+            await _cleanup_partial_startup(flow_ingest=flow_ingest, flow_receiver=flow_receiver)
+            raise
     app.state.flow_ingest = flow_ingest
     app.state.flow_receiver = flow_receiver
     syslog_service = None
+    syslog_start_failed = False
     if settings.syslog_enabled:
         syslog_service = SyslogIngestionService(SessionLocal)
         try:
             await syslog_service.start(settings.syslog_bind_host, settings.syslog_udp_port, settings.syslog_tcp_port, settings.syslog_enable_udp, settings.syslog_enable_tcp)
         except Exception:
             logger.exception("syslog_receiver_startup_failed")
-            syslog_service = None
-    app.state.syslog = syslog_service
+            # Retain the object so the later startup-failure path can attempt
+            # cleanup if another initialization step fails.
+            syslog_start_failed = True
+    app.state.syslog = None if syslog_start_failed else syslog_service
 
     app.state.remote_access_db = SessionLocal()
     app.state.remote_access_session_manager = SessionManager(app.state.remote_access_db)
@@ -132,21 +194,40 @@ async def lifespan(app: FastAPI):
         (asyncio.get_running_loop().time() - reconciliation_started) * 1000,
     )
 
-    # Start centralized SNMP polling scheduler
+    # Start centralized SNMP polling scheduler. If a later startup step fails,
+    # clean up resources already created before lifespan reaches yield.
     app.state.scheduler_lease = SchedulerLease()
-    app.state.scheduler_lease_owned = await asyncio.to_thread(app.state.scheduler_lease.acquire)
-    scheduler = await get_polling_scheduler() if app.state.scheduler_lease_owned else None
-    app.state.snmp_polling = scheduler
-    set_report_scheduler(scheduler)
-    restore_report_schedules()
-    register_daily_report_job(scheduler)
-    lease_task = asyncio.create_task(_supervise_scheduler_lease(app))
-    linux_scheduler = LinuxMonitoringScheduler()
-    app.state.linux_monitoring_scheduler = linux_scheduler
-    await linux_scheduler.restore_enabled_servers()
-    # Restore the singleton ICMP registry from persisted device intent. The
-    # engine's start_all() is idempotent and prevents duplicate loops/devices.
-    await asyncio.to_thread(get_engine().restore_enabled_devices)
+    app.state.scheduler_lease_owned = False
+    scheduler = None
+    lease_task = None
+    linux_scheduler = None
+    try:
+        app.state.scheduler_lease_owned = await asyncio.to_thread(app.state.scheduler_lease.acquire)
+        scheduler = await get_polling_scheduler() if app.state.scheduler_lease_owned else None
+        app.state.snmp_polling = scheduler
+        set_report_scheduler(scheduler)
+        restore_report_schedules()
+        register_daily_report_job(scheduler)
+        lease_task = asyncio.create_task(_supervise_scheduler_lease(app))
+        linux_scheduler = LinuxMonitoringScheduler()
+        app.state.linux_monitoring_scheduler = linux_scheduler
+        await linux_scheduler.restore_enabled_servers()
+        # Restore the singleton ICMP registry from persisted device intent. The
+        # engine's start_all() is idempotent and prevents duplicate loops/devices.
+        await asyncio.to_thread(get_engine().restore_enabled_devices)
+    except Exception:
+        await _cleanup_partial_startup(
+            flow_ingest=flow_ingest, flow_receiver=flow_receiver,
+            syslog_service=syslog_service,
+            remote_access_db=app.state.remote_access_db,
+            remote_access_session_manager=app.state.remote_access_session_manager,
+            scheduler_lease=app.state.scheduler_lease,
+            scheduler_lease_owned=app.state.scheduler_lease_owned,
+            lease_task=lease_task, linux_scheduler=linux_scheduler,
+        )
+        app.state.scheduler_lease_owned = False
+        app.state.snmp_polling = None
+        raise
     yield
     if flow_receiver is not None:
         await flow_receiver.stop()

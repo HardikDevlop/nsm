@@ -17,6 +17,7 @@ import {
   type DeviceRecord,
 } from '../lib/api'
 import { formatISTTime } from '../time'
+import { formatLatency, formatUptime } from '../unitFormatting'
 
 const ttStyle = { background: 'rgba(8,25,55,0.95)', border: '1px solid rgba(0,212,255,0.3)', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--t-text, #c8d8ee)' }
 
@@ -27,11 +28,7 @@ function liveStatusLabel(status: string): string {
 }
 
 function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  return `${h}h ${m}m`
+  return formatUptime(seconds)
 }
 
 function formatTimestamp(ts: string | null | undefined): string {
@@ -343,7 +340,7 @@ export default function DeviceMonitoring() {
                   <div className="font-display text-sm tracking-wide" style={{ color: 'var(--t-text, #c8d8ee)' }}>{device.hostname}</div>
                   <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address}</div>
                   {liveRtt !== null && liveRtt !== undefined ? (
-                    <div className="font-mono text-xs mt-0.5" style={{ color: '#00d4ff' }}>RTT: {liveRtt.toFixed(1)}ms</div>
+                    <div className="font-mono text-xs mt-0.5" style={{ color: '#00d4ff' }}>RTT: {formatLatency(liveRtt)}</div>
                   ) : null}
                   {liveLastCheck ? (
                     <div className="font-mono text-xs mt-0.5" style={{ color: 'var(--t-muted, #8899bb)' }}>Last check: {formatTimestamp(liveLastCheck)}</div>
@@ -474,7 +471,7 @@ export default function DeviceMonitoring() {
                         <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.status === 'up' ? '#00ff88' : entry.status === 'down' ? '#ff3366' : '#ffaa00' }} />
                         <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{liveStatusLabel(entry.status)}</span>
                       </div>
-                      <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{entry.rtt_ms !== null ? `${entry.rtt_ms.toFixed(1)}ms` : 'timeout'}</span>
+                      <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{entry.rtt_ms !== null ? formatLatency(entry.rtt_ms) : 'timeout'}</span>
                       <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #667799)' }}>{formatTimestamp(entry.time)}</span>
                     </div>
                   ))}

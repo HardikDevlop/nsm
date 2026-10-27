@@ -389,13 +389,7 @@ export function getModuleConfig(moduleId: string): SNMPModuleConfig | undefined 
 }
 
 export function formatBytes(bytes: number | undefined | null): string {
-  if (!bytes || bytes === 0) return '—';
-  const abs = Math.abs(bytes);
-  if (abs >= 1_099_511_627_776) return `${(bytes / 1_099_511_627_776).toFixed(2)} TB`;
-  if (abs >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(2)} GB`;
-  if (abs >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
-  if (abs >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${bytes} B`;
+  return formatBytesBinary(bytes, { na: '—' });
 }
 
 export function formatSpeed(bps: number | undefined | null): string {
@@ -409,7 +403,7 @@ export function formatSpeed(bps: number | undefined | null): string {
 
 export function formatRate(mbps: number | undefined | null): string {
   if (mbps === undefined || mbps === null || !Number.isFinite(Number(mbps))) return '—';
-  return `${Number(mbps).toFixed(2)} Mbps`;
+  return formatBitsPerSecond(Number(mbps) * 1_000_000, { na: '—', decimals: 2 });
 }
 
 export function formatSensorValue(sensor: any): string {
@@ -447,3 +441,4 @@ export function getStatusColor(status: string): string {
   }
   return '#8899bb';
 }
+import { formatBitsPerSecond, formatBytesBinary } from '../../../unitFormatting';

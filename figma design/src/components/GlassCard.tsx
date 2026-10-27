@@ -23,8 +23,8 @@ const GlassCard = forwardRef<HTMLDivElement, Props>(function GlassCard({
       role={role}
       tabIndex={tabIndex}
       onKeyDown={onKeyDown}
-      className={`glass rounded-xl ${onClick ? 'cursor-pointer transition-colors hover:border-[var(--t-text-secondary)]' : ''} ${className}`}
-      style={style}
+      className={`glass rounded-xl border ${onClick ? 'cursor-pointer transition-colors hover:border-[var(--t-text-secondary)]' : ''} ${className}`}
+      style={{ borderColor: 'var(--t-border)', background: 'var(--t-card)', boxShadow: '0 8px 24px color-mix(in srgb, var(--t-bg) 10%, transparent)', ...style }}
     >
       {children}
     </div>

@@ -9,7 +9,7 @@ const GET_CACHE_PREFIX = "nms.api.cache.v1:"
 
 let authToken: string | null = null
 let authPromise: Promise<string> | null = null
-const getCache = new Map<string, { expiresAt: number value: unknown }>()
+const getCache = new Map<string, { expiresAt: number; value: unknown }>()
 const inflightRequests = new Map<string, Promise<unknown>>()
 
 function buildUrl(path: string) {
@@ -37,10 +37,14 @@ export async function getBranding(
 
 /** Load token from localStorage if present. Does NOT auto-login. */
 async function ensureAuth(): Promise<string> {
+  // Keep the in-memory token aligned with the browser session. This matters
+  // after login/logout in another tab and prevents protected requests from
+  // being sent with a stale or empty Authorization header.
+  const cached = window.localStorage.getItem("nms_access_token")
+  if (cached && cached !== authToken) authToken = cached
   if (authToken) return authToken
   if (authPromise) return authPromise
 
-  const cached = window.localStorage.getItem("nms_access_token")
   if (cached) {
     authToken = cached
     return cached
@@ -61,7 +65,7 @@ function readCached<T>(key: string): T | null {
   try {
     const persisted = window.sessionStorage.getItem(`${GET_CACHE_PREFIX}${key}`)
     if (!persisted) return null
-    const parsed = JSON.parse(persisted) as { expiresAt?: number value?: T }
+    const parsed = JSON.parse(persisted) as { expiresAt?: number; value?: T }
     if (!parsed?.expiresAt || parsed.expiresAt <= now) {
       window.sessionStorage.removeItem(`${GET_CACHE_PREFIX}${key}`)
       return null
@@ -228,6 +232,7 @@ export async function requestJson<T>(
   path: string,
   init: RequestInit = {},
   retryUnauthorized = true,
+  safeErrors = false,
 ): Promise<T> {
   const token = await ensureAuth()
   const method = (init.method ?? "GET").toUpperCase()
@@ -277,25 +282,31 @@ export async function requestJson<T>(
   }
 
   const startedAt = performance.now()
+  const headers = new Headers(init.headers)
+  if (!(init.body instanceof FormData)) headers.set("Content-Type", "application/json")
+  // Set this last so an endpoint-specific init object cannot accidentally
+  // replace the bearer token with an empty/undefined value.
+  headers.set("Authorization", `Bearer ${token}`)
   const request = fetch(buildUrl(path), {
     ...init,
     signal: timeoutController.signal,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(init.headers ?? {}),
-    },
+    headers,
   })
     .then(async (response) => {
       if (response.status === 401) {
-        authToken = null
-        window.localStorage.removeItem("nms_access_token")
-        clearRequestCache()
-        if (retryUnauthorized) return requestJson<T>(path, init, false)
-        throw new Error(friendlyApiMessage(response.status, ""))
+        // Do not erase a valid token before the retry. A transient 401 (or a
+        // request routed through a proxy) must not cascade into every later
+        // fetch failing locally with "Not authenticated".
+        if (retryUnauthorized) return requestJson<T>(path, init, false, safeErrors)
+        throw safeErrors
+          ? new ApiRequestError(safeApiMessage(response.status), response.status)
+          : new Error(friendlyApiMessage(response.status, ""))
       }
 
       if (!response.ok) {
+        if (safeErrors) {
+          throw new ApiRequestError(safeApiMessage(response.status), response.status)
+        }
         let detail = ""
         try {
           const body = (await response.json()) as {
@@ -338,7 +349,7 @@ export async function requestJson<T>(
       if (error instanceof Error) {
         if (error.name === "AbortError" && didTimeout)
           throw new Error("Request timed out. Please try again.")
-        if (error.name === "TypeError") throw new Error(networkMessage(error))
+        if (error.name === "TypeError") throw safeErrors ? new ApiRequestError("Unable to reach the server.") : new Error(networkMessage(error))
         throw error
       }
       throw new Error(networkMessage(error))
@@ -354,6 +365,30 @@ export async function requestJson<T>(
     window.clearTimeout(timeoutId)
     if (canCache) inflightRequests.delete(key)
   }
+}
+
+class ApiRequestError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message)
+    this.name = "ApiRequestError"
+  }
+}
+
+function safeApiMessage(status: number): string {
+  switch (status) {
+    case 401: return "Authentication required."
+    case 403: return "Permission denied."
+    case 404: return "Resource not found or unavailable."
+    case 409: return "Request conflicts with the current resource state."
+    case 413: return "Certificate upload exceeds the permitted size."
+    case 422: return "Invalid request or certificate data."
+    case 500: return "Unable to complete the request."
+    default: return "Unable to complete the request."
+  }
+}
+
+function requestWindowsSafe<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return requestJson<T>(path, init, true, true)
 }
 
 export interface DashboardSummary {
@@ -580,18 +615,18 @@ export async function listAPMServices(
 }
 export async function getAPMOverview(
   filters: APMFilters,
-): Promise<{ items: APMOverviewItem[] from: string to: string }> {
+): Promise<{ items: APMOverviewItem[]; from: string; to: string }> {
   return requestJson(`/apm/overview${apmQuery(filters)}`)
 }
 export async function getAPMServiceMetrics(
   serviceId: number,
   filters: APMFilters,
-): Promise<{ items: APMServiceMetric[] from: string to: string }> {
+): Promise<{ items: APMServiceMetric[]; from: string; to: string }> {
   return requestJson(`/apm/services/${serviceId}/metrics${apmQuery(filters)}`)
 }
 export async function getAPMDependencies(
   filters: APMFilters,
-): Promise<{ items: APMDependencyItem[] from: string to: string }> {
+): Promise<{ items: APMDependencyItem[]; from: string; to: string }> {
   return requestJson(`/apm/dependencies${apmQuery(filters)}`)
 }
 
@@ -1209,7 +1244,7 @@ export async function detectLocalSubnet(): Promise<{
   subnet: string
   ip: string | null
 }> {
-  return requestJson<{ subnet: string ip: string | null }>(
+  return requestJson<{ subnet: string; ip: string | null }>(
     "/discovery/local-subnet",
   )
 }
@@ -1298,7 +1333,7 @@ export async function updateRemoteAccessCredential(
 
 export async function deleteRemoteAccessCredential(
   id: number,
-): Promise<{ deleted: boolean credential_id: number }> {
+): Promise<{ deleted: boolean; credential_id: number }> {
   return requestJson(`/remote-access/credentials/${id}`, {
     method: "DELETE",
   })
@@ -1464,7 +1499,7 @@ export async function discoverSNMP(
 
 export async function listDeviceMetrics(
   deviceId?: number,
-  params?: { skip?: number limit?: number },
+  params?: { skip?: number; limit?: number },
 ): Promise<DeviceMetricRecord[]> {
   const query = new URLSearchParams()
   if (deviceId != null) query.set("device_id", String(deviceId))
@@ -1476,7 +1511,7 @@ export async function listDeviceMetrics(
 
 export async function listAlerts(
   statusFilter?: string,
-  params?: { skip?: number limit?: number },
+  params?: { skip?: number; limit?: number },
 ): Promise<AlertRecord[]> {
   const query = new URLSearchParams()
   if (statusFilter) query.set("status_filter", statusFilter)
@@ -1617,7 +1652,7 @@ export async function setSyslogRuleEnabled(
 export async function cleanupSyslog(
   retentionDays: number,
   batchSize = 1000,
-): Promise<{ deleted: number retention_days: number }> {
+): Promise<{ deleted: number; retention_days: number }> {
   return requestJson(
     `/syslog/retention/cleanup?retention_days=${retentionDays}&batch_size=${batchSize}`,
     { method: "POST" },
@@ -1690,7 +1725,7 @@ export async function startMonitoringDevice(
 
 export async function stopMonitoringDevice(
   ip: string,
-): Promise<{ ip: string stopped: boolean }> {
+): Promise<{ ip: string; stopped: boolean }> {
   return requestJson("/discovery/monitoring/stop", {
     method: "POST",
     body: JSON.stringify({ ip }),
@@ -1699,7 +1734,7 @@ export async function stopMonitoringDevice(
 
 export async function startAllMonitoring(
   devices: Record<string, unknown>[],
-): Promise<{ added: number total_monitored: number }> {
+): Promise<{ added: number; total_monitored: number }> {
   return requestJson("/discovery/monitoring/start-all", {
     method: "POST",
     body: JSON.stringify({ devices }),
@@ -1821,6 +1856,72 @@ export interface WindowsConnectionTestResult {
   message: string
 }
 
+export type WindowsCABundleStatus = "active" | "revoked" | "expired" | "invalid"
+export type WindowsCABundleTrustType = "enterprise_ca" | "self_signed_explicit"
+export interface WindowsCABundle {
+  id: number
+  site_id: number
+  name: string
+  description?: string | null
+  sha256_fingerprint: string
+  content_sha256: string
+  subject?: string | null
+  issuer?: string | null
+  serial_number?: string | null
+  not_before?: string | null
+  not_after?: string | null
+  is_ca: boolean
+  is_self_signed: boolean
+  trust_type: WindowsCABundleTrustType
+  status: WindowsCABundleStatus
+  certificate_count?: number | null
+  created_by?: number | null
+  created_at: string
+  updated_at: string
+  revoked_at?: string | null
+  revoked_by?: number | null
+}
+export interface WindowsCABundleUpload {
+  site_id: number
+  name: string
+  description?: string
+  certificate: File | Blob
+}
+export interface WindowsEffectiveTrust {
+  device_id: number
+  trust_source: "per_device" | "global" | "system" | "none" | string
+  bundle_id?: number | null
+  bundle_name?: string | null
+  fingerprint?: string | null
+  expires_at?: string | null
+}
+export type WindowsCAAssignment = WindowsEffectiveTrust
+export type WindowsDiagnosticStatus = "PASS" | "FAIL" | "SKIPPED"
+export interface WindowsDiagnosticStage {
+  step: string
+  status: WindowsDiagnosticStatus
+  category: string
+  message: string
+  duration_ms: number
+}
+export interface WindowsTCPDiagnostic extends WindowsDiagnosticStage {
+  step: "tcp_connect"
+}
+export interface WindowsTLSDiagnostic extends WindowsDiagnosticStage {
+  step: "tls_certificate"
+  certificate?: {
+    subject: string
+    issuer: string
+    expires_at: string
+    days_remaining: number
+    san_match: boolean
+  }
+}
+export interface WindowsWinRMDiagnostic {
+  device_id: number
+  stages: WindowsDiagnosticStage[]
+}
+
 export async function listWindowsCredentials(
   deviceId: number,
 ): Promise<WindowsCredentialRecord[]> {
@@ -1889,12 +1990,50 @@ export async function testWindowsConnection(
   )
 }
 
+export async function listWindowsCABundles(siteId: number): Promise<WindowsCABundle[]> {
+  return requestWindowsSafe<WindowsCABundle[]>(`/windows/ca-bundles?site_id=${encodeURIComponent(siteId)}`, { cache: "no-store" })
+}
+export async function getWindowsCABundle(bundleId: number): Promise<WindowsCABundle> {
+  return requestWindowsSafe<WindowsCABundle>(`/windows/ca-bundles/${bundleId}`, { cache: "no-store" })
+}
+export async function uploadWindowsCABundle(data: WindowsCABundleUpload | FormData): Promise<WindowsCABundle> {
+  const formData = data instanceof FormData ? data : new FormData()
+  if (!(data instanceof FormData)) {
+    formData.set("site_id", String(data.site_id))
+    formData.set("name", data.name)
+    if (data.description) formData.set("description", data.description)
+    formData.set("certificate", data.certificate)
+  }
+  return requestWindowsSafe<WindowsCABundle>("/windows/ca-bundles", { method: "POST", body: formData })
+}
+export async function revokeWindowsCABundle(bundleId: number): Promise<WindowsCABundle> {
+  return requestWindowsSafe<WindowsCABundle>(`/windows/ca-bundles/${bundleId}/revoke`, { method: "POST" })
+}
+export async function getWindowsDeviceTrust(deviceId: number): Promise<WindowsEffectiveTrust> {
+  return requestWindowsSafe<WindowsEffectiveTrust>(`/windows/devices/${deviceId}/ca-bundle`, { cache: "no-store" })
+}
+export async function assignWindowsDeviceCA(deviceId: number, bundleId: number): Promise<WindowsCAAssignment> {
+  return requestWindowsSafe<WindowsCAAssignment>(`/windows/devices/${deviceId}/ca-bundle?bundle_id=${encodeURIComponent(bundleId)}`, { method: "PUT" })
+}
+export async function unassignWindowsDeviceCA(deviceId: number): Promise<WindowsEffectiveTrust> {
+  return requestWindowsSafe<WindowsEffectiveTrust>(`/windows/devices/${deviceId}/ca-bundle`, { method: "DELETE" })
+}
+export async function runWindowsTCPDiagnostic(deviceId: number): Promise<WindowsTCPDiagnostic> {
+  return requestWindowsSafe<WindowsTCPDiagnostic>(`/windows/devices/${deviceId}/diagnostics/tcp`, { method: "POST" })
+}
+export async function runWindowsTLSDiagnostic(deviceId: number): Promise<WindowsTLSDiagnostic> {
+  return requestWindowsSafe<WindowsTLSDiagnostic>(`/windows/devices/${deviceId}/diagnostics/tls`, { method: "POST" })
+}
+export async function runWindowsWinRMDiagnostic(deviceId: number): Promise<WindowsWinRMDiagnostic> {
+  return requestWindowsSafe<WindowsWinRMDiagnostic>(`/windows/devices/${deviceId}/diagnostics/winrm`, { method: "POST" })
+}
+
 export interface WindowsSystemSnapshot {
   device_id: number
   collected_at: string | null
-  system_info: { hostname?: string caption?: string version?: string }
-  cpu: { usage_percent?: number logical_processors?: number }
-  memory: { total_bytes?: number free_bytes?: number usage_percent?: number }
+  system_info: { hostname?: string; caption?: string; version?: string }
+  cpu: { usage_percent?: number; logical_processors?: number }
+  memory: { total_bytes?: number; free_bytes?: number; usage_percent?: number }
   disks: Array<{
     device_id: string
     volume_name?: string
@@ -2087,6 +2226,21 @@ export async function discoverWindowsHardwareSensors(deviceId: number): Promise<
   return requestJson(`/windows/devices/${deviceId}/hardware/sensors/discover`, { cache: "no-store" })
 }
 
+export interface WindowsUSBInventory {
+  device_id: number
+  collected_at: string
+  status: "ok" | "partial" | "empty" | string
+  usb: {
+    controllers: Array<Record<string, unknown>>
+    hubs: Array<Record<string, unknown>>
+    devices: Array<Record<string, unknown>>
+    collection_errors: Array<{ source?: string; status?: string; error?: string }>
+  }
+}
+export async function getWindowsUSBInventory(deviceId: number): Promise<WindowsUSBInventory> {
+  return requestJson(`/windows/devices/${deviceId}/usb`, { cache: "no-store" })
+}
+
 export interface WindowsSystemEvent {
   id?: number
   record_id: number
@@ -2137,7 +2291,7 @@ export function fetchWindowsSystemEvents(
   deviceId: number,
   maxRecords = 100,
 ): Promise<WindowsSystemEventsFetchResponse> {
-  return requestJson(`/windows/devices/${deviceId}/events/system/fetch?max_records=${Math.min(maxRecords, 20)}`, {
+  return requestJson(`/windows/devices/${deviceId}/events/system/fetch?max_records=${Math.min(maxRecords, 50)}`, {
     method: "POST",
   })
 }
@@ -2221,12 +2375,12 @@ export interface MonitoringStreamEvent {
 
 export interface TopologyStreamEvent {
   event: "topology"
-  data: { revision: string updated_at: string }
+  data: { revision: string; updated_at: string }
 }
 
 export async function pingIps(ips: string[], timeoutMs = 1000): Promise<{
   count: number
-  results: Array<{ ip: string reachable: boolean status: string rtt?: number }>
+  results: Array<{ ip: string; reachable: boolean; status: string; rtt?: number }>
 }> {
   return requestJson("/discovery/icmp", {
     method: "POST",
@@ -2357,7 +2511,7 @@ export async function createSite(data: {
 }
 export async function updateSite(
   id: number,
-  data: { name?: string organization_id?: number city?: string state?: string },
+  data: { name?: string; organization_id?: number; city?: string; state?: string },
 ): Promise<SiteRecord> {
   return requestJson(`/sites/${id}`, {
     method: "PATCH",
@@ -2489,7 +2643,7 @@ export async function createRole(data: {
 
 export async function updateRole(
   id: number,
-  data: { role_name?: string authority_level?: number },
+  data: { role_name?: string; authority_level?: number },
 ): Promise<RoleRecord> {
   return requestJson(`/roles/${id}`, {
     method: "PATCH",
@@ -2713,8 +2867,8 @@ export interface SNMPCPUStats {
   maximum?: number
   minimum?: number
   percentile_95?: number
-  per_core?: Array<{ core: number usage: number }>
-  history: Array<{ timestamp: string usage: number }>
+  per_core?: Array<{ core: number; usage: number }>
+  history: Array<{ timestamp: string; usage: number }>
   supported: boolean
   poll_interval?: number
   last_poll?: string
@@ -2805,7 +2959,7 @@ export interface SNMPEnvironmentSensor {
   threshold_warning?: number
   threshold_critical?: number
   status: "ok" | "warning" | "critical" | "unknown"
-  history: Array<{ timestamp: string value: number }>
+  history: Array<{ timestamp: string; value: number }>
   last_updated: string
 }
 
@@ -3049,7 +3203,7 @@ export async function persistSNMPTopologySnapshot(
     collected_at: string
     source?: string
   },
-): Promise<{ persisted: boolean collected_at: string }> {
+): Promise<{ persisted: boolean; collected_at: string }> {
   return requestJson(`/snmp/topology/snapshot`, {
     method: "POST",
     body: JSON.stringify({ device_id: deviceId, ...snapshot }),
@@ -3075,7 +3229,7 @@ export interface ManualTopologySnapshotResponse {
   reconcile_status: string
   last_reconciled_at?: string | null
   changes: ManualTopologyChange[]
-  live?: { links?: any[] devices?: any[] }
+  live?: { links?: any[]; devices?: any[] }
 }
 
 export async function createManualTopologySnapshot(
@@ -3388,7 +3542,7 @@ export async function startPollingService(): Promise<OverviewResponse["services"
 // ── Organizations (full CRUD) ─────────────────────────────────────────────
 export async function updateOrganization(
   id: number,
-  data: { name?: string description?: string },
+  data: { name?: string; description?: string },
 ): Promise<OrganizationRecord> {
   return requestJson(`/organizations/${id}`, {
     method: "PATCH",
@@ -3448,7 +3602,7 @@ export async function createReport(data: {
 }
 export async function updateReport(
   id: number,
-  data: { report_name?: string report_type?: string file_path?: string },
+  data: { report_name?: string; report_type?: string; file_path?: string },
 ): Promise<ReportRecord> {
   return requestJson(`/reports/${id}`, {
     method: "PATCH",
@@ -3526,12 +3680,12 @@ export interface DailyReport {
   }
   performance: {
     sample_count: number
-    cpu: { avg: number | null max: number | null samples: number }
-    memory: { avg: number | null max: number | null samples: number }
-    disk: { avg: number | null max: number | null samples: number }
-    latency: { avg: number | null max: number | null samples: number }
-    packet_loss: { avg: number | null max: number | null samples: number }
-    bandwidth: { avg: number | null max: number | null samples: number }
+    cpu: { avg: number | null; max: number | null; samples: number }
+    memory: { avg: number | null; max: number | null; samples: number }
+    disk: { avg: number | null; max: number | null; samples: number }
+    latency: { avg: number | null; max: number | null; samples: number }
+    packet_loss: { avg: number | null; max: number | null; samples: number }
+    bandwidth: { avg: number | null; max: number | null; samples: number }
     top_cpu_devices: DailyReportDevice[]
     top_mem_devices: DailyReportDevice[]
     top_latency_devices: DailyReportDevice[]
@@ -3852,7 +4006,7 @@ export async function startModuleMonitoring(
 export async function stopModuleMonitoring(
   deviceId: number,
   module: string,
-): Promise<{ stopped: boolean message: string }> {
+): Promise<{ stopped: boolean; message: string }> {
   return requestJson(`/snmp/devices/${deviceId}/monitoring/${module}/stop`, {
     method: "POST",
   })
@@ -4018,7 +4172,7 @@ export interface SNMPEnvironmentSensor {
   threshold_warning?: number
   threshold_critical?: number
   status: "ok" | "warning" | "critical" | "unknown"
-  history: Array<{ timestamp: string value: number }>
+  history: Array<{ timestamp: string; value: number }>
   last_updated: string
 }
 
@@ -4440,7 +4594,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatusRecord> {
 
 export async function restartRuntimeProcess(
   pid: number,
-): Promise<{ detail: string pid: number }> {
+): Promise<{ detail: string; pid: number }> {
   return requestJson(`/runtime-status/restart/${pid}`, { method: "POST" })
 }
 
@@ -4785,7 +4939,7 @@ export interface LinuxServerDetail extends LinuxServerRecord {
     available_bytes?: number | null
     usage_percent?: number | null
   }>
-  monitoring_config?: { enabled: boolean interval_seconds: number } | null
+  monitoring_config?: { enabled: boolean; interval_seconds: number } | null
 }
 export interface LinuxDetectedData {
   ip_address: string
@@ -4989,7 +5143,7 @@ export interface RCAIncident {
 }
 export async function analyzeRCA(
   hours: number,
-): Promise<{ incident: RCAIncident | null alerts_considered: number }> {
+): Promise<{ incident: RCAIncident | null; alerts_considered: number }> {
   return requestJson("/rca/analyze", {
     method: "POST",
     body: JSON.stringify({ hours }),
@@ -4997,7 +5151,7 @@ export async function analyzeRCA(
 }
 export async function listRCAIncidents(
   hours = 24,
-): Promise<{ items: RCAIncident[] skip: number limit: number }> {
+): Promise<{ items: RCAIncident[]; skip: number; limit: number }> {
   return requestJson(`/rca/incidents?hours=${hours}`)
 }
 export async function getRCAIncident(id: number): Promise<RCAIncident> {
@@ -5005,7 +5159,7 @@ export async function getRCAIncident(id: number): Promise<RCAIncident> {
 }
 export async function analyzeIncidentRCA(
   id: number,
-): Promise<{ incident_id: number rca: RCAIncident }> {
+): Promise<{ incident_id: number; rca: RCAIncident }> {
   return requestJson(`/incidents/${id}/rca`, { method: "POST" })
 }
 
@@ -5074,8 +5228,8 @@ export interface ManagedIncident {
   }>
 }
 export async function listIncidents(
-  params: { status_filter?: string category?: string priority?: string } = {},
-): Promise<{ items: ManagedIncident[] skip: number limit: number }> {
+  params: { status_filter?: string; category?: string; priority?: string } = {},
+): Promise<{ items: ManagedIncident[]; skip: number; limit: number }> {
   const query = new URLSearchParams(params as Record<string, string>).toString()
   return requestJson(`/incidents${query ? `?${query}` : ""}`)
 }
@@ -5187,8 +5341,8 @@ export interface ManagedProblem {
   }>
 }
 export async function listProblems(
-  params: { status?: string category?: string } = {},
-): Promise<{ items: ManagedProblem[] skip: number limit: number }> {
+  params: { status?: string; category?: string } = {},
+): Promise<{ items: ManagedProblem[]; skip: number; limit: number }> {
   const query = new URLSearchParams(params as Record<string, string>).toString()
   return requestJson(`/problems${query ? `?${query}` : ""}`)
 }
@@ -5252,7 +5406,7 @@ export interface ChangeRequest {
   ci_ids: number[]
   incident_ids: number[]
   problem_ids: number[]
-  cis?: Array<{ id: number name: string status?: string | null }>
+  cis?: Array<{ id: number; name: string; status?: string | null }>
   incidents?: Array<{
     id: number
     title: string
@@ -5276,8 +5430,8 @@ export interface ChangeRequest {
   }>
 }
 export async function listChanges(
-  params: { status?: string risk?: string } = {},
-): Promise<{ items: ChangeRequest[] skip: number limit: number }> {
+  params: { status?: string; risk?: string } = {},
+): Promise<{ items: ChangeRequest[]; skip: number; limit: number }> {
   const query = new URLSearchParams(params as Record<string, string>).toString()
   return requestJson(`/changes${query ? `?${query}` : ""}`)
 }
@@ -5438,15 +5592,15 @@ export interface KnowledgeArticle {
   device_ids: number[]
   service_ids: number[]
   related_article_ids: number[]
-  changes?: Array<{ id: number number: string title: string status: string }>
-  cis?: Array<{ id: number name: string status: string }>
+  changes?: Array<{ id: number; number: string; title: string; status: string }>
+  cis?: Array<{ id: number; name: string; status: string }>
   related_articles?: Array<{
     id: number
     number: string
     title: string
     status: string
   }>
-  usage?: { incident_count: number problem_count: number }
+  usage?: { incident_count: number; problem_count: number }
   versions?: Array<{
     version: number
     changed_by?: number | null
@@ -5469,7 +5623,7 @@ export async function listKnowledge(
     tag?: string
     owner_id?: number | string
   } = {},
-): Promise<{ items: KnowledgeArticle[] skip: number limit: number }> {
+): Promise<{ items: KnowledgeArticle[]; skip: number; limit: number }> {
   const query = new URLSearchParams()
   Object.entries(filters).forEach(([key, value]) => {
     if (value !== undefined && value !== "") query.set(key, String(value))
@@ -5572,7 +5726,7 @@ export async function captureConfiguration(data: {
 }
 export async function listConfigurationVersions(
   deviceId: number,
-): Promise<{ items: ConfigurationVersion[] skip: number limit: number }> {
+): Promise<{ items: ConfigurationVersion[]; skip: number; limit: number }> {
   return requestJson(`/config-backups/devices/${deviceId}`)
 }
 export async function getConfigurationVersion(

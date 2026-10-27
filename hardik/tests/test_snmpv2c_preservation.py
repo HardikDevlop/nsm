@@ -22,27 +22,90 @@ This test verifies the CORRECT baseline behavior that must be preserved.
 No regressions - SNMPv2c discovery must work exactly the same after fixes.
 """
 
+import os
 import sys
+from urllib.parse import urlparse
+
 sys.path.insert(0, '/home/agnigate/Desktop/NMS/hardik')
 
 from datetime import datetime
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
+
+
+TEST_DATABASE_URL_ENV = "SNMP_TEST_DATABASE_URL"
+DESTRUCTIVE_OPT_IN_ENV = "SNMP_TEST_DB_DESTRUCTIVE"
+
+
+def _verified_test_database_url() -> str:
+    """Return an explicitly opted-in, non-application PostgreSQL URL.
+
+    This function intentionally performs no connection. It fails closed before
+    any schema creation or destructive cleanup can be attempted.
+    """
+    url = os.getenv(TEST_DATABASE_URL_ENV, "").strip()
+    if not url:
+        raise RuntimeError(
+            f"{TEST_DATABASE_URL_ENV} must be set; refusing to use application DATABASE_URL"
+        )
+    if os.getenv(DESTRUCTIVE_OPT_IN_ENV, "").strip().lower() not in {"1", "true", "yes"}:
+        raise RuntimeError(
+            f"{DESTRUCTIVE_OPT_IN_ENV}=1 is required for destructive SNMP preservation tests"
+        )
+
+    from backend.config.settings import get_settings
+
+    application_url = get_settings().database_url
+    if url == application_url:
+        raise RuntimeError("SNMP test URL must not equal the application database URL")
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"postgresql", "postgresql+psycopg", "postgres"}:
+        raise RuntimeError("SNMP test URL must use PostgreSQL")
+    if not parsed.hostname or not parsed.path.strip("/"):
+        raise RuntimeError("SNMP test URL must include a host and database name")
+
+    host = parsed.hostname.lower()
+    port = parsed.port or 5432
+    database = parsed.path.strip("/")
+    username = parsed.username or ""
+    obvious_default = (
+        host in {"localhost", "127.0.0.1", "::1"}
+        and port == 5432
+        and username == "postgres"
+        and database == "postgres"
+    )
+    if obvious_default:
+        raise RuntimeError("Obvious default/production PostgreSQL target rejected")
+    if "postgresql+psycopg://postgres:***@localhost:5432/postgres" in url:
+        raise RuntimeError("Masked application PostgreSQL target rejected")
+
+    return url
 
 
 class TestSNMPv2cPreservation:
     """Preservation tests for SNMPv2c discovery baseline behavior."""
 
+    _test_engine = None
+    _test_session_factory = None
+
     def _setup_database(self):
-        """Set up test database."""
-        from backend.database.session import SessionLocal, engine, Base
+        """Set up only the explicitly verified disposable test database."""
+        from backend.database.session import Base
         from backend.models import Device, DeviceCredential, Interface, Event
-        
-        # Create tables
-        Base.metadata.create_all(bind=engine)
+
+        url = _verified_test_database_url()
+        self._test_engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=0)
+        self._test_session_factory = sessionmaker(
+            bind=self._test_engine, autocommit=False, autoflush=False
+        )
+
+        Base.metadata.create_all(bind=self._test_engine)
         
         # Clean up existing data
-        db = SessionLocal()
+        db = self._test_session_factory()
         try:
             db.query(Event).delete()
             db.query(Interface).delete()
@@ -54,14 +117,15 @@ class TestSNMPv2cPreservation:
         finally:
             db.close()
         
-        return SessionLocal
+        return self._test_session_factory
 
     def _cleanup_database(self):
-        """Clean up test database."""
-        from backend.database.session import SessionLocal
+        """Clean up and dispose only the verified test database."""
         from backend.models import Device, DeviceCredential, Interface, Event
-        
-        db = SessionLocal()
+
+        if self._test_session_factory is None or self._test_engine is None:
+            return
+        db = self._test_session_factory()
         try:
             db.query(Event).delete()
             db.query(Interface).delete()
@@ -72,6 +136,9 @@ class TestSNMPv2cPreservation:
             db.rollback()
         finally:
             db.close()
+            self._test_engine.dispose()
+            self._test_session_factory = None
+            self._test_engine = None
 
     def test_snmpv2c_basic_discovery_creates_devices_concrete(self):
         """Property 2: Preservation - SNMPv2c Discovery Baseline
@@ -88,7 +155,6 @@ class TestSNMPv2cPreservation:
         4. Verify DeviceCredential record is created with snmp_version="v2c"
         5. Verify no unintended deletions or modifications
         """
-        from backend.database.session import SessionLocal
         from backend.models import Device, DeviceCredential, Interface, Event
         from unittest.mock import patch, MagicMock
         
@@ -338,7 +404,6 @@ class TestSNMPv2cPreservation:
         SessionLocal_factory = self._setup_database()
         
         try:
-            from backend.database.session import SessionLocal
             from backend.models import Device, DeviceCredential
             from backend.utils.crypto import encrypt_secret
             from datetime import datetime

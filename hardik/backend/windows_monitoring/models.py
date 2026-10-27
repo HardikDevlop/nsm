@@ -3,7 +3,9 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, JSON
+from enum import Enum
+
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, JSON, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -43,6 +45,86 @@ class WindowsCredential(Base):
         DateTime, default=windows_now, onupdate=windows_now, nullable=False
     )
 
+    device = relationship("Device")
+
+
+class WindowsCABundleStatus(str, Enum):
+    ACTIVE = "active"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+    INVALID = "invalid"
+
+
+class WindowsCABundleTrustType(str, Enum):
+    ENTERPRISE_CA = "enterprise_ca"
+    SELF_SIGNED_EXPLICIT = "self_signed_explicit"
+
+
+class WindowsCABundle(Base):
+    """Metadata for a site-scoped CA bundle stored outside PostgreSQL."""
+
+    __tablename__ = "windows_ca_bundles"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'revoked', 'expired', 'invalid')",
+            name="ck_windows_ca_bundles_status",
+        ),
+        CheckConstraint(
+            "trust_type IN ('enterprise_ca', 'self_signed_explicit')",
+            name="ck_windows_ca_bundles_trust_type",
+        ),
+        UniqueConstraint("site_id", "sha256_fingerprint", name="uq_windows_ca_bundles_site_fingerprint"),
+        Index("ix_windows_ca_bundles_site_status", "site_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    sha256_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    issuer: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    serial_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    not_before: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    not_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_ca: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_self_signed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    trust_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=WindowsCABundleStatus.ACTIVE.value)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, onupdate=windows_now, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    site = relationship("Site")
+    assignments = relationship("WindowsDeviceCAAssignment", back_populates="ca_bundle")
+
+
+class WindowsDeviceCAAssignment(Base):
+    """Versioned assignment; an active assignment has no unassigned timestamp."""
+
+    __tablename__ = "windows_device_ca_assignments"
+    __table_args__ = (
+        Index(
+            "uq_windows_device_ca_active",
+            "device_id",
+            unique=True,
+            postgresql_where=text("unassigned_at IS NULL"),
+        ),
+        Index("ix_windows_device_ca_assignments_bundle", "ca_bundle_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    ca_bundle_id: Mapped[int] = mapped_column(ForeignKey("windows_ca_bundles.id", ondelete="RESTRICT"), nullable=False, index=True)
+    assigned_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
+    unassigned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    ca_bundle = relationship("WindowsCABundle", back_populates="assignments")
     device = relationship("Device")
 
 

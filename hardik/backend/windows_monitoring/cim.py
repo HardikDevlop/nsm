@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import ipaddress
+import json
 import logging
 import re
 from time import perf_counter
@@ -16,6 +17,7 @@ from pypsrp.exceptions import AuthenticationError, WinRMTransportError, WSManFau
 from pypsrp.wsman import WSMan, NAMESPACES
 from requests.exceptions import SSLError, Timeout
 from .sensors import stable_sensor_id
+from .winrm import WinRMHTTPSAdapter
 
 
 _HOSTNAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
@@ -29,7 +31,8 @@ _FILTER_CLASS = {
     "Win32_PerfFormattedData_PerfDisk_PhysicalDisk": "SELECT Name,DiskReadsPerSec,DiskWritesPerSec,DiskTransfersPerSec,DiskReadBytesPerSec,DiskWriteBytesPerSec,DiskBytesPerSec,AvgDiskSecPerRead,AvgDiskSecPerWrite,AvgDiskSecPerTransfer,AvgDiskQueueLength,CurrentDiskQueueLength,SplitIOPerSec,PercentDiskTime FROM Win32_PerfFormattedData_PerfDisk_PhysicalDisk",
     "Win32_PerfFormattedData_PerfOS_Processor": "SELECT Name,PercentProcessorTime,PercentUserTime,PercentPrivilegedTime,PercentIdleTime,InterruptsPerSec FROM Win32_PerfFormattedData_PerfOS_Processor",
     "Win32_PerfFormattedData_PerfOS_ProcessorRequired": "SELECT Name,PercentProcessorTime FROM Win32_PerfFormattedData_PerfOS_Processor",
-    "Win32_PerfFormattedData_PerfOS_System": "SELECT ProcessorQueueLength,ContextSwitchesPerSec FROM Win32_PerfFormattedData_PerfOS_System",
+    "Win32_PerfFormattedData_PerfOS_System": "SELECT ProcessorQueueLength,ContextSwitchesPerSec,Threads,Processes FROM Win32_PerfFormattedData_PerfOS_System",
+    "Win32_PerfFormattedData_PerfOS_SystemRequired": "SELECT ProcessorQueueLength,ContextSwitchesPerSec FROM Win32_PerfFormattedData_PerfOS_System",
     "Win32_PerfFormattedData_PerfOS_Memory": "SELECT AvailableMBytes,PagesPersec,PageReadsPersec,PageWritesPersec,PageFaultsPersec,CommittedBytes,CommitLimit,CacheBytes,PoolPagedBytes,PoolNonpagedBytes,PercentCommittedBytesInUse FROM Win32_PerfFormattedData_PerfOS_Memory",
     "Win32_TemperatureProbe": "SELECT Name,CurrentReading,Status,Availability FROM Win32_TemperatureProbe",
     "Win32_Fan": "SELECT Name,DesiredSpeed,Status,Availability FROM Win32_Fan",
@@ -44,15 +47,19 @@ _FILTER_CLASS = {
     "MSFT_StorageReliabilityCounter": "SELECT DeviceId,Temperature,TemperatureMax,Wear,ReadErrorsTotal,WriteErrorsTotal,ReadErrorsCorrected,WriteErrorsCorrected,PowerOnHours,UnsafeShutdownCount FROM MSFT_StorageReliabilityCounter",
     "Win32_NetworkAdapter": "SELECT Index,Name,Description,MACAddress,NetConnectionStatus,Speed,PhysicalAdapter FROM Win32_NetworkAdapter",
     "Win32_NetworkAdapterConfiguration": "SELECT Index,InterfaceIndex,Description,MACAddress,IPAddress,IPEnabled FROM Win32_NetworkAdapterConfiguration",
+    "Win32_USBController": "SELECT DeviceID,Name,Manufacturer,PNPDeviceID,Status,ConfigManagerErrorCode FROM Win32_USBController",
+    "Win32_USBHub": "SELECT DeviceID,Name,Description,Manufacturer,PNPDeviceID,Status,ConfigManagerErrorCode FROM Win32_USBHub",
+    "Win32_USBControllerDevice": "SELECT Antecedent,Dependent FROM Win32_USBControllerDevice",
+    "Win32_PnPEntity_USB": "SELECT Name,PNPDeviceID,PNPClass,Manufacturer,Status,ConfigManagerErrorCode,Present,Service,ClassGuid FROM Win32_PnPEntity WHERE PNPDeviceID LIKE 'USB\\\\%' OR PNPClass = 'USB' OR Service = 'USBSTOR'",
     "Win32_PerfFormattedData_Tcpip_NetworkInterface": "SELECT Name,BytesReceivedPerSec,BytesSentPerSec,CurrentBandwidth FROM Win32_PerfFormattedData_Tcpip_NetworkInterface",
     "Win32_Service": "SELECT Name,DisplayName,State,StartMode,ProcessId FROM Win32_Service",
-    "Win32_Process": "SELECT Name,ProcessId,WorkingSetSize FROM Win32_Process",
+    "Win32_Process": "SELECT Name,ProcessId,WorkingSetSize,ThreadCount,ExecutablePath FROM Win32_Process",
     "Win32_NTLogEvent": "SELECT TimeGenerated,EventCode,Type,SourceName,Logfile,Message FROM Win32_NTLogEvent",
     "Win32_ComputerSystem": "SELECT Manufacturer,Model,SystemType,Domain,Workgroup,PartOfDomain,NumberOfProcessors,NumberOfLogicalProcessors FROM Win32_ComputerSystem",
     "Win32_ComputerSystemProduct": "SELECT Vendor,Name,Version FROM Win32_ComputerSystemProduct",
     "Win32_BaseBoard": "SELECT Manufacturer,Product,Version FROM Win32_BaseBoard",
     "Win32_BIOS": "SELECT Manufacturer,SMBIOSBIOSVersion,ReleaseDate FROM Win32_BIOS",
-    "Win32_Processor": "SELECT Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed FROM Win32_Processor",
+    "Win32_Processor": "SELECT Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed,CurrentClockSpeed FROM Win32_Processor",
     "Win32_PhysicalMemory": "SELECT Capacity,Speed,Manufacturer,SMBIOSMemoryType,DeviceLocator,BankLabel FROM Win32_PhysicalMemory",
     "Win32_PhysicalMemoryArray": "SELECT MaxCapacity,MaxCapacityEx,MemoryDevices,Location,Use FROM Win32_PhysicalMemoryArray",
 }
@@ -112,6 +119,16 @@ class ProcessorPerformanceResult:
 class SystemPerformanceResult:
     processor_queue_length: float | None
     context_switches_per_sec: float | None
+    threads: int | None
+    processes: int | None
+
+@dataclass(frozen=True)
+class WindowsProcessResult:
+    name: str | None
+    process_id: int | None
+    working_set_bytes: int | None
+    thread_count: int | None
+    executable_path: str | None
 
 @dataclass(frozen=True)
 class MemoryPerformanceResult:
@@ -195,6 +212,52 @@ class NetworkInterfaceResult:
 
 
 @dataclass(frozen=True)
+class USBControllerResult:
+    device_id: str | None
+    name: str | None
+    manufacturer: str | None
+    instance_id: str | None
+    pnp_status: str | None
+    config_manager_error_code: int | None
+
+
+@dataclass(frozen=True)
+class USBHubResult:
+    device_id: str | None
+    name: str | None
+    description: str | None
+    manufacturer: str | None
+    instance_id: str | None
+    pnp_status: str | None
+    config_manager_error_code: int | None
+
+
+@dataclass(frozen=True)
+class USBControllerDeviceResult:
+    controller: str | None
+    dependent: str | None
+
+
+@dataclass(frozen=True)
+class USBDeviceResult:
+    name: str | None
+    instance_id: str | None
+    device_class: str | None
+    manufacturer: str | None
+    vendor_id: str | None
+    product_id: str | None
+    pnp_status: str | None
+    config_manager_error_code: int | None
+    present: bool | None
+    presence_state: str
+    driver_health: str
+    device_type: str
+    is_storage: bool
+    connection_state: str
+    controller_or_hub: str | None = None
+
+
+@dataclass(frozen=True)
 class ComputerSystemResult:
     manufacturer: str | None
     model: str | None
@@ -234,6 +297,7 @@ class HardwareProcessorResult:
     number_of_cores: int | None
     number_of_logical_processors: int | None
     max_clock_speed_mhz: int | None
+    current_clock_speed_mhz: int | None = None
 
 
 @dataclass(frozen=True)
@@ -610,6 +674,7 @@ class WindowsCIMClient:
             number_of_cores=self._optional_positive_int(self._text(node, "NumberOfCores")),
             number_of_logical_processors=self._optional_positive_int(self._text(node, "NumberOfLogicalProcessors")),
             max_clock_speed_mhz=self._optional_positive_int(self._text(node, "MaxClockSpeed")),
+            current_clock_speed_mhz=self._optional_positive_int(self._text(node, "CurrentClockSpeed")),
         ) for node in self._enumerate("Win32_Processor")]
 
     def physical_memory(self) -> list[PhysicalMemoryResult]:
@@ -713,10 +778,27 @@ class WindowsCIMClient:
         return results
 
     def system_performance(self) -> list[SystemPerformanceResult]:
+        try:
+            nodes = self._enumerate("Win32_PerfFormattedData_PerfOS_System")
+            extended = True
+        except CIMError:
+            nodes = self._enumerate("Win32_PerfFormattedData_PerfOS_SystemRequired")
+            extended = False
         return [SystemPerformanceResult(
             processor_queue_length=self._optional_float(self._text(node, "ProcessorQueueLength")),
             context_switches_per_sec=self._optional_float(self._text(node, "ContextSwitchesPerSec")),
-        ) for node in self._enumerate("Win32_PerfFormattedData_PerfOS_System")]
+            threads=self._optional_positive_int(self._text(node, "Threads")) if extended else None,
+            processes=self._optional_positive_int(self._text(node, "Processes")) if extended else None,
+        ) for node in nodes]
+
+    def processes(self) -> list[WindowsProcessResult]:
+        return [WindowsProcessResult(
+            name=self._text(node, "Name") or None,
+            process_id=self._optional_positive_int(self._text(node, "ProcessId")),
+            working_set_bytes=self._optional_positive_int(self._text(node, "WorkingSetSize")),
+            thread_count=self._optional_positive_int(self._text(node, "ThreadCount")),
+            executable_path=self._text(node, "ExecutablePath") or None,
+        ) for node in self._enumerate("Win32_Process")]
 
     def memory_performance(self) -> list[MemoryPerformanceResult]:
         return [MemoryPerformanceResult(
@@ -960,7 +1042,16 @@ class WindowsCIMClient:
             )
             ipv4, ipv6 = self._addresses(configuration) if configuration is not None else ((), ())
             status_code = self._optional_int(self._text(node, "NetConnectionStatus"))
-            status = "Up" if status_code == 2 else "Down" if status_code == 7 else None
+            # NetConnectionStatus is not a boolean.  In particular, a paired
+            # Bluetooth device does not imply that its PAN interface is
+            # connected. Preserve unsupported/transitional values as Unknown
+            # instead of incorrectly reporting them as Down.
+            status = {
+                2: "Connected",
+                0: "Disconnected",
+                7: "Disconnected",
+                5: "Disabled",
+            }.get(status_code, "Unknown" if status_code is not None else None)
             results.append(
                 NetworkInterfaceResult(
                     interface_index=interface_index,
@@ -978,6 +1069,237 @@ class WindowsCIMClient:
                 )
             )
         return results
+
+    @staticmethod
+    def _usb_ids(instance_id: str) -> tuple[str | None, str | None]:
+        """Extract only explicit USB VID/PID tokens; never derive a serial."""
+        value = instance_id.upper()
+        vid = re.search(r"(?:^|[&\\])VID_([0-9A-F]{4})(?=[&\\]|$)", value)
+        pid = re.search(r"(?:^|[&\\])PID_([0-9A-F]{4})(?=[&\\]|$)", value)
+        return (vid.group(1) if vid else None, pid.group(1) if pid else None)
+
+    @staticmethod
+    def _pnp_presence(value: str) -> bool | None:
+        return WindowsCIMClient._optional_bool(value)
+
+    @staticmethod
+    def _pnp_connection_state(present: bool | None, status: str, error_code: int | None) -> str:
+        """Report presence separately from driver health and physical connection."""
+        # PnP presence is intentionally not promoted to a physical-port or
+        # active-connection assertion. The USB inventory query only returns
+        # current PnP records, so historical absence and port state remain
+        # unknown.
+        return "Unknown"
+
+    @staticmethod
+    def _usb_presence_state(present: bool | None) -> str:
+        return "Present" if present is True else "Absent" if present is False else "Unknown"
+
+    @staticmethod
+    def _usb_driver_health(status: str, error_code: int | None) -> str:
+        if error_code == 22:
+            return "Disabled"
+        if error_code is not None and error_code != 0:
+            return "DriverError"
+        if status.casefold() == "ok" and error_code in (None, 0):
+            return "Healthy"
+        return "Unknown"
+
+    @staticmethod
+    def _usb_device_type(device_class: str, service: str, instance_id: str) -> tuple[str, bool]:
+        values = f"{device_class} {service} {instance_id}".casefold()
+        if "usbstor" in values or device_class.casefold() == "storage":
+            return "Storage", True
+        if device_class.casefold() == "usb":
+            return "Peripheral", False
+        return "Unknown", False
+
+    def _usb_hubs_powershell_fallback(self) -> list[USBHubResult]:
+        """Read hubs through PowerShell when direct WSMan rejects Win32_USBHub."""
+        command = (
+            "Get-CimInstance Win32_USBHub -ErrorAction Stop | "
+            "Select-Object -First 32 DeviceID,Name,Description,Manufacturer,PNPDeviceID,Status,ConfigManagerErrorCode | "
+            "ConvertTo-Json -Depth 3 -Compress"
+        )
+        adapter = WinRMHTTPSAdapter(
+            self.hostname,
+            self.username,
+            self._password,
+            port=self.port,
+            ca_trust_path=self.trusted_ca_path,
+            connect_timeout=self.connection_timeout,
+            operation_timeout=self.operation_timeout,
+        )
+        stdout, stderr, status = adapter._run_event_powershell(command)
+        if status or stderr:
+            raise CIMError("protocol", "PowerShell USB hub query failed")
+        if len(stdout) > self.limits.max_response_bytes:
+            raise CIMError("protocol", "PowerShell USB hub response exceeded the configured limit")
+        if not stdout.strip():
+            return []
+        try:
+            payload = json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise CIMError("parsing", "Malformed PowerShell USB hub response") from None
+        rows = payload if isinstance(payload, list) else [payload]
+        if len(rows) > self.limits.max_items:
+            raise CIMError("protocol", "PowerShell USB hub item limit exceeded")
+        if not all(isinstance(row, dict) for row in rows):
+            raise CIMError("parsing", "Malformed PowerShell USB hub response")
+        return [USBHubResult(
+            device_id=str(row.get("DeviceID")) if row.get("DeviceID") is not None else None,
+            name=str(row.get("Name")) if row.get("Name") is not None else None,
+            description=str(row.get("Description")) if row.get("Description") is not None else None,
+            manufacturer=str(row.get("Manufacturer")) if row.get("Manufacturer") is not None else None,
+            instance_id=str(row.get("PNPDeviceID")) if row.get("PNPDeviceID") is not None else None,
+            pnp_status=str(row.get("Status")) if row.get("Status") is not None else None,
+            config_manager_error_code=self._optional_int(str(row.get("ConfigManagerErrorCode"))) if row.get("ConfigManagerErrorCode") is not None else None,
+        ) for row in rows]
+
+    @staticmethod
+    def _usb_reference_id(value: str | None) -> str | None:
+        if not value:
+            return None
+        match = re.search(r'(?:DeviceID|PNPDeviceID)="([^"]+)"', value, re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1).replace("\\\\", "\\").casefold()
+
+    def _usb_associations_powershell_fallback(self) -> list[USBControllerDeviceResult]:
+        """Read WMI association references through PowerShell when WSMan loses them."""
+        command = (
+            "Get-CimInstance Win32_USBControllerDevice -ErrorAction Stop | "
+            "Select-Object -First 64 @{Name='Antecedent';Expression={$_.Antecedent.ToString()}}, "
+            "@{Name='Dependent';Expression={$_.Dependent.ToString()}} | "
+            "ConvertTo-Json -Depth 3 -Compress"
+        )
+        adapter = WinRMHTTPSAdapter(
+            self.hostname, self.username, self._password, port=self.port,
+            ca_trust_path=self.trusted_ca_path,
+            connect_timeout=self.connection_timeout,
+            operation_timeout=self.operation_timeout,
+        )
+        stdout, stderr, status = adapter._run_event_powershell(command)
+        if status or stderr:
+            raise CIMError("protocol", "PowerShell USB association query failed")
+        if len(stdout) > self.limits.max_response_bytes:
+            raise CIMError("protocol", "PowerShell USB association response exceeded the configured limit")
+        if not stdout.strip():
+            return []
+        try:
+            payload = json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise CIMError("parsing", "Malformed PowerShell USB association response") from None
+        rows = payload if isinstance(payload, list) else [payload]
+        if len(rows) > self.limits.max_items:
+            raise CIMError("protocol", "PowerShell USB association item limit exceeded")
+        if not all(isinstance(row, dict) for row in rows):
+            raise CIMError("parsing", "Malformed PowerShell USB association response")
+        return [USBControllerDeviceResult(
+            controller=str(row.get("Antecedent")) if row.get("Antecedent") is not None else None,
+            dependent=str(row.get("Dependent")) if row.get("Dependent") is not None else None,
+        ) for row in rows]
+
+    def usb_inventory(self) -> dict[str, list]:
+        """Collect read-only USB/PnP inventory without asserting port connectivity."""
+        errors: dict[str, str] = {}
+        def collect(class_name: str) -> list[ET.Element]:
+            try:
+                return self._enumerate(class_name)
+            except CIMError as exc:
+                errors[class_name] = exc.category
+                return []
+
+        controllers = [USBControllerResult(
+            device_id=self._text(node, "DeviceID") or None,
+            name=self._text(node, "Name") or None,
+            manufacturer=self._text(node, "Manufacturer") or None,
+            instance_id=self._text(node, "PNPDeviceID") or None,
+            pnp_status=self._text(node, "Status") or None,
+            config_manager_error_code=self._optional_int(self._text(node, "ConfigManagerErrorCode")),
+        ) for node in collect("Win32_USBController")]
+        try:
+            hub_nodes = self._enumerate("Win32_USBHub")
+            hubs = [USBHubResult(
+                device_id=self._text(node, "DeviceID") or None,
+                name=self._text(node, "Name") or None,
+                description=self._text(node, "Description") or None,
+                manufacturer=self._text(node, "Manufacturer") or None,
+                instance_id=self._text(node, "PNPDeviceID") or None,
+                pnp_status=self._text(node, "Status") or None,
+                config_manager_error_code=self._optional_int(self._text(node, "ConfigManagerErrorCode")),
+            ) for node in hub_nodes]
+        except CIMError as exc:
+            if exc.category == "protocol" and "CannotProcessFilter" in exc.message:
+                try:
+                    hubs = self._usb_hubs_powershell_fallback()
+                except CIMError as fallback_exc:
+                    hubs = []
+                    errors["Win32_USBHub"] = fallback_exc.category
+            else:
+                hubs = []
+                errors["Win32_USBHub"] = exc.category
+        associations = [USBControllerDeviceResult(
+            controller=self._text(node, "Antecedent") or None,
+            dependent=self._text(node, "Dependent") or None,
+        ) for node in collect("Win32_USBControllerDevice")]
+        if associations and not any(self._usb_reference_id(item.dependent) for item in associations):
+            try:
+                associations = self._usb_associations_powershell_fallback()
+            except CIMError as exc:
+                errors["Win32_USBControllerDevice"] = exc.category
+        controller_ids = {
+            (item.instance_id or item.device_id or "").casefold(): (item.instance_id or item.device_id)
+            for item in controllers
+            if item.instance_id or item.device_id
+        }
+        verified_associations: list[USBControllerDeviceResult] = []
+        for item in associations:
+            dependent_id = self._usb_reference_id(item.dependent)
+            controller_id = self._usb_reference_id(item.controller)
+            if dependent_id and controller_id and controller_id in controller_ids:
+                verified_associations.append(USBControllerDeviceResult(controller=controller_ids[controller_id], dependent=dependent_id))
+        associations = verified_associations
+        devices: list[USBDeviceResult] = []
+        seen: set[str] = set()
+        for node in collect("Win32_PnPEntity_USB"):
+            instance_id = self._text(node, "PNPDeviceID") or None
+            key = (instance_id or f"name:{self._text(node, 'Name')}").casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            present = self._pnp_presence(self._text(node, "Present"))
+            error_code = self._optional_int(self._text(node, "ConfigManagerErrorCode"))
+            status = self._text(node, "Status")
+            device_class = self._text(node, "PNPClass")
+            device_type, is_storage = self._usb_device_type(device_class, self._text(node, "Service"), instance_id or "")
+            normalized_instance_id = (instance_id or "").replace("\\\\", "\\").casefold()
+            association = next(
+                (
+                    item.controller
+                    for item in associations
+                    if normalized_instance_id
+                    and item.dependent
+                    and normalized_instance_id == item.dependent.casefold()
+                ),
+                None,
+            )
+            vid, pid = self._usb_ids(instance_id or "")
+            devices.append(USBDeviceResult(
+                name=self._text(node, "Name") or None,
+                instance_id=instance_id,
+                device_class=self._text(node, "PNPClass") or None,
+                manufacturer=self._text(node, "Manufacturer") or None,
+                vendor_id=vid,
+                product_id=pid,
+                pnp_status=status or None,
+                config_manager_error_code=error_code,
+                present=present, presence_state=self._usb_presence_state(present),
+                driver_health=self._usb_driver_health(status, error_code), device_type=device_type, is_storage=is_storage,
+                connection_state=self._pnp_connection_state(present, status, error_code),
+                controller_or_hub=association,
+            ))
+        return {"controllers": controllers, "hubs": hubs, "associations": associations, "devices": devices, "errors": errors}
 
     def records(self, class_name: str, fields: tuple[str, ...], *, limit: int = 50) -> list[dict[str, str | None]]:
         nodes = self._enumerate(class_name)

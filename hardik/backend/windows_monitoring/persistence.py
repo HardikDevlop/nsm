@@ -13,7 +13,7 @@ from datetime import datetime
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .cim import NetworkInterfaceResult
 from .events import SystemEvent
@@ -254,3 +254,11 @@ def list_system_events(
             raise ValueError("level filter is too long")
         query = query.where(WindowsEventLog.level == level)
     return list(db.scalars(query.order_by(WindowsEventLog.time_created.desc(), WindowsEventLog.id.desc()).offset(offset).limit(limit)))
+
+
+def latest_system_event_time(db: Session, device_id: int) -> datetime | None:
+    """Return the newest stored System event timestamp for incremental fetches."""
+    return db.scalar(select(func.max(WindowsEventLog.time_created)).where(
+        WindowsEventLog.device_id == device_id,
+        WindowsEventLog.channel == "System",
+    ))

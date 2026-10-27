@@ -186,7 +186,7 @@ export default function SNMPDiscoveryPanel({
   const [rangeStart,      setRangeStart]      = useState('192.168.100.1')
   const [rangeEnd,        setRangeEnd]        = useState('192.168.100.254')
   const [fullPrefix,      setFullPrefix]      = useState('192.168.100')
-  const [version,         setVersion]         = useState<'v2c'|'v3'>('v3')
+  const [version,         setVersion]         = useState<'v1'|'v2c'|'v3'>('v3')
   const [community,       setCommunity]       = useState('public')
   const [username,        setUsername]        = useState('Agnigate')
   const [authProtocol,    setAuthProtocol]    = useState('MD5')
@@ -245,7 +245,7 @@ export default function SNMPDiscoveryPanel({
       try {
         const result = await discoverSNMP({
           ips: addresses, snmp_version: version, timeout_seconds: Number(timeout) || 1,
-          communities: version === 'v2c' ? [community] : undefined,
+          communities: version !== 'v3' ? [community] : undefined,
           username:    version === 'v3' ? username : null,
           auth_protocol:    version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol    : null,
           auth_password:    version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authPassword    : null,
@@ -299,7 +299,7 @@ export default function SNMPDiscoveryPanel({
         site_id: null,
         discovery_source: 'snmp',
         snmp_version: version,
-        communities: version === 'v2c' ? [community] : undefined,
+        communities: version !== 'v3' ? [community] : undefined,
         username: version === 'v3' ? username : null,
         auth_protocol: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol : null,
         auth_password: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authPassword : null,
@@ -372,7 +372,7 @@ export default function SNMPDiscoveryPanel({
         site_id: null,
         discovery_source: 'snmp',
         snmp_version: version,
-        communities: version === 'v2c' ? [community] : undefined,
+        communities: version !== 'v3' ? [community] : undefined,
         username: version === 'v3' ? username : null,
         auth_protocol: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authProtocol : null,
         auth_password: version === 'v3' && securityLevel !== 'noAuthNoPriv' ? authPassword : null,
@@ -464,12 +464,13 @@ export default function SNMPDiscoveryPanel({
             Scans {fullPrefix || 'x.x.x'}.0 through {fullPrefix || 'x.x.x'}.254 (maximum 255 IPs).
           </div>
         </div>}
-        <select value={version} onChange={e => setVersion(e.target.value as 'v2c'|'v3')}
+        <select value={version} onChange={e => setVersion(e.target.value as 'v1'|'v2c'|'v3')}
           className="rounded-lg px-2 py-2 font-mono text-xs" style={SEL_STYLE}>
+          <option value="v1">SNMPv1</option>
           <option value="v3">SNMPv3</option>
           <option value="v2c">SNMPv2c</option>
         </select>
-        {version === 'v2c'
+        {version !== 'v3'
           ? <input value={community} onChange={e => setCommunity(e.target.value)}
               placeholder="Community string" className={INPUT} style={INPUT_STYLE}/>
           : <>

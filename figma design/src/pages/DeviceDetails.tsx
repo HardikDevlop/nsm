@@ -13,15 +13,14 @@ import {
 } from "../lib/api"
 import { useAuth } from "../components/AuthContext"
 import { isWindowsDevice } from "../lib/windowsClassification"
+import { formatUptime } from "../unitFormatting"
 const missing = "—"
 const date = (v?: string | null) =>
   v
     ? new Date(v).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
     : missing
 const duration = (s?: number | null) =>
-  s == null
-    ? missing
-    : `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+  formatUptime(s, { na: missing })
 function Field({ label, value }: { label: string value: unknown }) {
   return (
     <div>

@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 from requests.exceptions import SSLError, Timeout
 from pypsrp.exceptions import AuthenticationError, WinRMTransportError, WSManFaultError
 
-from backend.windows_monitoring.cim import CIMError, CIMLimits, WindowsCIMClient
+from backend.windows_monitoring.cim import CIMError, CIMLimits, USBControllerDeviceResult, USBHubResult, WindowsCIMClient
 from tests.windows_cim_fixtures import FakeWSMan, body, make_client, node, response
 
 
@@ -325,7 +325,7 @@ def test_network_interfaces_join_adapter_configuration_and_counters_by_interface
             mac_address="AA-BB-CC-DD-EE-FF",
             ipv4_addresses=("192.168.100.154",),
             ipv6_addresses=("fe80::1%12",),
-            interface_status="Up",
+            interface_status="Connected",
             link_speed_bps=1_000_000_000,
             rx_bytes_per_sec=1234,
             tx_bytes_per_sec=5678,
@@ -343,7 +343,7 @@ def test_network_interfaces_keep_unavailable_values_null_and_include_disconnecte
 
     assert result[0].interface_index is None
     assert result[0].adapter_index == 7
-    assert result[0].interface_status == "Down"
+    assert result[0].interface_status == "Disconnected"
     assert result[0].mac_address is None
     assert result[0].link_speed_bps is None
     assert result[0].rx_bytes_per_sec is None
@@ -510,3 +510,152 @@ def test_response_and_data_limits_and_no_secret_disclosure():
     with pytest.raises(CIMError) as exc:
         client.processor()
     assert "secret-value" not in str(exc.value)
+
+
+def test_usb_inventory_collects_controllers_hubs_and_associations():
+    controller = node("Win32_USBController", {"DeviceID": "PCI\\VEN_8086&amp;DEV_9DED", "Name": "USB xHCI Controller", "Manufacturer": "Intel", "PNPDeviceID": "PCI\\VEN_8086&amp;DEV_9DED", "Status": "OK", "ConfigManagerErrorCode": "0"})
+    hub = node("Win32_USBHub", {"DeviceID": "USB\\ROOT_HUB30", "Name": "USB Root Hub", "PNPDeviceID": "USB\\ROOT_HUB30", "Status": "OK"})
+    association = node("Win32_USBControllerDevice", {"Antecedent": 'Win32_USBController.DeviceID="PCI\\\\VEN_8086&amp;DEV_9DED"', "Dependent": 'Win32_PnPEntity.DeviceID="USB\\\\VID_1234&amp;PID_ABCD\\\\SN1"'})
+    device = node("Win32_PnPEntity", {"Name": "Example USB Device", "PNPDeviceID": "USB\\VID_1234&amp;PID_ABCD\\SN1", "PNPClass": "USB", "Manufacturer": "Example", "Status": "OK", "ConfigManagerErrorCode": "0", "Present": "true"})
+    client, _ = make_client(FakeWSMan([response(controller), response(hub), response(association), response(device)]))
+    result = client.usb_inventory()
+    assert result["controllers"][0].name == "USB xHCI Controller"
+    assert result["hubs"][0].name == "USB Root Hub"
+    usb = result["devices"][0]
+    assert usb.connection_state == "Unknown"
+    assert usb.vendor_id == "1234" and usb.product_id == "ABCD"
+    assert usb.controller_or_hub is not None
+
+
+def test_usb_hub_cannot_process_filter_uses_fallback(monkeypatch):
+    client, _ = make_client(FakeWSMan([response(""), response(""), response(""), response("")]))
+    fallback = [USBHubResult(device_id="USB\\HUB1", name="Fallback hub", description=None, manufacturer=None, instance_id="USB\\HUB1", pnp_status="OK", config_manager_error_code=0)]
+    monkeypatch.setattr(client, "_usb_hubs_powershell_fallback", lambda: fallback)
+    original = client._enumerate
+    def enumerate_with_hub_failure(class_name):
+        if class_name == "Win32_USBHub":
+            raise CIMError("protocol", "WSMan returned a protocol fault (n:CannotProcessFilter)")
+        return original(class_name)
+    monkeypatch.setattr(client, "_enumerate", enumerate_with_hub_failure)
+    result = client.usb_inventory()
+    assert [hub.name for hub in result["hubs"]] == ["Fallback hub"]
+    assert "Win32_USBHub" not in result["errors"]
+
+
+def test_usb_hub_fallback_failure_preserves_partial_inventory(monkeypatch):
+    controller = node("Win32_USBController", {"DeviceID": "PCI\\C", "Name": "Controller", "Status": "OK"})
+    device = node("Win32_PnPEntity", {"Name": "USB device", "PNPDeviceID": "USB\\VID_1234&amp;PID_0001", "PNPClass": "USB", "Status": "OK", "Present": "true"})
+    client, _ = make_client(FakeWSMan([response(controller), response(""), response(device)]))
+    monkeypatch.setattr(client, "_usb_hubs_powershell_fallback", lambda: (_ for _ in ()).throw(CIMError("protocol", "PowerShell USB hub query failed")))
+    original = client._enumerate
+    def enumerate_with_hub_failure(class_name):
+        if class_name == "Win32_USBHub":
+            raise CIMError("protocol", "WSMan returned a protocol fault (n:CannotProcessFilter)")
+        return original(class_name)
+    monkeypatch.setattr(client, "_enumerate", enumerate_with_hub_failure)
+    result = client.usb_inventory()
+    assert result["controllers"] and result["devices"]
+    assert result["hubs"] == [] and result["errors"]["Win32_USBHub"] == "protocol"
+
+
+def test_usb_controller_association_fallback_resolves_multiple_devices(monkeypatch):
+    controller = node("Win32_USBController", {"DeviceID": "PCI\\C1", "PNPDeviceID": "PCI\\C1", "Name": "Controller 1", "Status": "OK"})
+    device_one = node("Win32_PnPEntity", {"Name": "One", "PNPDeviceID": "USB\\D1", "PNPClass": "USB", "Present": "true"})
+    device_two = node("Win32_PnPEntity", {"Name": "Two", "PNPDeviceID": "USB\\D2", "PNPClass": "USB", "Present": "true"})
+    client, _ = make_client(FakeWSMan([response(controller), response(""), response(device_one + device_two)]))
+    monkeypatch.setattr(client, "_usb_associations_powershell_fallback", lambda: [
+        USBControllerDeviceResult('Win32_USBController.DeviceID="PCI\\\\C1"', 'Win32_PnPEntity.DeviceID="USB\\\\D1"'),
+        USBControllerDeviceResult('Win32_USBController.DeviceID="PCI\\\\C1"', 'Win32_PnPEntity.DeviceID="USB\\\\D2"'),
+    ])
+    original = client._enumerate
+    def enumerate_with_anonymous_associations(class_name):
+        if class_name == "Win32_USBControllerDevice":
+            return [ET.fromstring('<x><Antecedent>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</Antecedent><Dependent>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</Dependent></x>')]
+        return original(class_name)
+    monkeypatch.setattr(client, "_enumerate", enumerate_with_anonymous_associations)
+    result = client.usb_inventory()
+    assert [d.controller_or_hub for d in result["devices"]] == ["PCI\\C1", "PCI\\C1"]
+
+
+def test_usb_controller_associations_leave_unmatched_and_malformed_records_unrelated(monkeypatch):
+    controller = node("Win32_USBController", {"DeviceID": "PCI\\C1", "PNPDeviceID": "PCI\\C1", "Name": "Controller 1", "Status": "OK"})
+    device = node("Win32_PnPEntity", {"Name": "One", "PNPDeviceID": "USB\\D1", "PNPClass": "USB", "Present": "true"})
+    client, _ = make_client(FakeWSMan([response(controller), response(""), response(device)]))
+    monkeypatch.setattr(client, "_usb_associations_powershell_fallback", lambda: [
+        USBControllerDeviceResult('Win32_USBController.DeviceID="PCI\\\\UNKNOWN"', 'Win32_PnPEntity.DeviceID="USB\\\\D1"'),
+        USBControllerDeviceResult("malformed", 'Win32_PnPEntity.DeviceID="USB\\\\MISSING"'),
+    ])
+    original = client._enumerate
+    def enumerate_with_anonymous_associations(class_name):
+        if class_name == "Win32_USBControllerDevice":
+            return [ET.fromstring('<x><Antecedent>anonymous</Antecedent><Dependent>anonymous</Dependent></x>')]
+        return original(class_name)
+    monkeypatch.setattr(client, "_enumerate", enumerate_with_anonymous_associations)
+    result = client.usb_inventory()
+    assert result["devices"][0].controller_or_hub is None
+
+
+def test_unrelated_usb_hub_error_does_not_use_fallback(monkeypatch):
+    client, _ = make_client(FakeWSMan([response(""), response(""), response(""), response("")]))
+    called = False
+    def fallback():
+        nonlocal called
+        called = True
+        return []
+    monkeypatch.setattr(client, "_usb_hubs_powershell_fallback", fallback)
+    original = client._enumerate
+    def enumerate_with_hub_failure(class_name):
+        if class_name == "Win32_USBHub":
+            raise CIMError("timeout", "WSMan operation timed out")
+        return original(class_name)
+    monkeypatch.setattr(client, "_enumerate", enumerate_with_hub_failure)
+    result = client.usb_inventory()
+    assert not called and result["errors"]["Win32_USBHub"] == "timeout"
+
+
+def test_usb_inventory_preserves_missing_optional_properties_and_unknown_status():
+    device = node("Win32_PnPEntity", {"PNPDeviceID": "USB\\VID_0001&amp;PID_0002", "Status": "Degraded", "Present": "maybe", "ConfigManagerErrorCode": "not-a-number"})
+    client, _ = make_client(FakeWSMan([response(""), response(""), response(""), response(device)]))
+    usb = client.usb_inventory()["devices"][0]
+    assert usb.name is None and usb.manufacturer is None
+    assert usb.vendor_id == "0001" and usb.product_id == "0002"
+    assert usb.config_manager_error_code is None
+    assert usb.present is None and usb.connection_state == "Unknown"
+
+
+def test_usb_inventory_allowlist_and_query_failure_are_isolated():
+    query = WindowsCIMClient._filter("Win32_PnPEntity_USB").text
+    assert "Win32_PnPEntity" in query and "PNPDeviceID" in query
+    with pytest.raises(CIMError):
+        WindowsCIMClient._filter("Win32_PnPEntity")
+    client, _ = make_client(FakeWSMan([], error=Timeout("timed out")))
+    result = client.usb_inventory()
+    assert result["devices"] == []
+    assert result["errors"]["Win32_USBController"] == "timeout"
+
+
+def test_usb_inventory_normalizes_disabled_driver_error_and_storage():
+    disabled = node("Win32_PnPEntity", {"Name": "Disabled", "PNPDeviceID": "USB\\VID_1234&amp;PID_0001", "PNPClass": "USB", "Status": "OK", "ConfigManagerErrorCode": "22", "Present": "true"})
+    driver_error = node("Win32_PnPEntity", {"Name": "Broken", "PNPDeviceID": "USB\\VID_1234&amp;PID_0002", "PNPClass": "USB", "Status": "Error", "ConfigManagerErrorCode": "28", "Present": "true"})
+    storage = node("Win32_PnPEntity", {"Name": "USB Disk", "PNPDeviceID": "USBSTOR\\VID_1234&amp;PID_0003", "PNPClass": "USB", "Service": "USBSTOR", "Status": "OK", "Present": "true"})
+    client, _ = make_client(FakeWSMan([response(""), response(""), response(""), response(disabled + driver_error + storage)]))
+    devices = client.usb_inventory()["devices"]
+    assert devices[0].presence_state == "Present" and devices[0].driver_health == "Disabled"
+    assert devices[1].driver_health == "DriverError"
+    assert devices[2].device_type == "Storage" and devices[2].is_storage is True
+
+
+def test_usb_inventory_preserves_generic_pnp_class():
+    wpd = node("Win32_PnPEntity", {"Name": "Portable phone", "PNPDeviceID": "USB\\VID_18D1&amp;PID_4EE1", "PNPClass": "WPD", "Manufacturer": "Example", "Status": "OK", "Present": "true"})
+    client, _ = make_client(FakeWSMan([response(""), response(""), response(""), response(wpd)]))
+    device = client.usb_inventory()["devices"][0]
+    assert device.device_class == "WPD"
+
+
+def test_usb_inventory_deduplicates_same_instance_id_and_rejects_invalid_vid_pid():
+    first = node("Win32_PnPEntity", {"Name": "One", "PNPDeviceID": "USB\\VID_12G4&amp;PID_0001", "PNPClass": "USB", "Present": "true"})
+    duplicate = node("Win32_PnPEntity", {"Name": "One duplicate", "PNPDeviceID": "USB\\VID_12G4&amp;PID_0001", "PNPClass": "USB", "Present": "true"})
+    client, _ = make_client(FakeWSMan([response(""), response(""), response(""), response(first + duplicate)]))
+    devices = client.usb_inventory()["devices"]
+    assert len(devices) == 1
+    assert devices[0].vendor_id is None and devices[0].product_id == "0001"

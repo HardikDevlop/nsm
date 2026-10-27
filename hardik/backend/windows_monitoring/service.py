@@ -12,6 +12,7 @@ from backend.utils.crypto import decrypt_secret, encrypt_secret
 from .models import WindowsCredential
 from .schemas import WindowsCredentialCreate, WindowsCredentialRead, WindowsCredentialUpdate
 from .winrm import WinRMConnectionDiagnostic, WinRMHTTPSAdapter
+from .effective_trust import resolve_effective_windows_ca
 
 
 class WindowsCredentialService:
@@ -96,13 +97,19 @@ class WindowsCredentialService:
         password = decrypt_secret(credential.encrypted_secret)
         if not password:
             return WinRMConnectionDiagnostic(False, "protocol", "Windows credential is unavailable")
-        configured_ca_path = ca_trust_path or get_settings().windows_ca_trust_path
+        device = self._device(db, credential.device_id)
+        if ca_trust_path:
+            configured_ca_path = ca_trust_path
+        else:
+            configured_ca_path = resolve_effective_windows_ca(
+                credential.device_id, db,
+                global_ca_path=get_settings().windows_ca_trust_path,
+            ).protected_path
         if not configured_ca_path:
             return WinRMConnectionDiagnostic(False, "tls", "Windows CA trust is not configured")
         trust_path = Path(configured_ca_path)
         if not trust_path.is_file() or not trust_path.stat().st_size:
             return WinRMConnectionDiagnostic(False, "tls", "Windows CA trust configuration is invalid")
-        device = self._device(db, credential.device_id)
         username = f"{credential.domain}\\{credential.username}" if credential.domain else credential.username
         diagnostic = adapter_factory(
             getattr(credential, "connection_host", None) or device.hostname or device.ip_address,

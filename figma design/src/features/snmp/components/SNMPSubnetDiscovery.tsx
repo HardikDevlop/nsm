@@ -164,7 +164,7 @@ export default function SNMPSubnetDiscovery({
   const [singleIP,  setSingleIP]  = useState('')
   const [rangeS,    setRangeS]    = useState('')
   const [rangeE,    setRangeE]    = useState('')
-  const [ver,       setVer]       = useState<'v2c' | 'v3'>('v2c')
+  const [ver,       setVer]       = useState<'v1' | 'v2c' | 'v3'>('v2c')
   const [com,       setCom]       = useState('public')
   const [usr,       setUsr]       = useState('')
   const [ap,        setAp]        = useState('SHA')
@@ -238,7 +238,7 @@ export default function SNMPSubnetDiscovery({
       try {
         const res = await discoverSNMP({
           ips: chunk, snmp_version: ver, timeout_seconds: parseFloat(timeout) || 2,
-          communities:      ver === 'v2c' ? [com] : undefined,
+          communities:      ver !== 'v3' ? [com] : undefined,
           username:         ver === 'v3' ? usr || undefined : null,
           auth_protocol:    ver === 'v3' && sl !== 'noAuthNoPriv' ? ap  : null,
           auth_password:    ver === 'v3' && sl !== 'noAuthNoPriv' ? apw : null,
@@ -401,13 +401,14 @@ export default function SNMPSubnetDiscovery({
               SNMP CREDENTIALS
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-              <select value={ver} onChange={e => setVer(e.target.value as 'v2c' | 'v3')}
+              <select value={ver} onChange={e => setVer(e.target.value as 'v1' | 'v2c' | 'v3')}
                 className="rounded-lg px-2 py-2 font-mono text-xs" style={SEL}>
+                <option value="v1">SNMPv1</option>
                 <option value="v2c">SNMPv2c</option>
                 <option value="v3">SNMPv3</option>
               </select>
 
-              {ver === 'v2c' ? (
+              {ver !== 'v3' ? (
                 <input value={com} onChange={e => setCom(e.target.value)} placeholder="Community string"
                   className="rounded-lg px-2 py-2 font-mono text-xs" style={INP} />
               ) : (

@@ -41,6 +41,9 @@ EXTRA_PERMISSIONS = [
     ("remote_access", "disconnect"),
     ("remote_access", "view_sessions"),
     ("remote_access", "manage_credentials"),
+    ("windows_ca", "read"),
+    ("windows_ca", "manage"),
+    ("windows_ca", "assign"),
     # Frontend page-level permissions
     ("forensics", "read"),
     ("compliance", "read"),
@@ -119,6 +122,7 @@ OPERATOR_CODES = {
     "cmdb:read", "cmdb:manage",
     "remote_access:view", "remote_access:test", "remote_access:connect",
     "remote_access:disconnect", "remote_access:view_sessions",
+    "windows_ca:read", "windows_ca:manage",
     "rca:read", "rca:execute", "rca:manage",
     "incidents:read", "incidents:create", "incidents:update", "incidents:manage",
     "problems:read", "problems:create", "problems:update", "problems:manage",

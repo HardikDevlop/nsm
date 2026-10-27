@@ -1,0 +1,49 @@
+Collecting pywinrm==0.5.0
+  Using cached pywinrm-0.5.0-py3-none-any.whl (48 kB)
+Collecting pypsrp==0.9.1
+  Using cached pypsrp-0.9.1-py3-none-any.whl (92 kB)
+Collecting cryptography
+  Downloading cryptography-50.0.2-cp39-abi3-manylinux_2_34_x86_64.whl (4.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.8/4.8 MB 63.8 MB/s eta 0:00:00
+Collecting pytest
+  Using cached pytest-9.1.1-py3-none-any.whl (386 kB)
+Collecting requests-ntlm>=1.1.0
+  Using cached requests_ntlm-1.3.0-py3-none-any.whl (6.6 kB)
+Collecting xmltodict
+  Using cached xmltodict-1.0.4-py3-none-any.whl (13 kB)
+Collecting requests>=2.9.1
+  Using cached requests-2.34.2-py3-none-any.whl (73 kB)
+Collecting pyspnego<1.0.0,>=0.7.0
+  Using cached pyspnego-0.12.4-py3-none-any.whl (131 kB)
+Collecting cffi>=2.0.0
+  Downloading cffi-2.1.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (218 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 218.7/218.7 KB 43.2 MB/s eta 0:00:00
+Collecting typing-extensions>=4.13.2
+  Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Collecting iniconfig>=1.0.1
+  Downloading iniconfig-2.3.1-py3-none-any.whl (7.6 kB)
+Collecting pluggy<2,>=1.5
+  Downloading pluggy-1.7.0-py3-none-any.whl (27 kB)
+Collecting packaging>=22
+  Using cached packaging-26.3-py3-none-any.whl (129 kB)
+Collecting exceptiongroup>=1
+  Using cached exceptiongroup-1.3.1-py3-none-any.whl (16 kB)
+Collecting tomli>=1
+  Downloading tomli-2.5.0-py3-none-any.whl (14 kB)
+Collecting pygments>=2.7.2
+  Using cached pygments-2.21.0-py3-none-any.whl (1.3 MB)
+Collecting pycparser
+  Downloading pycparser-3.11-py3-none-any.whl (51 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 51.2/51.2 KB 10.7 MB/s eta 0:00:00
+Collecting certifi>=2023.5.7
+  Using cached certifi-2026.10.23-py3-none-any.whl (135 kB)
+Collecting charset_normalizer<4,>=2
+  Using cached charset_normalizer-3.5.2-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (271 kB)
+Collecting idna<4,>=2.5
+  Downloading idna-3.20-py3-none-any.whl (69 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 69.6/69.6 KB 15.9 MB/s eta 0:00:00
+Collecting urllib3<3,>=1.26
+  Downloading urllib3-2.8.0-py3-none-any.whl (135 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 135.7/135.7 KB 33.0 MB/s eta 0:00:00
+Installing collected packages: xmltodict, urllib3, typing-extensions, tomli, pygments, pycparser, pluggy, packaging, iniconfig, idna, charset_normalizer, certifi, requests, exceptiongroup, cffi, pytest, cryptography, pyspnego, requests-ntlm, pypsrp, pywinrm
+Successfully installed certifi-2026.10.23 cffi-2.1.1 charset_normalizer-3.5.2 cryptography-50.0.2 exceptiongroup-1.3.1 idna-3.20 iniconfig-2.3.1 packaging-26.3 pluggy-1.7.0 pycparser-3.11 pygments-2.21.0 pypsrp-0.9.1 pyspnego-0.12.4 pytest-9.1.1 pywinrm-0.5.0 requests-2.34.2 requests-ntlm-1.3.0 tomli-2.5.0 typing-extensions-4.16.0 urllib3-2.8.0 xmltodict-1.0.4

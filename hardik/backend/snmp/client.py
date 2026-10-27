@@ -250,7 +250,8 @@ class SNMPClient:
         from pysnmp.hlapi.asyncio import CommunityData, UsmUserData  # noqa: PLC0415
         if not self.credentials.is_v3:
             return CommunityData(
-                self.credentials.community or "public", mpModel=1
+                self.credentials.community or "public",
+                mpModel=0 if self.credentials.is_v1 else 1,
             )
 
         import pysnmp.hlapi.asyncio as hlapi  # noqa: PLC0415
@@ -363,7 +364,9 @@ class SNMPClient:
             current_var_binds = [ObjectType(ObjectIdentity(root_oid))]
             rows = 0
 
-            use_bulk = True
+            # SNMPv1 has no GETBULK operation. Use GETNEXT for the complete
+            # walk; v2c/v3 retain the bounded GETBULK fast path.
+            use_bulk = not self.credentials.is_v1
             previous_oid = tuple(int(part) for part in root_oid.strip(".").split("."))
             try:
                 while rows < _MAX_WALK_ROWS:

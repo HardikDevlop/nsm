@@ -1,6 +1,7 @@
 import GlassCard from "./GlassCard"
 import type { ReactNode } from "react"
 import type { DeviceRecord, WindowsHardwareSnapshot, WindowsMetricSnapshot } from "../lib/api"
+import { formatBytesBinary, formatUptime } from "../unitFormatting"
 
 type Props = {
   device: DeviceRecord
@@ -11,21 +12,13 @@ type Props = {
 
 const unavailable = "Not available"
 const value = (item: unknown) => item == null || item === "" ? unavailable : String(item)
-const bytes = (item: unknown) => {
-  if (typeof item !== "number" || !Number.isFinite(item)) return unavailable
-  if (item >= 1024 ** 3) return `${(item / 1024 ** 3).toFixed(1)} GiB`
-  return `${(item / 1024 ** 2).toFixed(1)} MiB`
-}
+const bytes = (item: unknown) => formatBytesBinary(typeof item === "number" ? item : null, { na: unavailable })
 const date = (item: unknown) => {
   if (typeof item !== "string" || !item) return unavailable
   const parsed = new Date(item)
   return Number.isNaN(parsed.getTime()) ? unavailable : parsed.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
 }
-const uptime = (item: unknown) => {
-  if (typeof item !== "number" || !Number.isFinite(item) || item < 0) return unavailable
-  const minutes = Math.floor(item / 60)
-  return `${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h ${minutes % 60}m`
-}
+const uptime = (item: unknown) => formatUptime(typeof item === "number" ? item : null, { na: unavailable })
 
 function MetricCard({ label, icon, main, detail, progress }: { label: string; icon: string; main: string; detail: string; progress?: number | null }) {
   return <GlassCard className="p-4">

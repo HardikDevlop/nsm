@@ -970,8 +970,15 @@ class PollingScheduler:
             if persistence_pending:
                 transaction_db = poller.db
             else:
+                poll_session = poller.db
                 transaction_db = SessionLocal()
                 poller.db = transaction_db
+                # poll() may replace its initial session after releasing the
+                # DB connection for the network round-trip. When deferred
+                # persistence is disabled, the worker owns that intermediate
+                # session and must close it before replacing the reference.
+                if poll_session is not db and poll_session is not transaction_db:
+                    poll_session.close()
 
             config = transaction_db.query(MonitoringConfig).filter(
                 MonitoringConfig.id == job.config_id

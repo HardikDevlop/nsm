@@ -275,8 +275,8 @@ class WinRMHTTPSAdapter:
         max_records: int,
     ) -> tuple[bytes, bytes, int]:
         """Run the fixed, read-only System event query over this WinRM session."""
-        if not 1 <= max_records <= 20:
-            raise ValueError("max_records must be between 1 and 20")
+        if not 1 <= max_records <= 50:
+            raise ValueError("max_records must be between 1 and 50")
         if any(not isinstance(event_id, int) or isinstance(event_id, bool) or event_id < 0 for event_id in event_ids):
             raise ValueError("event_ids must contain non-negative integers")
 

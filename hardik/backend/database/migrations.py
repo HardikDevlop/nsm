@@ -191,6 +191,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20261016_0063_windows_metric_snapshots", description="Persist independent Windows monitoring modules"),
     Migration(migration_id="20261017_0064_windows_event_logs", description="Persist deduplicated historical Windows event logs"),
     Migration(migration_id="20261017_0065_windows_hardware_snapshots", description="Persist latest Windows hardware identity snapshots"),
+    Migration(migration_id="20261026_0066_windows_ca_bundle_foundation", description="Create site-scoped Windows CA bundle metadata and device assignments"),
+    Migration(migration_id="20261026_0067_windows_ca_bundle_index_reconciliation", description="Reconcile ORM-declared Windows CA lookup indexes"),
 )
 
 
@@ -408,6 +410,60 @@ def _ensure_windows_hardware_table(engine: Engine) -> None:
 
     if "windows_hardware_snapshots" not in set(inspect(engine).get_table_names()):
         WindowsHardwareSnapshot.__table__.create(bind=engine)
+
+
+def _ensure_windows_ca_bundle_tables(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS windows_ca_bundles (
+                id SERIAL PRIMARY KEY,
+                site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE RESTRICT,
+                name VARCHAR(160) NOT NULL,
+                description TEXT,
+                storage_key VARCHAR(255) NOT NULL UNIQUE,
+                sha256_fingerprint VARCHAR(128) NOT NULL,
+                content_sha256 VARCHAR(64) NOT NULL,
+                subject VARCHAR(1024),
+                issuer VARCHAR(1024),
+                serial_number VARCHAR(255),
+                not_before TIMESTAMP,
+                not_after TIMESTAMP,
+                is_ca BOOLEAN,
+                is_self_signed BOOLEAN,
+                trust_type VARCHAR(32) NOT NULL CHECK (trust_type IN ('enterprise_ca', 'self_signed_explicit')),
+                status VARCHAR(16) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'expired', 'invalid')),
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                revoked_at TIMESTAMP,
+                revoked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                CONSTRAINT uq_windows_ca_bundles_site_fingerprint UNIQUE (site_id, sha256_fingerprint)
+            )
+        """))
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS windows_device_ca_assignments (
+                id SERIAL PRIMARY KEY,
+                device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                ca_bundle_id INTEGER NOT NULL REFERENCES windows_ca_bundles(id) ON DELETE RESTRICT,
+                assigned_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                assigned_at TIMESTAMP NOT NULL,
+                unassigned_at TIMESTAMP
+            )
+        """))
+        connection.execute(text('CREATE INDEX IF NOT EXISTS "ix_windows_ca_bundles_site_status" ON windows_ca_bundles (site_id, status)'))
+        connection.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS "uq_windows_device_ca_active" ON windows_device_ca_assignments (device_id) WHERE unassigned_at IS NULL'))
+        connection.execute(text('CREATE INDEX IF NOT EXISTS "ix_windows_device_ca_assignments_bundle" ON windows_device_ca_assignments (ca_bundle_id)'))
+
+
+def _ensure_windows_ca_bundle_indexes(engine: Engine) -> None:
+    """Add secondary indexes declared by the ORM but omitted from 0066."""
+    statements = (
+        'CREATE INDEX IF NOT EXISTS "ix_windows_ca_bundles_site_id" ON windows_ca_bundles (site_id)',
+        'CREATE INDEX IF NOT EXISTS "ix_windows_device_ca_assignments_device_id" ON windows_device_ca_assignments (device_id)',
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def _ensure_linux_metric_columns(engine: Engine) -> None:
@@ -1384,6 +1440,10 @@ def run_migrations(engine: Engine) -> list[str]:
                     connection.execute(text(statement))
         elif migration.migration_id == "20261017_0065_windows_hardware_snapshots":
             _ensure_windows_hardware_table(engine)
+        elif migration.migration_id == "20261026_0066_windows_ca_bundle_foundation":
+            _ensure_windows_ca_bundle_tables(engine)
+        elif migration.migration_id == "20261026_0067_windows_ca_bundle_index_reconciliation":
+            _ensure_windows_ca_bundle_indexes(engine)
         elif migration.migration_id == "20260930_0052_audit_log_context_fields":
             with engine.begin() as connection:
                 columns = {

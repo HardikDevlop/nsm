@@ -73,3 +73,12 @@ class WindowsHardwareSnapshotRead(BaseModel):
     processors: list[dict]
     memory_modules: list[dict]
     memory_arrays: list[dict]
+
+
+class WindowsUSBInventoryRead(BaseModel):
+    """Read-only, non-persistent USB inventory response."""
+
+    device_id: int
+    collected_at: str
+    status: str
+    usb: dict

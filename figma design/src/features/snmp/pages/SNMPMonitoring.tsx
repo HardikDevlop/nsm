@@ -10,6 +10,7 @@ import {
 } from '../../../lib/api'
 import { useAuth } from '../../../components/AuthContext'
 import { confirmDanger, promptText, toast } from '../../../lib/swal'
+import { formatBytesDecimal } from '../../../unitFormatting'
 
 /* ── severity colours ─────────────────────────────────────────────────────── */
 const SEV: Record<string, { c: string; bg: string }> = {
@@ -22,11 +23,7 @@ const SEV: Record<string, { c: string; bg: string }> = {
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
 function fmtBytes(b: number | undefined): string {
-  if (!b) return '—'
-  if (b >= 1_073_741_824) return `${(b / 1_073_741_824).toFixed(2)} GB`
-  if (b >= 1_048_576)     return `${(b / 1_048_576).toFixed(1)} MB`
-  if (b >= 1024)          return `${(b / 1024).toFixed(1)} KB`
-  return `${b} B`
+  return formatBytesDecimal(b, { na: '—' })
 }
 function fmtUptime(s: number): string {
   if (s <= 0) return '—'

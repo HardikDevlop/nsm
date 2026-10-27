@@ -32,6 +32,7 @@ import {
   type OverviewResponse,
 } from "../lib/api"
 import { formatISTTime, parseISTDate } from "../time"
+import { formatBitsPerSecond } from "../unitFormatting"
 
 /* ─────────────────────────────  THEME  ───────────────────────────── */
 const C = {
@@ -57,19 +58,8 @@ const PALETTE = [
 const fmt = (n: number | null | undefined, suffix = "") =>
   n == null || Number.isNaN(n) ? "N/A" : `${n.toFixed(n < 10 ? 1 : 0)}${suffix}`
 
-const formatTraffic = (n: number | null | undefined) => {
-  if (n == null || !Number.isFinite(Number(n))) return "N/A"
-  const raw = Number(n)
-  // Stored interface rates can come from the collector as bps while older
-  // records are already normalized to Mbps. Treat very large values as bps
-  // so the dashboard never presents impossible multi-thousand-Tbps readings.
-  const mbps = Math.abs(raw) >= 1_000_000 ? raw / 1_000_000 : raw
-  const absolute = Math.abs(mbps)
-  if (absolute >= 1_000_000) return `${(mbps / 1_000_000).toFixed(1)} Tbps`
-  if (absolute >= 1000) return `${(mbps / 1000).toFixed(1)} Gbps`
-  if (absolute >= 1) return `${mbps.toFixed(1)} Mbps`
-  return `${(mbps * 1000).toFixed(1)} Kbps`
-}
+// Overview API contract is rx_mbps/tx_mbps; convert that normalized value to bps once.
+const formatTraffic = (mbps: number | null | undefined) => Number.isFinite(mbps) ? formatBitsPerSecond(Number(mbps) * 1_000_000) : "N/A"
 
 const clock = (s?: string | null) =>
   s

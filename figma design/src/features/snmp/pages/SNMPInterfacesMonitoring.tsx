@@ -1,6 +1,7 @@
 import { useParams } from 'react-router'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
-import { getModuleConfig, getHealthColor, getStatusColor, formatBytes, formatSpeed } from '../modules/snmpModuleRegistry'
+import { getModuleConfig, getHealthColor, getStatusColor, formatSpeed } from '../modules/snmpModuleRegistry'
+import { formatBytesDecimal } from '../../../unitFormatting'
 import GlassCard from '../../../components/GlassCard'
 import SNMPDynamicTable from '../components/SNMPDynamicTable'
 import SNMPMetricChart from '../components/SNMPMetricChart'
@@ -172,10 +173,10 @@ export default function SNMPInterfacesMonitoring() {
                       {iface.mac || '—'}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#00d4ff' }}>
-                      {iface.in_octets ? formatBytes(iface.in_octets) : '0'}
+                      {iface.in_octets == null ? '—' : formatBytesDecimal(iface.in_octets, { na: '—' })}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs" style={{ color: '#ffaa00' }}>
-                      {iface.out_octets ? formatBytes(iface.out_octets) : '0'}
+                      {iface.out_octets == null ? '—' : formatBytesDecimal(iface.out_octets, { na: '—' })}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs font-bold" style={{ color: utilizationColor }}>
                       {utilization.toFixed(1)}%

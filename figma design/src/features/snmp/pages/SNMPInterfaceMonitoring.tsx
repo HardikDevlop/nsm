@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useParams } from 'react-router'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
-import { formatBytes, formatSpeed } from '../modules/snmpModuleRegistry'
+import { formatSpeed } from '../modules/snmpModuleRegistry'
+import { formatBytesDecimal } from '../../../unitFormatting'
 import GlassCard from '../../../components/GlassCard'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { useModuleData, useDeviceCapabilities } from '../modules/useSNMPModules'
@@ -44,7 +45,7 @@ function formatTraffic(iface: any, direction: 'rx' | 'tx'): string {
   if (bps !== undefined) return `${formatSpeed(bps)}/s`
 
   const octets = asNumber(direction === 'rx' ? (iface?.rx_octets ?? iface?.in_octets) : (iface?.tx_octets ?? iface?.out_octets))
-  return octets !== undefined ? formatBytes(octets) : '—'
+  return octets != null ? formatBytesDecimal(octets, { na: '—' }) : '—'
 }
 
 function canonicalInterfaceName(value: unknown): string {

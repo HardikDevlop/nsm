@@ -26,7 +26,7 @@ export default function AddSNMPDevicePage() {
     name: '',
     hostname: '',
     description: '',
-    snmp_version: 'v3' as 'v2c' | 'v3',
+    snmp_version: 'v3' as 'v1' | 'v2c' | 'v3',
     snmp_port: 161,
     community_string: '',
     username: 'Agnigate',
@@ -242,6 +242,7 @@ export default function AddSNMPDevicePage() {
                 className="w-full glass-bright rounded px-3 py-2 font-mono text-xs"
                 style={{ border: '1px solid rgba(0,212,255,0.25)', color: '#c8d8ee', background: 'rgba(8,25,55,0.7)' }}
               >
+                <option value="v1">SNMPv1</option>
                 <option value="v2c">SNMPv2c</option>
                 <option value="v3">SNMPv3</option>
               </select>
