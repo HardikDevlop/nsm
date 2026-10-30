@@ -7,7 +7,7 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database.session import Base
@@ -50,6 +50,9 @@ class LinuxServer(Base):
         back_populates="server", cascade="all, delete-orphan"
     )
     monitoring_config: Mapped["LinuxServerMonitoringConfig | None"] = relationship(
+        back_populates="server", cascade="all, delete-orphan", uselist=False, single_parent=True
+    )
+    threshold_config: Mapped["LinuxServerThresholdConfig | None"] = relationship(
         back_populates="server", cascade="all, delete-orphan", uselist=False, single_parent=True
     )
     snmp_credential: Mapped["LinuxServerSNMPCredential | None"] = relationship(
@@ -134,6 +137,38 @@ class LinuxServerMonitoringConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=linux_now, onupdate=linux_now)
 
     server: Mapped[LinuxServer] = relationship(back_populates="monitoring_config")
+
+
+class LinuxServerThresholdConfig(Base):
+    """Per-server warning and critical thresholds for collected utilization metrics."""
+
+    __tablename__ = "linux_server_threshold_configs"
+    __table_args__ = (
+        UniqueConstraint("linux_server_id", name="uq_linux_server_threshold_configs_server"),
+        CheckConstraint("cpu_warning_percent >= 0 AND cpu_warning_percent <= 100", name="ck_linux_threshold_cpu_warning_range"),
+        CheckConstraint("cpu_critical_percent >= 0 AND cpu_critical_percent <= 100", name="ck_linux_threshold_cpu_critical_range"),
+        CheckConstraint("memory_warning_percent >= 0 AND memory_warning_percent <= 100", name="ck_linux_threshold_memory_warning_range"),
+        CheckConstraint("memory_critical_percent >= 0 AND memory_critical_percent <= 100", name="ck_linux_threshold_memory_critical_range"),
+        CheckConstraint("disk_warning_percent >= 0 AND disk_warning_percent <= 100", name="ck_linux_threshold_disk_warning_range"),
+        CheckConstraint("disk_critical_percent >= 0 AND disk_critical_percent <= 100", name="ck_linux_threshold_disk_critical_range"),
+        CheckConstraint("cpu_warning_percent < cpu_critical_percent", name="ck_linux_threshold_cpu_order"),
+        CheckConstraint("memory_warning_percent < memory_critical_percent", name="ck_linux_threshold_memory_order"),
+        CheckConstraint("disk_warning_percent < disk_critical_percent", name="ck_linux_threshold_disk_order"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    linux_server_id: Mapped[int] = mapped_column(ForeignKey("linux_servers.id", ondelete="CASCADE"), index=True)
+    cpu_warning_percent: Mapped[float] = mapped_column(Float, default=80.0, nullable=False)
+    cpu_critical_percent: Mapped[float] = mapped_column(Float, default=95.0, nullable=False)
+    memory_warning_percent: Mapped[float] = mapped_column(Float, default=80.0, nullable=False)
+    memory_critical_percent: Mapped[float] = mapped_column(Float, default=95.0, nullable=False)
+    disk_warning_percent: Mapped[float] = mapped_column(Float, default=80.0, nullable=False)
+    disk_critical_percent: Mapped[float] = mapped_column(Float, default=95.0, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=linux_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=linux_now, onupdate=linux_now)
+
+    server: Mapped[LinuxServer] = relationship(back_populates="threshold_config")
 
 
 class LinuxServerMetricSample(Base):
@@ -281,6 +316,7 @@ LINUX_MONITORING_TABLES = (
     LinuxServerCredential.__table__,
     LinuxServerSNMPCredential.__table__,
     LinuxServerMonitoringConfig.__table__,
+    LinuxServerThresholdConfig.__table__,
     LinuxServerMetricSample.__table__,
     LinuxServerCurrentMetric.__table__,
     LinuxServerInterface.__table__,

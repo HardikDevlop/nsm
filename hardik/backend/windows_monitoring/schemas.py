@@ -59,6 +59,52 @@ class WindowsCredentialPersisted(BaseModel):
         return self
 
 
+class WindowsThresholdConfigBase(BaseModel):
+    """Validated threshold values shared by Windows threshold requests."""
+
+    cpu_threshold: float = Field(default=40, ge=1, le=100)
+    memory_threshold: float = Field(default=40, ge=1, le=100)
+    disk_threshold: float = Field(default=40, ge=1, le=100)
+    enabled: bool = True
+
+
+class WindowsThresholdConfigCreate(WindowsThresholdConfigBase):
+    device_id: int = Field(gt=0)
+
+
+class WindowsThresholdConfigUpdate(BaseModel):
+    cpu_threshold: float | None = Field(default=None, ge=1, le=100)
+    memory_threshold: float | None = Field(default=None, ge=1, le=100)
+    disk_threshold: float | None = Field(default=None, ge=1, le=100)
+    enabled: bool | None = None
+
+
+class WindowsThresholdConfigRead(WindowsThresholdConfigBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int | None = None
+    device_id: int
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class WindowsThresholdNotificationStateRead(BaseModel):
+    """Read-only contract for independent Windows threshold state."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    device_id: int
+    metric_name: Literal["cpu", "memory", "disk"]
+    state: Literal["normal", "warning"]
+    last_value: float | None = None
+    threshold_at_transition: float | None = None
+    last_transition_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class WindowsHardwareSnapshotRead(BaseModel):
     """Public, non-sensitive latest Windows hardware snapshot."""
 

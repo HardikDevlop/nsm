@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 from backend.database.session import get_db
 from backend.dependencies import require_permission
+from backend.auth.authorization import can_access_site
 from backend.models import User
 from backend.linux_monitoring import service
-from backend.linux_monitoring.models import LinuxSecurityEvent, LinuxServer, LinuxServerCredential, LinuxServerMetricSample
+from backend.linux_monitoring.models import LinuxSecurityEvent, LinuxServer, LinuxServerCredential, LinuxServerMetricSample, LinuxServerThresholdConfig
 from backend.linux_monitoring.schemas import (
     LinuxServerAddRequest,
     LinuxServerCreate,
@@ -18,6 +19,8 @@ from backend.linux_monitoring.schemas import (
     LinuxServerCredentialUpdate,
     LinuxServerMonitoringConfigRead,
     LinuxServerMonitoringConfigUpdate,
+    LinuxServerThresholdConfigRead,
+    LinuxServerThresholdConfigUpdate,
     LinuxServerDetailsRead,
     LinuxServerDetectedData,
     LinuxServerDetectionResponse,
@@ -151,9 +154,9 @@ async def start_linux_monitoring(
     payload: LinuxMonitoringStartRequest,
     request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("linux_servers:update")),
+    current_user: User = Depends(require_permission("linux_servers:update")),
 ):
-    service.get_server(db, server_id)
+    _authorized_linux_server(server_id, db, current_user)
     existing = db.query(service.LinuxServerSNMPCredential).filter_by(linux_server_id=server_id).first()
     if payload.username:
         service.save_monitoring_credential(db, server_id, payload)
@@ -163,7 +166,13 @@ async def start_linux_monitoring(
 
 
 @router.post("/{server_id}/monitoring/stop", response_model=LinuxMonitoringStatusRead)
-async def stop_linux_monitoring(server_id: int, request: Request, _: User = Depends(require_permission("linux_servers:update"))):
+async def stop_linux_monitoring(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("linux_servers:update")),
+):
+    _authorized_linux_server(server_id, db, current_user)
     return await _scheduler(request).stop_server(server_id)
 
 
@@ -293,6 +302,52 @@ async def delete_linux_server(server_id: int, request: Request, db: Session = De
 @router.get("/{server_id}/config", response_model=LinuxServerMonitoringConfigRead)
 def get_linux_server_config(server_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("linux_servers:read"))):
     return service.get_config(db, server_id)
+
+
+def _authorized_linux_server(server_id: int, db: Session, user: User) -> LinuxServer:
+    server = service.get_server(db, server_id)
+    if not can_access_site(user, server.site_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not authorized to access this Linux server")
+    return server
+
+
+@router.get("/{server_id}/thresholds", response_model=LinuxServerThresholdConfigRead)
+def get_linux_server_thresholds(
+    server_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("linux_servers:read")),
+):
+    _authorized_linux_server(server_id, db, current_user)
+    config = db.query(LinuxServerThresholdConfig).filter_by(linux_server_id=server_id).first()
+    if config is None:
+        config = LinuxServerThresholdConfig(linux_server_id=server_id)
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    return config
+
+
+@router.patch("/{server_id}/thresholds", response_model=LinuxServerThresholdConfigRead)
+def update_linux_server_thresholds(
+    server_id: int,
+    payload: LinuxServerThresholdConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("linux_servers:update")),
+):
+    _authorized_linux_server(server_id, db, current_user)
+    config = db.query(LinuxServerThresholdConfig).filter_by(linux_server_id=server_id).first()
+    if config is None:
+        config = LinuxServerThresholdConfig(linux_server_id=server_id)
+        db.add(config)
+    for field, value in payload.model_dump().items():
+        setattr(config, field, value)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Linux threshold configuration could not be saved") from None
+    db.refresh(config)
+    return config
 
 
 @router.put("/{server_id}/config", response_model=LinuxServerMonitoringConfigRead)

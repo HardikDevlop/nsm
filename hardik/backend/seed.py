@@ -30,6 +30,9 @@ CRUD_MODULES = [
 ]
 
 EXTRA_PERMISSIONS = [
+    ("reports:schedules", "create"),
+    ("reports:schedules", "update"),
+    ("reports:schedules", "delete"),
     ("audit_logs", "read"),
     ("dashboard", "read"),
     ("discovery", "execute"),

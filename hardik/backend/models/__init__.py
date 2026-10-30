@@ -293,6 +293,7 @@ class Alert(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id"), nullable=True)
+    linux_server_id: Mapped[int | None] = mapped_column(ForeignKey("linux_servers.id", ondelete="CASCADE"), nullable=True, index=True)
     interface_id: Mapped[int | None] = mapped_column(ForeignKey("interfaces.id", ondelete="SET NULL"), nullable=True, index=True)
     severity: Mapped[str] = mapped_column(String(30), index=True)
     title: Mapped[str] = mapped_column(String(180))

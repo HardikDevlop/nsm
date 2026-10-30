@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, JSON, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, JSON, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,6 +40,79 @@ class WindowsCredential(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=windows_now, onupdate=windows_now, nullable=False
+    )
+
+    device = relationship("Device")
+
+
+class WindowsThresholdConfig(Base):
+    """Per-device UI threshold configuration for Windows monitoring."""
+
+    __tablename__ = "windows_threshold_configs"
+    __table_args__ = (
+        UniqueConstraint("device_id", name="uq_windows_threshold_configs_device_id"),
+        CheckConstraint(
+            "cpu_threshold >= 1 AND cpu_threshold <= 100",
+            name="ck_windows_threshold_configs_cpu_range",
+        ),
+        CheckConstraint(
+            "memory_threshold >= 1 AND memory_threshold <= 100",
+            name="ck_windows_threshold_configs_memory_range",
+        ),
+        CheckConstraint(
+            "disk_threshold >= 1 AND disk_threshold <= 100",
+            name="ck_windows_threshold_configs_disk_range",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    cpu_threshold: Mapped[float] = mapped_column(Float, default=40, nullable=False)
+    memory_threshold: Mapped[float] = mapped_column(Float, default=40, nullable=False)
+    disk_threshold: Mapped[float] = mapped_column(Float, default=40, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=windows_now, onupdate=windows_now, nullable=False
+    )
+
+    device = relationship("Device")
+
+
+class WindowsThresholdNotificationState(Base):
+    """Device-scoped warning state; intentionally independent of global alerts."""
+
+    __tablename__ = "windows_threshold_notification_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_id", "metric_name",
+            name="uq_windows_threshold_notification_states_device_metric",
+        ),
+        CheckConstraint(
+            "metric_name IN ('cpu', 'memory', 'disk')",
+            name="ck_windows_threshold_notification_states_metric",
+        ),
+        CheckConstraint(
+            "state IN ('normal', 'warning')",
+            name="ck_windows_threshold_notification_states_state",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    metric_name: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="normal")
+    last_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    threshold_at_transition: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_transition_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=windows_now, onupdate=windows_now, nullable=False
@@ -154,6 +227,17 @@ class WindowsMetricSnapshot(Base):
     data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     device = relationship("Device")
 
+class WindowsMetricHistory(Base):
+    """Append-only Windows collection history; current snapshots remain separate."""
+    __tablename__ = "windows_metric_history"
+    __table_args__ = (Index("ix_windows_metric_history_device_module_time", "device_id", "module", "collected_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    module: Mapped[str] = mapped_column(String(40), nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False, index=True)
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    device = relationship("Device")
+
 
 class WindowsHardwareSnapshot(Base):
     __tablename__ = "windows_hardware_snapshots"
@@ -196,4 +280,10 @@ class WindowsEventLog(Base):
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
     device = relationship("Device")
 
-WINDOWS_MONITORING_TABLES = (WindowsCredential.__table__, WindowsSystemSnapshot.__table__, WindowsMetricSnapshot.__table__, WindowsHardwareSnapshot.__table__, WindowsEventLog.__table__)
+WINDOWS_MONITORING_TABLES = (
+    WindowsCredential.__table__,
+    WindowsSystemSnapshot.__table__,
+    WindowsMetricSnapshot.__table__,
+    WindowsHardwareSnapshot.__table__,
+    WindowsEventLog.__table__,
+)

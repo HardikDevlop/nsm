@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from backend.database.session import SessionLocal
 from backend.linux_monitoring import service
+from backend.linux_monitoring.threshold_evaluation import evaluate_sample
 from backend.linux_monitoring.models import LinuxServerMonitoringConfig, LinuxServerSNMPCredential, linux_now
 
 LINUX_POLL_INTERVAL_SECONDS = 180
@@ -161,6 +162,7 @@ class LinuxMonitoringScheduler:
                     config.monitoring_status = "running"
                     config.last_error = None
             else:
+                evaluate_sample(db, server_id, sample)
                 config.monitoring_status = "running"
                 config.last_success_at = sample.collected_at if sample else linux_now()
                 config.last_error = None

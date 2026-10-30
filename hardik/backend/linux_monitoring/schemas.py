@@ -97,6 +97,34 @@ class LinuxServerMonitoringConfigRead(LinuxServerMonitoringConfigUpdate):
     updated_at: datetime
 
 
+class LinuxServerThresholdConfigUpdate(BaseModel):
+    cpu_warning_percent: float = Field(default=80.0, ge=0, le=100)
+    cpu_critical_percent: float = Field(default=95.0, ge=0, le=100)
+    memory_warning_percent: float = Field(default=80.0, ge=0, le=100)
+    memory_critical_percent: float = Field(default=95.0, ge=0, le=100)
+    disk_warning_percent: float = Field(default=80.0, ge=0, le=100)
+    disk_critical_percent: float = Field(default=95.0, ge=0, le=100)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self):
+        for metric in ("cpu", "memory", "disk"):
+            warning = getattr(self, f"{metric}_warning_percent")
+            critical = getattr(self, f"{metric}_critical_percent")
+            if warning >= critical:
+                raise ValueError(f"{metric} warning threshold must be below critical threshold")
+        return self
+
+
+class LinuxServerThresholdConfigRead(LinuxServerThresholdConfigUpdate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    linux_server_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class LinuxServerDetectRequest(BaseModel):
     ip_address: str = Field(min_length=1, max_length=45)
     ssh_port: int = Field(default=22, ge=1, le=65535)

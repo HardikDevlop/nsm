@@ -8,6 +8,7 @@ import smtplib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.triggers.cron import CronTrigger
+from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
 from backend.config.settings import get_settings
@@ -16,6 +17,7 @@ from backend.schemas.nms import ReportManagementFilters, ReportManagementSummary
 
 logger = logging.getLogger(__name__)
 DAILY_REPORT_JOB_ID = "report-management:yesterday-email"
+_email_validator = TypeAdapter(EmailStr)
 
 
 def _timezone() -> ZoneInfo:
@@ -29,11 +31,28 @@ def _timezone() -> ZoneInfo:
 
 def resolve_report_recipients() -> list[str]:
     configured = get_settings().report_email_recipients
-    return list(dict.fromkeys(value.strip() for value in configured.split(",") if value.strip()))
+    recipients: list[str] = []
+    for value in configured.split(","):
+        candidate = value.strip()
+        if not candidate:
+            continue
+        try:
+            validated = str(_email_validator.validate_python(candidate))
+        except (ValidationError, TypeError, ValueError):
+            logger.warning("Ignoring invalid configured report email recipient")
+            continue
+        if validated not in recipients:
+            recipients.append(validated)
+    return recipients
 
 
 def report_email_status(_: Session | None = None) -> dict[str, object]:
     settings = get_settings()
+    smtp_configured = bool(
+        settings.smtp_host
+        and (settings.smtp_from or settings.smtp_username)
+        and (not settings.smtp_username or settings.smtp_password)
+    )
     return {
         "enabled": settings.report_email_enabled,
         "schedule": f"{settings.report_email_hour:02d}:{settings.report_email_minute:02d}",
@@ -41,7 +60,7 @@ def report_email_status(_: Session | None = None) -> dict[str, object]:
         "report_period": "yesterday",
         "format": "xlsx",
         "recipient_count": len(resolve_report_recipients()),
-        "smtp_configured": bool(settings.smtp_host and (settings.smtp_from or settings.smtp_username)),
+        "smtp_configured": smtp_configured,
     }
 
 
@@ -112,33 +131,40 @@ def send_yesterday_report_email() -> bool:
     if not recipients:
         logger.warning("Daily report email skipped: REPORT_EMAIL_RECIPIENTS is empty")
         return False
-    if not settings.smtp_host or not (settings.smtp_from or settings.smtp_username):
+    if (
+        not settings.smtp_host
+        or not (settings.smtp_from or settings.smtp_username)
+        or (settings.smtp_username and not settings.smtp_password)
+    ):
         logger.warning("Daily report email skipped: SMTP is not fully configured")
         return False
 
-    with SessionLocal() as db:
-        from backend.api.routes import _build_report_rows
-        summary, _ = _build_report_rows(db, ReportManagementFilters(period="yesterday", protocol="all"))
-
-    attachment = build_report_workbook(summary)
-    report_date = summary.period_start.date().isoformat()
-    message = EmailMessage()
-    message["Subject"] = f"NMS Yesterday Report - {report_date}"
-    message["From"] = settings.smtp_from or settings.smtp_username
-    message["To"] = ", ".join(recipients)
-    message.set_content(
-        f"Attached is the NMS management report for {report_date}.\n\n"
-        f"Devices: {summary.total_devices}\n"
-        f"Availability: {summary.availability_pct:.2f}%\n"
-        f"SLA met: {summary.sla_met_pct:.2f}%\n"
-    )
-    message.add_attachment(
-        attachment,
-        maintype="application",
-        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"NMS_Yesterday_Report_{report_date}.xlsx",
-    )
     try:
+        # This is an explicitly configured global report and intentionally
+        # contains all-site data; recipients must therefore be approved by the
+        # deployment operator rather than inferred from a requesting user.
+        with SessionLocal() as db:
+            from backend.api.routes import _build_report_rows
+            summary, _ = _build_report_rows(db, ReportManagementFilters(period="yesterday", protocol="all"))
+
+        attachment = build_report_workbook(summary)
+        report_date = summary.period_start.date().isoformat()
+        message = EmailMessage()
+        message["Subject"] = f"NMS Yesterday Report - {report_date}"
+        message["From"] = settings.smtp_from or settings.smtp_username
+        message["To"] = ", ".join(recipients)
+        message.set_content(
+            f"Attached is the NMS management report for {report_date}.\n\n"
+            f"Devices: {summary.total_devices}\n"
+            f"Availability: {summary.availability_pct:.2f}%\n"
+            f"SLA met: {summary.sla_met_pct:.2f}%\n"
+        )
+        message.add_attachment(
+            attachment,
+            maintype="application",
+            subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=f"NMS_Yesterday_Report_{report_date}.xlsx",
+        )
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
             if settings.smtp_use_tls:
                 smtp.starttls()
@@ -148,7 +174,7 @@ def send_yesterday_report_email() -> bool:
         logger.info("Yesterday report emailed to %d configured recipient(s) for %s", len(recipients), report_date)
         return True
     except Exception:
-        logger.exception("Could not email yesterday management report for %s", report_date)
+        logger.error("Could not prepare or email yesterday management report")
         return False
 
 

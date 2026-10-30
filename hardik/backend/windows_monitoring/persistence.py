@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from .cim import NetworkInterfaceResult
 from .events import SystemEvent
-from .models import WindowsEventLog, WindowsHardwareSnapshot, WindowsMetricSnapshot, windows_now
+from .models import WindowsEventLog, WindowsHardwareSnapshot, WindowsMetricSnapshot, WindowsMetricHistory, windows_now
 
 
 def _json_value(value):
@@ -155,6 +155,13 @@ def save_network_snapshot(
     except Exception:
         db.rollback()
         raise
+
+def save_metric_history(db: Session, device_id: int, module: str, data: dict | list, *, collected_at=None) -> WindowsMetricHistory:
+    """Append one immutable collection sample while current data is upserted elsewhere."""
+    row = WindowsMetricHistory(device_id=device_id, module=module, collected_at=collected_at or windows_now(), data=data)
+    db.add(row)
+    db.flush()
+    return row
 
 
 def _event_text(value: str | None, limit: int) -> str | None:

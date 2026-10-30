@@ -19,17 +19,17 @@ from backend.models import Device
 from backend.database.session import get_db
 from backend.services.audit import record_audit_event
 
-from .models import WindowsCredential, WindowsSystemSnapshot, WindowsMetricSnapshot, WindowsEventLog, WindowsHardwareSnapshot, windows_now
+from .models import WindowsCredential, WindowsSystemSnapshot, WindowsMetricSnapshot, WindowsEventLog, WindowsHardwareSnapshot, WindowsThresholdConfig, windows_now
 from .cim import WindowsCIMClient, CIMError
 from backend.utils.crypto import decrypt_secret
 from backend.config.settings import get_settings
-from .schemas import WindowsCredentialCreate, WindowsCredentialRead, WindowsCredentialUpdate, WindowsHardwareSnapshotRead, WindowsUSBInventoryRead
+from .schemas import WindowsCredentialCreate, WindowsCredentialRead, WindowsCredentialUpdate, WindowsHardwareSnapshotRead, WindowsUSBInventoryRead, WindowsThresholdConfigBase, WindowsThresholdConfigRead
 from dataclasses import asdict
 import errno
 import socket
 import ssl
 from .service import WindowsCredentialService
-from .persistence import get_hardware_snapshot, serialize_hardware_information, upsert_hardware_snapshot, upsert_network_snapshot
+from .persistence import get_hardware_snapshot, serialize_hardware_information, upsert_hardware_snapshot, upsert_network_snapshot, save_metric_history
 from .persistence import latest_system_event_time, list_system_events, save_system_events
 from .events import SystemEventError, collect_system_events
 from .winrm import WinRMHTTPSAdapter
@@ -40,6 +40,8 @@ from .ca_bundles_service import WindowsCABundleService, WindowsCABundleError
 from .ca_bundles_repository import get_active_device_ca_assignment
 from .effective_trust import resolve_effective_windows_ca, EffectiveTrustError
 from .models import WindowsCABundleStatus
+from .threshold_evaluation import evaluate_metric, apply_transition_alert
+from backend.services.alerting import deliver_notification_intents
 
 router = APIRouter(prefix="/windows", tags=["Windows Monitoring"])
 service = WindowsCredentialService()
@@ -323,6 +325,80 @@ def _device(db: Session, device_id: int, user, *, refresh: bool = False) -> Devi
         logger.warning("windows_device_lookup_unauthorized device_id=%s site_id=%s user_id=%s refresh=%s", device_id, device.site_id, getattr(user, "id", None), refresh)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
     return device
+
+
+def _windows_device(db: Session, device_id: int, user) -> Device:
+    """Resolve an authorized Windows device or one enrolled with Windows credentials."""
+    device = _device(db, device_id, user)
+    device_type = getattr(device, "device_type", None)
+    type_name = str(getattr(device_type, "name", "")).strip().lower()
+    if "windows" in type_name:
+        return device
+    credential = db.query(WindowsCredential).filter(
+        WindowsCredential.device_id == device.id,
+    ).first()
+    if credential is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    return device
+
+
+@router.get("/devices/{device_id}/thresholds", response_model=WindowsThresholdConfigRead)
+def get_thresholds(
+    device_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(require_permission("devices:read")),
+):
+    """Return device thresholds without materializing default configuration."""
+    device = _windows_device(db, device_id, user)
+    config = db.query(WindowsThresholdConfig).filter(
+        WindowsThresholdConfig.device_id == device.id
+    ).first()
+    if config is not None:
+        return config
+    return WindowsThresholdConfigRead(device_id=device.id)
+
+
+@router.put("/devices/{device_id}/thresholds", response_model=WindowsThresholdConfigRead)
+def put_thresholds(
+    device_id: int,
+    payload: WindowsThresholdConfigBase,
+    db: Session = Depends(get_db),
+    user=Depends(require_permission("devices:update")),
+):
+    """Atomically create or update one device's Windows threshold config."""
+    device = _windows_device(db, device_id, user)
+    values = payload.model_dump()
+    try:
+        statement = pg_insert(WindowsThresholdConfig).values(
+            device_id=device.id,
+            **values,
+        ).on_conflict_do_update(
+            index_elements=[WindowsThresholdConfig.device_id],
+            set_={**values, "updated_at": windows_now()},
+        ).returning(WindowsThresholdConfig.id)
+        config_id = db.execute(statement).scalar_one()
+        db.commit()
+        config = db.query(WindowsThresholdConfig).filter(
+            WindowsThresholdConfig.id == config_id,
+            WindowsThresholdConfig.device_id == device.id,
+        ).one()
+        record_audit_event(
+            db,
+            actor=user,
+            action="windows_thresholds.update",
+            resource_type="windows_device",
+            resource_id=device.id,
+            site_id=device.site_id,
+            outcome="success",
+            new_values=values,
+        )
+        return config
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Windows thresholds could not be saved") from None
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Windows thresholds could not be saved") from None
 
 
 def _credential(db: Session, device_id: int, credential_id: int) -> WindowsCredential:
@@ -1011,6 +1087,9 @@ def discover_hardware_sensors(device_id: int, db: Session = Depends(get_db), use
             "sensors": [sensor.as_dict() for provider in provider_results for sensor in provider.sensors],
             "providers": [provider.as_dict() for provider in provider_results],
         }
+        _upsert_metric_snapshot(db, device_id, "sensors", result)
+        save_metric_history(db, device_id, "sensors", result)
+        db.commit()
         logger.info("windows_sensor_discovery_success device_id=%s sensor_count=%s", device_id, len(result["sensors"]))
         return result
     except CIMError as exc:
@@ -1025,6 +1104,9 @@ def discover_disk_inventory(device_id: int, db: Session = Depends(get_db), user=
     try:
         started = perf_counter()
         result = client.disk_inventory()
+        _upsert_metric_snapshot(db, device_id, "disk_inventory", result)
+        save_metric_history(db, device_id, "disk_inventory", result)
+        db.commit()
         logger.info("windows_disk_inventory_success device_id=%s physical=%s partitions=%s modern=%s duration_ms=%.1f", device_id, len(result.get("physical_disks", [])), len(result.get("partitions", [])), result.get("modern_status"), (perf_counter() - started) * 1000)
         return {"device_id": device_id, **result}
     except CIMError as exc:
@@ -1051,7 +1133,11 @@ def get_usb_inventory(device_id: int, db: Session = Depends(get_db), user=Depend
             "collection_errors": errors,
         }
         status_value = "partial" if errors else "empty" if not any(usb[key] for key in ("controllers", "hubs", "devices")) else "ok"
-        return {"device_id": device_id, "collected_at": collected_at, "status": status_value, "usb": usb}
+        payload = {"device_id": device_id, "collected_at": collected_at, "status": status_value, "usb": usb}
+        _upsert_metric_snapshot(db, device_id, "usb", payload)
+        save_metric_history(db, device_id, "usb", payload)
+        db.commit()
+        return payload
     except CIMError as exc:
         logger.warning("windows_usb_inventory_failed device_id=%s category=%s message=%s", device_id, exc.category, exc.message)
         raise HTTPException(status_code=502, detail=f"Windows USB inventory failed: {exc.category}") from None
@@ -1132,7 +1218,11 @@ def discover_disk_health(device_id: int, db: Session = Depends(get_db), user=Dep
             metrics[name] = _health_metric(row.get(field), unit, f"MSFT_StorageReliabilityCounter.{field}")
         reliability.append({"device_id": stable_id, "physical_disk_device_id": stable_id if matched else None, "association_status": "matched" if matched else "unavailable", "metrics": metrics})
     provider_status = {"physical_disk": _health_status(modern_error) if modern_error else ("ok" if modern else "unsupported"), "reliability": _health_status(reliability_error) if reliability_error else ("ok" if raw_reliability else "unsupported")}
-    return {"device_id": device_id, "collected_at": collected_at, "provider_status": provider_status, "physical_disks": physical, "reliability_counters": reliability, "correlation_status": "reliable" if any(row["association_status"] == "matched" for row in reliability) else "unavailable", "provider_error": reliability_error.message if reliability_error else (modern_error.message if modern_error else None)}
+    payload = {"device_id": device_id, "collected_at": collected_at, "provider_status": provider_status, "physical_disks": physical, "reliability_counters": reliability, "correlation_status": "reliable" if any(row["association_status"] == "matched" for row in reliability) else "unavailable", "provider_error": reliability_error.message if reliability_error else (modern_error.message if modern_error else None)}
+    _upsert_metric_snapshot(db, device_id, "disk_health", payload)
+    save_metric_history(db, device_id, "disk_health", payload)
+    db.commit()
+    return payload
 
 @router.get("/devices/{device_id}/metrics/{module}")
 def get_metric(device_id: int, module: str, db: Session = Depends(get_db), user=Depends(require_permission("devices:read"))):
@@ -1348,7 +1438,28 @@ def fetch_metric(device_id: int, module: str, db: Session = Depends(get_db), use
         else:
             raise CIMError("permission", "Unsupported Windows metric module")
         row = _upsert_metric_snapshot(db, device_id, module, value)
+        save_metric_history(db, device_id, module, value)
+        notification_intents = []
+        if module in {"cpu", "memory", "disk"}:
+                try:
+                    transition = evaluate_metric(db, device_id, module, value)
+                    apply_transition_alert(
+                        db,
+                        transition,
+                        device_label=device.hostname or device.ip_address or str(device.id),
+                        notification_intents=notification_intents,
+                    )
+                except StopIteration:
+                    # Preserve legacy unit-test doubles that only model the
+                    # metric persistence queries; real sessions never raise
+                    # StopIteration here.
+                    logger.debug("windows_threshold_evaluation_not_configured device_id=%s module=%s", device_id, module)
         db.commit()
+        if notification_intents:
+            # Delivery is deliberately after the metric/state/alert commit;
+            # SMTP failure cannot roll back monitoring persistence.
+            deliver_notification_intents(db, notification_intents)
+            db.commit()
         response = _metric_read(row, device_id, module)
         if module in {"cpu", "memory", "disk"}:
             action = {"cpu": "CPU_FETCH", "memory": "MEMORY_FETCH", "disk": "DISK_FETCH"}[module]

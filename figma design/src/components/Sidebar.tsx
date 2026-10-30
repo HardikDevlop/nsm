@@ -61,7 +61,7 @@ const nav = [
   { to: '/device-types', label: 'Device Types', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z', permission: 'device_types:read', admin: true },
   { to: '/device-credentials', label: 'Device Credentials', icon: 'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z', permission: 'device_credentials:read', admin: true },
   { to: '/audit-logs', label: 'Audit Logs', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01', permission: 'audit_logs:read', admin: true },
-  { to: '/reports/management', label: 'Report Center', icon: 'M4 5h16v14H4zM7 9h10M7 13h6M7 17h4', permission: 'reports:read', admin: true },
+  { to: '/reports/management', label: 'Report Center', icon: 'M4 5h16v14H4zM7 9h10M7 13h6M7 17h4', permission: 'reports:read' },
   // { to: '/reports/daily', label: 'Daily Report', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', permission: 'reports:read', admin: true },
 ]
 

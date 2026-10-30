@@ -340,6 +340,7 @@ export async function requestJson<T>(
         throw new Error(friendlyApiMessage(response.status, detail))
       }
 
+      if (response.status === 204) return undefined as T
       const payload = await response.json()
       return normalizeKnownDeviceIdentity(payload) as T
     })
@@ -939,7 +940,7 @@ export interface ReportSchedule {
   frequency: "daily" | "weekly" | "monthly"
   run_time: string
   timezone?: string | null
-  report_format: "csv"
+  report_format: "csv" | "xlsx" | "pdf"
   filters: ReportManagementFilters
   created_at: string
   updated_at: string
@@ -2135,6 +2136,25 @@ export interface WindowsMetricSnapshot {
   module: WindowsMetricModule
   collected_at: string | null
   data: any
+}
+export interface WindowsThresholdConfig {
+  id?: number | null
+  device_id: number
+  cpu_threshold: number
+  memory_threshold: number
+  disk_threshold: number
+  enabled: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+export async function getWindowsThresholds(deviceId: number): Promise<WindowsThresholdConfig> {
+  return requestJson(`/windows/devices/${deviceId}/thresholds`, { cache: "no-store" })
+}
+export async function updateWindowsThresholds(deviceId: number, values: Pick<WindowsThresholdConfig, "cpu_threshold" | "memory_threshold" | "disk_threshold">): Promise<WindowsThresholdConfig> {
+  return requestJson(`/windows/devices/${deviceId}/thresholds`, {
+    method: "PUT",
+    body: JSON.stringify({ ...values, enabled: true }),
+  })
 }
 export async function getWindowsMetric(
   deviceId: number,
@@ -4991,6 +5011,19 @@ export interface LinuxRetentionStatus {
   last_cleanup_at?: string | null
   last_cleanup_error?: string | null
 }
+export interface LinuxThresholdConfig {
+  id: number
+  linux_server_id: number
+  cpu_warning_percent: number
+  cpu_critical_percent: number
+  memory_warning_percent: number
+  memory_critical_percent: number
+  disk_warning_percent: number
+  disk_critical_percent: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
 export async function listLinuxServers(): Promise<LinuxServerRecord[]> {
   return requestJson("/linux-servers")
 }
@@ -5031,6 +5064,12 @@ export async function addLinuxServer(
 }
 export async function getLinuxServer(id: number): Promise<LinuxServerDetail> {
   return requestJson(`/linux-servers/${id}`)
+}
+export async function getLinuxThresholds(id: number): Promise<LinuxThresholdConfig> {
+  return requestJson(`/linux-servers/${id}/thresholds`)
+}
+export async function updateLinuxThresholds(id: number, data: Omit<LinuxThresholdConfig, 'id' | 'linux_server_id' | 'created_at' | 'updated_at'>): Promise<LinuxThresholdConfig> {
+  return requestJson(`/linux-servers/${id}/thresholds`, { method: 'PATCH', body: JSON.stringify(data) })
 }
 export async function updateLinuxServer(
   id: number,

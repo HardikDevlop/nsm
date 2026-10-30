@@ -193,6 +193,12 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20261017_0065_windows_hardware_snapshots", description="Persist latest Windows hardware identity snapshots"),
     Migration(migration_id="20261026_0066_windows_ca_bundle_foundation", description="Create site-scoped Windows CA bundle metadata and device assignments"),
     Migration(migration_id="20261026_0067_windows_ca_bundle_index_reconciliation", description="Reconcile ORM-declared Windows CA lookup indexes"),
+    Migration(migration_id="20261027_0068_windows_threshold_configs", description="Create per-device Windows monitoring threshold configuration"),
+    Migration(migration_id="20261027_0069_windows_threshold_notification_states", description="Create independent Windows threshold notification state"),
+    Migration(migration_id="20261028_0070_windows_metric_history", description="Persist Windows USB, sensors, disk health and metric history"),
+    Migration(migration_id="20261028_0071_linux_threshold_configs", description="Create per-server Linux CPU, memory and disk threshold configuration"),
+    Migration(migration_id="20261028_0072_linux_alert_association", description="Associate alerts with isolated Linux servers"),
+    Migration(migration_id="20261029_0073_report_schedule_permissions", description="Add dedicated scheduled-report mutation permissions"),
 )
 
 
@@ -1386,6 +1392,19 @@ def run_migrations(engine: Engine) -> list[str]:
                     'CREATE INDEX IF NOT EXISTS ix_user_sessions_revoked_at ON user_sessions (revoked_at)',
                 ):
                     connection.execute(text(statement))
+        elif migration.migration_id == "20261029_0073_report_schedule_permissions":
+            with engine.begin() as connection:
+                for action in ("create", "update", "delete"):
+                    connection.execute(text("""
+                        INSERT INTO permissions (code, name, module, action, description)
+                        VALUES (:code, :name, 'reports:schedules', :action, :description)
+                        ON CONFLICT (code) DO NOTHING
+                    """), {
+                        "code": f"reports:schedules:{action}",
+                        "name": f"Report Schedules {action.title()}",
+                        "action": action,
+                        "description": f"Can {action} scheduled reports",
+                    })
         elif migration.migration_id == "20261002_0055_remote_access_foundation":
             _ensure_remote_access_foundation(engine)
         elif migration.migration_id == "20261003_0056_ssh_host_keys":
@@ -1444,6 +1463,76 @@ def run_migrations(engine: Engine) -> list[str]:
             _ensure_windows_ca_bundle_tables(engine)
         elif migration.migration_id == "20261026_0067_windows_ca_bundle_index_reconciliation":
             _ensure_windows_ca_bundle_indexes(engine)
+        elif migration.migration_id == "20261027_0068_windows_threshold_configs":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS windows_threshold_configs (
+                    id SERIAL PRIMARY KEY,
+                    device_id INTEGER NOT NULL UNIQUE REFERENCES devices(id) ON DELETE CASCADE,
+                    cpu_threshold DOUBLE PRECISION NOT NULL DEFAULT 40,
+                    memory_threshold DOUBLE PRECISION NOT NULL DEFAULT 40,
+                    disk_threshold DOUBLE PRECISION NOT NULL DEFAULT 40,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT ck_windows_threshold_configs_cpu_range CHECK (cpu_threshold >= 1 AND cpu_threshold <= 100),
+                    CONSTRAINT ck_windows_threshold_configs_memory_range CHECK (memory_threshold >= 1 AND memory_threshold <= 100),
+                    CONSTRAINT ck_windows_threshold_configs_disk_range CHECK (disk_threshold >= 1 AND disk_threshold <= 100)
+                )"""))
+        elif migration.migration_id == "20261027_0069_windows_threshold_notification_states":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS windows_threshold_notification_states (
+                    id SERIAL PRIMARY KEY,
+                    device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                    metric_name VARCHAR(20) NOT NULL,
+                    state VARCHAR(20) NOT NULL DEFAULT 'normal',
+                    last_value DOUBLE PRECISION,
+                    threshold_at_transition DOUBLE PRECISION,
+                    last_transition_at TIMESTAMP,
+                    last_error TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_windows_threshold_notification_states_device_metric UNIQUE (device_id, metric_name),
+                    CONSTRAINT ck_windows_threshold_notification_states_metric CHECK (metric_name IN ('cpu', 'memory', 'disk')),
+                    CONSTRAINT ck_windows_threshold_notification_states_state CHECK (state IN ('normal', 'warning'))
+                )"""))
+        elif migration.migration_id == "20261028_0070_windows_metric_history":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS windows_metric_history (
+                    id SERIAL PRIMARY KEY,
+                    device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                    module VARCHAR(40) NOT NULL,
+                    collected_at TIMESTAMP NOT NULL,
+                    data JSONB NOT NULL DEFAULT '{}'
+                )"""))
+        elif migration.migration_id == "20261028_0071_linux_threshold_configs":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS linux_server_threshold_configs (
+                    id SERIAL PRIMARY KEY,
+                    linux_server_id INTEGER NOT NULL UNIQUE REFERENCES linux_servers(id) ON DELETE CASCADE,
+                    cpu_warning_percent DOUBLE PRECISION NOT NULL DEFAULT 80,
+                    cpu_critical_percent DOUBLE PRECISION NOT NULL DEFAULT 95,
+                    memory_warning_percent DOUBLE PRECISION NOT NULL DEFAULT 80,
+                    memory_critical_percent DOUBLE PRECISION NOT NULL DEFAULT 95,
+                    disk_warning_percent DOUBLE PRECISION NOT NULL DEFAULT 80,
+                    disk_critical_percent DOUBLE PRECISION NOT NULL DEFAULT 95,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT ck_linux_threshold_cpu_warning_range CHECK (cpu_warning_percent >= 0 AND cpu_warning_percent <= 100),
+                    CONSTRAINT ck_linux_threshold_cpu_critical_range CHECK (cpu_critical_percent >= 0 AND cpu_critical_percent <= 100),
+                    CONSTRAINT ck_linux_threshold_memory_warning_range CHECK (memory_warning_percent >= 0 AND memory_warning_percent <= 100),
+                    CONSTRAINT ck_linux_threshold_memory_critical_range CHECK (memory_critical_percent >= 0 AND memory_critical_percent <= 100),
+                    CONSTRAINT ck_linux_threshold_disk_warning_range CHECK (disk_warning_percent >= 0 AND disk_warning_percent <= 100),
+                    CONSTRAINT ck_linux_threshold_disk_critical_range CHECK (disk_critical_percent >= 0 AND disk_critical_percent <= 100),
+                    CONSTRAINT ck_linux_threshold_cpu_order CHECK (cpu_warning_percent < cpu_critical_percent),
+                    CONSTRAINT ck_linux_threshold_memory_order CHECK (memory_warning_percent < memory_critical_percent),
+                    CONSTRAINT ck_linux_threshold_disk_order CHECK (disk_warning_percent < disk_critical_percent)
+                )"""))
+        elif migration.migration_id == "20261028_0072_linux_alert_association":
+            with engine.begin() as connection:
+                connection.execute(text('ALTER TABLE alerts ADD COLUMN IF NOT EXISTS linux_server_id INTEGER REFERENCES linux_servers(id) ON DELETE SET NULL'))
+                connection.execute(text('CREATE INDEX IF NOT EXISTS ix_alerts_linux_server_status_created_at ON alerts (linux_server_id, status, created_at)'))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_windows_metric_history_device_module_time ON windows_metric_history (device_id, module, collected_at)"))
         elif migration.migration_id == "20260930_0052_audit_log_context_fields":
             with engine.begin() as connection:
                 columns = {

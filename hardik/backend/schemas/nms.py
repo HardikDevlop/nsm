@@ -447,6 +447,7 @@ class ThresholdRead(ThresholdBase):
 # ---------------------------------------------------------------- Alerts
 class AlertBase(BaseModel):
     device_id: int | None = None
+    linux_server_id: int | None = None
     interface_id: int | None = None
     severity: str
     title: str
@@ -593,7 +594,7 @@ class ReportScheduleBase(BaseModel):
     frequency: Literal["daily", "weekly", "monthly"]
     run_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     timezone: str | None = None
-    report_format: Literal["csv"] = "csv"
+    report_format: Literal["csv", "xlsx", "pdf"] = "csv"
     filters: dict = Field(default_factory=dict)
 
 
@@ -607,7 +608,7 @@ class ReportScheduleUpdate(BaseModel):
     frequency: Literal["daily", "weekly", "monthly"] | None = None
     run_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     timezone: str | None = None
-    report_format: Literal["csv"] | None = None
+    report_format: Literal["csv", "xlsx", "pdf"] | None = None
     filters: dict | None = None
 
 

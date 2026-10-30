@@ -51,8 +51,8 @@ export default function WindowsDeviceOverview({ device, metrics, hardware, loadi
   const memoryUsage = typeof memory.usage_percent === "number" ? memory.usage_percent : null
   const diskUsage = typeof disk?.usage_percent === "number" ? disk.usage_percent : null
 
-  return <section className="space-y-4" aria-label="Windows device overview">
-    <GlassCard className="p-5">
+  return <section className="space-y-3" aria-label="Windows device overview">
+    <GlassCard className="p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-3">
@@ -65,18 +65,18 @@ export default function WindowsDeviceOverview({ device, metrics, hardware, loadi
       </div>
     </GlassCard>
 
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
       <MetricCard label="CPU usage" icon="◌" main={cpuUsage == null ? unavailable : `${cpuUsage}%`} detail={`${value(cpu.identity?.physical_cores)} physical cores`} progress={cpuUsage} />
       <MetricCard label="Memory" icon="▦" main={`${usedMemory} / ${totalMemory}`} detail={memoryUsage == null ? "Usage not available" : `${memoryUsage}% used`} progress={memoryUsage} />
       <MetricCard label="Disk capacity" icon="▤" main={disk ? bytes(disk.size_bytes) : unavailable} detail={diskSummary} progress={diskUsage} />
       <MetricCard label="Network" icon="⌁" main={network.length ? `${network.length} adapters` : unavailable} detail={network.length ? `${network.filter((item: Record<string, unknown>) => /up|connected/i.test(String(item.interface_status))).length} active interfaces` : "No saved network data"} />
     </div>
 
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <GlassCard className="p-5"><div className="font-display text-base font-bold" style={{ color: "var(--t-text)" }}>System information</div><dl className="mt-4 grid gap-4 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <GlassCard className="p-4"><div className="font-display text-sm font-bold" style={{ color: "var(--t-text)" }}>System information</div><dl className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Operating system">{value(system.caption)}</Field><Field label="Version / build">{value(system.version)}{system.build_number ? ` · Build ${system.build_number}` : ""}</Field><Field label="Hostname">{value(system.hostname || device.hostname)}</Field><Field label="Manufacturer">{value(system.manufacturer)}</Field><Field label="Domain">{value(system.domain || system.domain_name)}</Field><Field label="Uptime">{uptime(system.uptime_seconds)}</Field>
       </dl></GlassCard>
-      <GlassCard className="p-5"><div className="font-display text-base font-bold" style={{ color: "var(--t-text)" }}>Hardware summary</div>{loading ? <div className="mt-4 font-mono text-xs" style={{ color: "var(--t-muted)" }}>Loading available hardware…</div> : <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+      <GlassCard className="p-4"><div className="font-display text-sm font-bold" style={{ color: "var(--t-text)" }}>Hardware summary</div>{loading ? <div className="mt-3 font-mono text-xs" style={{ color: "var(--t-muted)" }}>Loading available hardware…</div> : <dl className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Processor">{value(hardware?.processors?.[0]?.name || hardware?.processors?.[0]?.caption || cpu.identity?.name)}</Field><Field label="Installed memory">{hardware?.memory_modules?.length ? `${hardware.memory_modules.length} module${hardware.memory_modules.length === 1 ? "" : "s"}` : totalMemory}</Field><Field label="Physical disks">{disks.length ? String(disks.length) : unavailable}</Field><Field label="Network adapters">{network.length ? String(network.length) : unavailable}</Field><Field label="Model">{value(hardware?.computer_system?.model || device.model)}</Field>
       </dl>}</GlassCard>
     </div>

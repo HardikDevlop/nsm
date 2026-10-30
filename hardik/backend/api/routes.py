@@ -51,6 +51,7 @@ from backend.models import (
     UserSession,
     Vendor,
 )
+from backend.linux_monitoring.models import LinuxServer
 from backend.repositories.crud import CRUDRouterMixin
 from backend.config.settings import get_settings
 from backend.schemas.nms import (
@@ -400,55 +401,238 @@ def _schedule_filter_values(values: dict) -> dict:
     return validated.model_dump()
 
 
+def _validate_schedule_scope(current_user: User, db: Session, filters: ReportManagementFilters) -> None:
+    """Reject schedule filters that can escape the caller's site scope."""
+    site_id = filters.site_id
+    device_id = filters.device_id
+    _validate_report_scope(current_user, db, device_id, site_id)
+
+    # Super Admin is intentionally allowed to create an unrestricted report.
+    accessible_site_ids = get_accessible_site_ids(current_user)
+    if accessible_site_ids is None:
+        return
+
+    # A site-restricted schedule must have an explicit boundary.  Otherwise
+    # the recurring query could include future devices from other sites.
+    if site_id is None and device_id is None:
+        raise HTTPException(status_code=404, detail="Report scope must include an authorized site or device")
+
+    if device_id is not None:
+        device = db.query(Device).filter(Device.id == device_id, Device.deleted_at.is_(None)).first()
+        if device is None or not can_access_site(current_user, device.site_id):
+            raise HTTPException(status_code=404, detail="Report scope not found")
+        if site_id is not None and device.site_id != site_id:
+            raise HTTPException(status_code=404, detail="Report site and device do not match")
+
+    # The explicit site boundary is sufficient for a device-type filter; the
+    # report query will apply both filters at execution time.
+
+
+def _schedule_filters(schedule: ReportSchedule) -> ReportManagementFilters:
+    return ReportManagementFilters(**_schedule_filter_values(schedule.filters or {}))
+
+
+def _authorize_schedule_access(current_user: User, db: Session, schedule: ReportSchedule) -> None:
+    """Authorize a schedule owner and re-check its current report scope."""
+    if is_super_admin(current_user):
+        return
+    if schedule.created_by is None or schedule.created_by != current_user.id:
+        raise HTTPException(status_code=404, detail="Report schedule not found")
+    _validate_schedule_scope(current_user, db, _schedule_filters(schedule))
+
+
 @router.get("/reports/schedules", response_model=list[ReportScheduleRead])
-def list_report_schedules(db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
-    return db.query(ReportSchedule).order_by(ReportSchedule.id.asc()).all()
+def list_report_schedules(db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:read"))):
+    schedules = db.query(ReportSchedule).order_by(ReportSchedule.id.asc()).all()
+    if is_super_admin(current_user):
+        return schedules
+    visible = []
+    for schedule in schedules:
+        if schedule.created_by != current_user.id:
+            continue
+        try:
+            _validate_schedule_scope(current_user, db, _schedule_filters(schedule))
+        except HTTPException:
+            continue
+        visible.append(schedule)
+    return visible
 
 
 @router.post("/reports/schedules", response_model=ReportScheduleRead, status_code=status.HTTP_201_CREATED)
-def create_report_schedule(payload: ReportScheduleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:read"))):
-    item = ReportSchedule(**payload.model_dump(exclude={"filters"}), filters=_schedule_filter_values(payload.filters), created_by=current_user.id)
+def create_report_schedule(payload: ReportScheduleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:schedules:create")), request: Request = None):
+    filters = ReportManagementFilters(**_schedule_filter_values(payload.filters))
+    _validate_schedule_scope(current_user, db, filters)
+    item = ReportSchedule(**payload.model_dump(exclude={"filters"}), filters=filters.model_dump(), created_by=current_user.id)
     db.add(item); db.commit(); db.refresh(item)
     sync_report_schedule(item); db.commit(); db.refresh(item)
+    snapshot = {
+        "name": item.name,
+        "enabled": item.enabled,
+        "frequency": item.frequency,
+        "run_time": item.run_time,
+        "timezone": item.timezone,
+        "report_format": item.report_format,
+        "filters": {
+            key: item.filters.get(key)
+            for key in ("site_id", "device_id", "device_type_id", "device_status", "protocol", "alert_severity")
+            if key in (item.filters or {})
+        },
+    }
+    record_audit_event(
+        db,
+        actor=current_user,
+        action="REPORT_SCHEDULE_CREATED",
+        resource_type="report_schedule",
+        resource_id=item.id,
+        site_id=filters.site_id,
+        outcome="SUCCESS",
+        new_values=snapshot,
+        **(_audit_request_context(request) if request is not None else {}),
+    )
     return item
 
 
 @router.put("/reports/schedules/{item_id}", response_model=ReportScheduleRead)
-def update_report_schedule(item_id: int, payload: ReportScheduleUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+def update_report_schedule(item_id: int, payload: ReportScheduleUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:schedules:update")), request: Request = None):
     item = db.query(ReportSchedule).filter(ReportSchedule.id == item_id).first()
     if item is None: raise HTTPException(status_code=404, detail="Report schedule not found")
+    _authorize_schedule_access(current_user, db, item)
+    old_values = {
+        "name": item.name,
+        "enabled": item.enabled,
+        "frequency": item.frequency,
+        "run_time": item.run_time,
+        "timezone": item.timezone,
+        "report_format": item.report_format,
+        "filters": {
+            key: item.filters.get(key)
+            for key in ("site_id", "device_id", "device_type_id", "device_status", "protocol", "alert_severity")
+            if key in (item.filters or {})
+        },
+    }
     values = payload.model_dump(exclude_unset=True)
-    if "filters" in values: values["filters"] = _schedule_filter_values(values["filters"])
+    raw_filters = values.get("filters", item.filters or {})
+    filters = ReportManagementFilters(**_schedule_filter_values(raw_filters))
+    _validate_schedule_scope(current_user, db, filters)
+    if "filters" in values:
+        values["filters"] = filters.model_dump()
     for key, value in values.items(): setattr(item, key, value)
     db.commit(); db.refresh(item); sync_report_schedule(item); db.commit(); db.refresh(item)
+    new_values = {
+        "name": item.name,
+        "enabled": item.enabled,
+        "frequency": item.frequency,
+        "run_time": item.run_time,
+        "timezone": item.timezone,
+        "report_format": item.report_format,
+        "filters": {
+            key: item.filters.get(key)
+            for key in ("site_id", "device_id", "device_type_id", "device_status", "protocol", "alert_severity")
+            if key in (item.filters or {})
+        },
+    }
+    record_audit_event(
+        db,
+        actor=current_user,
+        action="REPORT_SCHEDULE_UPDATED",
+        resource_type="report_schedule",
+        resource_id=item.id,
+        site_id=filters.site_id,
+        outcome="SUCCESS",
+        old_values=old_values,
+        new_values=new_values,
+        **(_audit_request_context(request) if request is not None else {}),
+    )
     return item
 
 
 @router.delete("/reports/schedules/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_report_schedule(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+def delete_report_schedule(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:schedules:delete")), request: Request = None):
     item = db.query(ReportSchedule).filter(ReportSchedule.id == item_id).first()
     if item is None: raise HTTPException(status_code=404, detail="Report schedule not found")
+    _authorize_schedule_access(current_user, db, item)
+    snapshot = {
+        "name": item.name,
+        "enabled": item.enabled,
+        "frequency": item.frequency,
+        "run_time": item.run_time,
+        "timezone": item.timezone,
+        "report_format": item.report_format,
+        "filters": {
+            key: item.filters.get(key)
+            for key in ("site_id", "device_id", "device_type_id", "device_status", "protocol", "alert_severity")
+            if key in (item.filters or {})
+        },
+    }
+    site_id = (item.filters or {}).get("site_id")
     remove_report_schedule(item.id); db.delete(item); db.commit()
+    record_audit_event(
+        db,
+        actor=current_user,
+        action="REPORT_SCHEDULE_DELETED",
+        resource_type="report_schedule",
+        resource_id=item_id,
+        site_id=site_id,
+        outcome="SUCCESS",
+        old_values=snapshot,
+        **(_audit_request_context(request) if request is not None else {}),
+    )
 
 
 @router.get("/reports/generated", response_model=list[GeneratedReportRead])
-def list_generated_reports(schedule_id: int | None = None, report_status: str | None = None, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+def list_generated_reports(schedule_id: int | None = None, report_status: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:read"))):
     query = db.query(GeneratedReport)
     if schedule_id is not None: query = query.filter(GeneratedReport.schedule_id == schedule_id)
     if report_status is not None: query = query.filter(GeneratedReport.status == report_status)
-    return query.order_by(GeneratedReport.generated_at.desc(), GeneratedReport.id.desc()).limit(100).all()
+    reports = query.order_by(GeneratedReport.generated_at.desc(), GeneratedReport.id.desc()).limit(100).all()
+    if is_super_admin(current_user):
+        return reports
+
+    schedule_ids = {report.schedule_id for report in reports if report.schedule_id is not None}
+    schedules = (
+        db.query(ReportSchedule)
+        .filter(ReportSchedule.id.in_(schedule_ids))
+        .all()
+        if schedule_ids else []
+    )
+    schedules_by_id = {schedule.id: schedule for schedule in schedules}
+    authorized_schedule_ids: set[int] = set()
+    for schedule in schedules:
+        try:
+            _authorize_schedule_access(current_user, db, schedule)
+        except HTTPException:
+            continue
+        authorized_schedule_ids.add(schedule.id)
+    return [
+        report for report in reports
+        if report.schedule_id in authorized_schedule_ids and report.schedule_id in schedules_by_id
+    ]
 
 
 @router.get("/reports/generated/{item_id}/download")
-def download_generated_report(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("reports:read"))):
+def download_generated_report(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("reports:read"))):
     item = db.query(GeneratedReport).filter(GeneratedReport.id == item_id).first()
     if item is None: raise HTTPException(status_code=404, detail="Generated report not found")
+    schedule = db.query(ReportSchedule).filter(ReportSchedule.id == item.schedule_id).first() if item.schedule_id is not None else None
+    if not is_super_admin(current_user):
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="Generated report not found")
+        _authorize_schedule_access(current_user, db, schedule)
     if item.status != "SUCCESS" or not item.file_path: raise HTTPException(status_code=404, detail="Generated report is not available")
+    media_types = {
+        "csv": "text/csv",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pdf": "application/pdf",
+    }
+    report_format = str(getattr(item, "format", None) or "csv").lower()
+    media_type = media_types.get(report_format)
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="Generated report format is invalid")
     base = REPORT_STORAGE_DIR.resolve()
     path = Path(item.file_path).resolve()
     if base not in path.parents: raise HTTPException(status_code=404, detail="Generated report file is invalid")
     if not path.is_file(): raise HTTPException(status_code=404, detail="Generated report file not found")
-    return FileResponse(path, media_type="text/csv", filename=path.name)
+    return FileResponse(path, media_type=media_type, filename=path.name)
 
 
 @router.get("/reports/management/email-schedule")
@@ -1693,11 +1877,23 @@ def delete_threshold(item_id: int, db: Session = Depends(get_db), current_user: 
 
 
 # ---------------------------------------------------------------- Alerts
+def _authorized_alert(alert: Alert, db: Session, current_user: User) -> None:
+    if alert.linux_server_id is not None:
+        server = db.get(LinuxServer, alert.linux_server_id)
+        if server is None or not can_access_site(current_user, server.site_id):
+            raise HTTPException(status_code=404, detail=f"Alert {alert.id} not found")
+        return
+    device = db.get(Device, alert.device_id) if alert.device_id else None
+    if device is None or not can_access_site(current_user, device.site_id):
+        raise HTTPException(status_code=404, detail=f"Alert {alert.id} not found")
+
+
 @router.get("/alerts", response_model=list[AlertRead])
 def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:read"))):
     query = db.query(Alert).options(load_only(
         Alert.id,
         Alert.device_id,
+        Alert.linux_server_id,
         Alert.interface_id,
         Alert.severity,
         Alert.title,
@@ -1714,13 +1910,14 @@ def list_alerts(status_filter: str | None = None, skip: int = 0, limit: int = 10
     # Management even though _notify() still created and emailed them.
     # Keep device-scoped access checks, while retaining valid device-less
     # alerts in the result set.
-    query = query.outerjoin(Device, Alert.device_id == Device.id).filter(
-        or_(Alert.device_id.is_(None), Device.deleted_at.is_(None))
-    )
+    query = query.outerjoin(Device, Alert.device_id == Device.id).outerjoin(
+        LinuxServer, Alert.linux_server_id == LinuxServer.id
+    ).filter(or_(Alert.device_id.is_(None), Alert.linux_server_id.is_not(None), Device.deleted_at.is_(None)))
     if accessible_site_ids is not None:
         query = query.filter(
             or_(
                 Alert.device_id.is_(None),
+                LinuxServer.site_id.in_(accessible_site_ids) if accessible_site_ids else False,
                 Device.site_id.in_(accessible_site_ids) if accessible_site_ids else False,
             )
         )
@@ -1753,18 +1950,14 @@ def create_alert(payload: AlertCreate, db: Session = Depends(get_db), current_us
 @router.get("/alerts/{item_id}", response_model=AlertRead)
 def get_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:read"))):
     item = alert_crud.get(db, item_id)
-    device = db.get(Device, item.device_id) if item.device_id else None
-    if device is None or not can_access_site(current_user, device.site_id):
-        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
+    _authorized_alert(item, db, current_user)
     return item
 
 
 @router.patch("/alerts/{item_id}", response_model=AlertRead)
 def update_alert(item_id: int, payload: AlertUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:update"))):
     existing = alert_crud.get(db, item_id)
-    device = db.get(Device, existing.device_id) if existing.device_id else None
-    if device is None or not can_access_site(current_user, device.site_id):
-        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
+    _authorized_alert(existing, db, current_user)
     item = alert_crud.update(db, item_id, payload)
     if item.status == "resolved":
         try:
@@ -1779,7 +1972,9 @@ def update_alert(item_id: int, payload: AlertUpdate, db: Session = Depends(get_d
 
 @router.delete("/alerts/clear-all")
 def clear_all_alerts(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:delete"))):
-    """Soft-delete all alerts at once."""
+    """Soft-delete all alerts for the explicitly authorized global administrator."""
+    if not is_super_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Global alert clearance requires Super Admin authorization")
     from backend.models import Alert
     count = db.query(Alert).filter(Alert.deleted_at.is_(None)).update({Alert.deleted_at: datetime.utcnow()})
     db.commit()
@@ -1790,9 +1985,7 @@ def clear_all_alerts(db: Session = Depends(get_db), current_user: User = Depends
 @router.delete("/alerts/{item_id}")
 def delete_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:delete"))):
     existing = alert_crud.get(db, item_id)
-    device = db.get(Device, existing.device_id) if existing.device_id else None
-    if device is None or not can_access_site(current_user, device.site_id):
-        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
+    _authorized_alert(existing, db, current_user)
     result = alert_crud.delete(db, item_id)
     audit(db, current_user.id, "DELETE", "alerts")
     return result
@@ -1801,9 +1994,7 @@ def delete_alert(item_id: int, db: Session = Depends(get_db), current_user: User
 @router.post("/alerts/{item_id}/acknowledge", response_model=AlertRead)
 def acknowledge_alert(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alerts:update"))):
     existing = alert_crud.get(db, item_id)
-    device = db.get(Device, existing.device_id) if existing.device_id else None
-    if device is None or not can_access_site(current_user, device.site_id):
-        raise HTTPException(status_code=404, detail=f"Alert {item_id} not found")
+    _authorized_alert(existing, db, current_user)
     item = alert_crud.update(db, item_id, {"status": "acknowledged", "acknowledged_by": current_user.id})
     audit(db, current_user.id, "ACKNOWLEDGE", "alerts")
     return item

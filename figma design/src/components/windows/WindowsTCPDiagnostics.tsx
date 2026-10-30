@@ -29,12 +29,12 @@ export default function WindowsTCPDiagnostics({ deviceId, siteId, deviceName = `
     finally { if (current === requestId.current) setRunning(false) }
   }
   const category = result?.category?.toLowerCase() ?? ""
-  return <GlassCard className="p-5" aria-label="Windows TCP diagnostics">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-display font-bold" style={{ color: "var(--t-text)" }}>TCP CONNECTIVITY</h2><p className="mt-1 font-mono text-xs" style={{ color: "var(--t-muted)" }}>{deviceName} · WinRM HTTPS port 5986</p></div><button type="button" onClick={() => void run()} disabled={running} className="rounded-lg px-3 py-2 font-mono text-[10px] font-bold" style={{ background: "var(--t-accent)", color: "var(--t-bg)" }}>{running ? "TESTING…" : "TEST TCP"}</button></div>
-    <p className="mt-4 font-mono text-xs" style={{ color: "var(--t-muted)" }}>A successful TCP connection does not prove TLS validation, authentication or CIM access.</p>
-    {running && <p className="mt-3 font-mono text-xs">Running…</p>}
-    {!running && !result && !error && <p className="mt-3 font-mono text-xs" style={{ color: "var(--t-muted)" }}>Not tested.</p>}
-    {error && <p role="alert" className="mt-3 font-mono text-xs" style={{ color: "var(--t-danger, #ff6688)" }}>⚠ {error}</p>}
-    {result && <div className="mt-3 rounded-lg border p-3 font-mono text-xs" style={{ borderColor: result.status === "PASS" ? "var(--t-success)" : "var(--t-danger, #ff6688)" }}><div>Status: <strong>{result.status}</strong></div><div className="mt-1">Category: {result.category}</div><div className="mt-1">{result.message}</div>{guidance[category] && <p className="mt-2" style={{ color: "var(--t-muted)" }}>{guidance[category]}</p>}</div>}
+  return <GlassCard className="p-4" aria-label="Windows TCP diagnostics">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-display text-sm font-bold" style={{ color: "var(--t-text)" }}>TCP Connectivity</h2><p className="mt-1 font-mono text-[10px]" style={{ color: "var(--t-muted)" }}>{deviceName} · WinRM HTTPS port 5986</p></div><button type="button" onClick={() => void run()} disabled={running} className="rounded-md px-3 py-1.5 font-mono text-[10px] font-bold" style={{ background: "var(--t-accent)", color: "var(--t-bg)" }}>{running ? "TESTING…" : "TEST TCP"}</button></div>
+    <p className="mt-3 font-mono text-[10px]" style={{ color: "var(--t-muted)" }}>TCP reachability does not prove TLS, authentication, or CIM access.</p>
+    {running && <p className="mt-2 font-mono text-xs">Running…</p>}
+    {!running && !result && !error && <p className="mt-2 font-mono text-xs" style={{ color: "var(--t-muted)" }}>Not tested.</p>}
+    {error && <p role="alert" className="mt-2 font-mono text-xs" style={{ color: "var(--t-danger, #ff6688)" }}>⚠ {error}</p>}
+    {result && <div className="mt-3 rounded-md border p-2.5 font-mono text-[10px]" style={{ borderColor: result.status === "PASS" ? "var(--t-success)" : "var(--t-danger, #ff6688)" }}><div className="flex justify-between gap-2"><span>Status</span><strong style={{ color: result.status === "PASS" ? "var(--t-success)" : "var(--t-danger, #ff6688)" }}>{result.status}</strong></div><div className="mt-1">Category: {result.category}</div><div className="mt-1">{result.message}</div>{guidance[category] && <p className="mt-2" style={{ color: "var(--t-muted)" }}>{guidance[category]}</p>}</div>}
   </GlassCard>
 }

@@ -193,6 +193,7 @@ def create_threshold_alert(
     description: str,
     severity: str,
     interface_id: int | None = None,
+    linux_server_id: int | None = None,
     existing_alert: Alert | None | object = _NOT_PRELOADED,
     notification_intents: list[NotificationIntent] | None = None,
 ) -> Alert | None:
@@ -201,18 +202,19 @@ def create_threshold_alert(
     if existing is _NOT_PRELOADED:
         existing = db.query(Alert).filter(
             Alert.device_id == device_id,
+            Alert.linux_server_id == linux_server_id,
             Alert.title == title,
             Alert.status.in_({"open", "acknowledged"}),
         ).first()
     if existing:
         return None
     dismissed = db.query(Alert).filter(
-        Alert.device_id == device_id, Alert.title == title,
+        Alert.device_id == device_id, Alert.linux_server_id == linux_server_id, Alert.title == title,
         Alert.deleted_at.is_not(None), Alert.status.in_({"open", "acknowledged"}),
     ).first()
     if dismissed:
         return None
-    alert = Alert(device_id=device_id, interface_id=interface_id, severity=severity, title=title,
+    alert = Alert(device_id=device_id, linux_server_id=linux_server_id, interface_id=interface_id, severity=severity, title=title,
                   description=description, status="open", created_at=now_ist())
     db.add(alert)
     db.flush()
