@@ -199,6 +199,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20261028_0071_linux_threshold_configs", description="Create per-server Linux CPU, memory and disk threshold configuration"),
     Migration(migration_id="20261028_0072_linux_alert_association", description="Associate alerts with isolated Linux servers"),
     Migration(migration_id="20261029_0073_report_schedule_permissions", description="Add dedicated scheduled-report mutation permissions"),
+    Migration(migration_id="20261103_0073_windows_process_snapshots", description="Persist Windows process snapshots and items"),
 )
 
 
@@ -1504,6 +1505,35 @@ def run_migrations(engine: Engine) -> list[str]:
                     collected_at TIMESTAMP NOT NULL,
                     data JSONB NOT NULL DEFAULT '{}'
                 )"""))
+        elif migration.migration_id == "20261103_0073_windows_process_snapshots":
+            with engine.begin() as connection:
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS windows_process_snapshots (
+                    id SERIAL PRIMARY KEY,
+                    device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                    collected_at TIMESTAMPTZ NOT NULL,
+                    collection_id UUID NOT NULL UNIQUE,
+                    process_count INTEGER NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )"""))
+                connection.execute(text("""CREATE TABLE IF NOT EXISTS windows_process_snapshot_items (
+                    id SERIAL PRIMARY KEY,
+                    snapshot_id INTEGER NOT NULL REFERENCES windows_process_snapshots(id) ON DELETE CASCADE,
+                    device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                    process_id INTEGER NOT NULL,
+                    process_creation_time VARCHAR(80),
+                    process_name VARCHAR(512),
+                    parent_process_id INTEGER,
+                    cpu_percent DOUBLE PRECISION,
+                    cpu_status VARCHAR(32),
+                    cpu_reason VARCHAR(80),
+                    working_set_bytes BIGINT,
+                    private_memory_bytes BIGINT,
+                    thread_count INTEGER,
+                    started_at VARCHAR(80)
+                )"""))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_windows_process_snapshots_device_collected ON windows_process_snapshots (device_id, collected_at DESC)"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_windows_process_snapshot_items_snapshot ON windows_process_snapshot_items (snapshot_id)"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_windows_process_snapshot_items_device_identity ON windows_process_snapshot_items (device_id, process_id, process_creation_time)"))
         elif migration.migration_id == "20261028_0071_linux_threshold_configs":
             with engine.begin() as connection:
                 connection.execute(text("""CREATE TABLE IF NOT EXISTS linux_server_threshold_configs (

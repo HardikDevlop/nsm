@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import asyncio
+import time
 import logging
 import os
 import uuid
@@ -235,6 +236,19 @@ async def lifespan(app: FastAPI):
         await flow_ingest.stop()
     if syslog_service is not None:
         await syslog_service.stop()
+    # Task Manager workers are process-local and may outlive a request timeout.
+    # Use one deadline for both services; never forcefully terminate threads.
+    from backend.windows_monitoring.api import process_snapshot_service
+    task_manager_deadline = time.monotonic() + 5.0
+    process_snapshot_service.begin_shutdown(deadline=task_manager_deadline)
+    process_shutdown = await asyncio.to_thread(
+        process_snapshot_service.shutdown, deadline=task_manager_deadline
+    )
+    if process_shutdown["pending"]:
+        logger.warning(
+            "windows_task_manager_shutdown_pending process=%s",
+            process_shutdown["pending"],
+        )
     await linux_scheduler.shutdown()
     if lease_task is not None:
         lease_task.cancel()

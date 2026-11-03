@@ -7,6 +7,7 @@ import WindowsDiskInventoryPanel from "../components/WindowsDiskInventory"
 import WindowsCATrustPanel from "../components/windows/WindowsCATrustPanel"
 import WindowsTCPDiagnostics from "../components/windows/WindowsTCPDiagnostics"
 import WindowsTLSDiagnostics from "../components/windows/WindowsTLSDiagnostics"
+import WindowsProcessesPanel from "../components/windows/WindowsProcessesPanel"
 import { formatBitsPerSecond, formatBytesBinary, formatBytesPerSecond, formatFrequency, formatLatency, formatPercentage, formatUptime } from "../unitFormatting"
 import {
   createDevice,
@@ -55,7 +56,7 @@ type Progress = "idle" | "device" | "credential" | "testing" | "connected" | "fa
 type Module = WindowsMetricSnapshot["module"]
 type CounterLike = { value?: number | null; status?: string } | undefined
 
-const tabNames = ["overview", "cpu", "memory", "disk", "network", "hardware", "storage", "events", "usb"] as const
+const tabNames = ["overview", "cpu", "memory", "disk", "network", "hardware", "storage", "events", "usb", "processes", "services"] as const
 type TabName = (typeof tabNames)[number]
 const tabLabels: Record<TabName, string> = {
   overview: "Overview",
@@ -67,6 +68,7 @@ const tabLabels: Record<TabName, string> = {
   storage: "Storage",
   events: "Event Logs",
   usb: "USB",
+  processes: "Processes",
 }
 const tabIcons: Record<TabName, string> = {
   overview: "◧",
@@ -78,6 +80,7 @@ const tabIcons: Record<TabName, string> = {
   storage: "▣",
   events: "☰",
   usb: "▣",
+  processes: "▤",
 }
 const metricTabs: TabName[] = ["overview", "cpu", "memory", "disk", "network"]
 const wizardSteps = ["Device", "Credentials", "Test"] as const
@@ -1628,6 +1631,8 @@ export default function WindowsDevices() {
       case "network":
         return metricCard("network", "Network Interfaces", "Adapters, link speed and traffic", "FETCH NETWORK",
           metrics.network?.data ? <NetworkBody data={metrics.network.data} /> : <EmptyState />)
+      case "processes":
+        return <WindowsProcessesPanel deviceId={d.id} />
       case "usb":
         return (
           <CardShell title="USB Devices" subtitle="Read-only Windows USB controllers, hubs and PnP inventory" collectedAt={usbInventory?.collected_at ?? null} error={usbError}

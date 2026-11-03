@@ -23,16 +23,18 @@ class FakeWSMan:
         self.pages = list(pages)
         self.error = error
         self.calls = []
+        self.option_sets = []
         self.closed = False
 
-    def enumerate(self, resource_uri, resource=None, timeout=None):
+    def enumerate(self, resource_uri, resource=None, option_set=None, timeout=None):
         self.calls.append(("enumerate", resource_uri, resource, timeout))
         if self.error:
             raise self.error
         return self.pages.pop(0)
 
-    def pull(self, resource_uri, resource=None, timeout=None):
+    def pull(self, resource_uri, resource=None, option_set=None, timeout=None):
         self.calls.append(("pull", resource_uri, resource, timeout))
+        self.option_sets.append(option_set)
         return self.pages.pop(0)
 
     def close(self):

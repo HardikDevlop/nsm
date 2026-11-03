@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
@@ -52,8 +52,8 @@ _FILTER_CLASS = {
     "Win32_USBControllerDevice": "SELECT Antecedent,Dependent FROM Win32_USBControllerDevice",
     "Win32_PnPEntity_USB": "SELECT Name,PNPDeviceID,PNPClass,Manufacturer,Status,ConfigManagerErrorCode,Present,Service,ClassGuid FROM Win32_PnPEntity WHERE PNPDeviceID LIKE 'USB\\\\%' OR PNPClass = 'USB' OR Service = 'USBSTOR'",
     "Win32_PerfFormattedData_Tcpip_NetworkInterface": "SELECT Name,BytesReceivedPerSec,BytesSentPerSec,CurrentBandwidth FROM Win32_PerfFormattedData_Tcpip_NetworkInterface",
-    "Win32_Service": "SELECT Name,DisplayName,State,StartMode,ProcessId FROM Win32_Service",
-    "Win32_Process": "SELECT Name,ProcessId,WorkingSetSize,ThreadCount,ExecutablePath FROM Win32_Process",
+    "Win32_Process": "SELECT Name,ProcessId,ParentProcessId,WorkingSetSize,PrivatePageCount,ThreadCount,CreationDate,KernelModeTime,UserModeTime,ExecutablePath FROM Win32_Process",
+    "Win32_PerfFormattedData_PerfProc_Process": "SELECT IDProcess,PercentProcessorTime,WorkingSetPrivate FROM Win32_PerfFormattedData_PerfProc_Process",
     "Win32_NTLogEvent": "SELECT TimeGenerated,EventCode,Type,SourceName,Logfile,Message FROM Win32_NTLogEvent",
     "Win32_ComputerSystem": "SELECT Manufacturer,Model,SystemType,Domain,Workgroup,PartOfDomain,NumberOfProcessors,NumberOfLogicalProcessors FROM Win32_ComputerSystem",
     "Win32_ComputerSystemProduct": "SELECT Vendor,Name,Version FROM Win32_ComputerSystemProduct",
@@ -64,6 +64,7 @@ _FILTER_CLASS = {
     "Win32_PhysicalMemoryArray": "SELECT MaxCapacity,MaxCapacityEx,MemoryDevices,Location,Use FROM Win32_PhysicalMemoryArray",
 }
 _MAX_XML_BYTES = 1_000_000
+_PROCESS_PULL_MAX_ELEMENTS = 32
 logger = logging.getLogger(__name__)
 
 
@@ -129,6 +130,12 @@ class WindowsProcessResult:
     working_set_bytes: int | None
     thread_count: int | None
     executable_path: str | None
+    parent_process_id: int | None = None
+    private_memory_bytes: int | None = None
+    creation_time: str | None = None
+    cpu_time_seconds: float | None = None
+    raw_percent_processor_time: float | None = None
+    performance_working_set_private_bytes: int | None = None
 
 @dataclass(frozen=True)
 class MemoryPerformanceResult:
@@ -546,60 +553,147 @@ class WindowsCIMClient:
     def _enumerate(self, class_name: str, *, namespace: str = "root/cimv2") -> list[ET.Element]:
         wsman = self._new_wsman()
         resource_uri = _WMI_URI if namespace == "root/wmi" else _STORAGE_URI if namespace.casefold() == "root/microsoft/windows/storage" else _CIM_URI
+        instrumented = class_name == "Win32_Process"
+        operation = "enumerate"
+        page = 1
+        total_items = 0
+        empty_pages = 0
+        unchanged_context_pages = 0
+        previous_context = None
+        context_changed = "unknown"
+        final_operation = "enumerate"
+        termination_reason = "exception"
+        failure_exception_type = None
+        failure_category = None
+        failure_identifier = None
+
+        def diagnostic_summary() -> None:
+            if not instrumented:
+                return
+            fields = (
+                f"class={class_name} final_operation={final_operation} "
+                f"total_pages={page} total_items={total_items} empty_pages={empty_pages} "
+                f"unchanged_context_pages={unchanged_context_pages} "
+                f"context_present={str(previous_context is not None).lower()} "
+                f"end_of_sequence={str(termination_reason == 'end_of_sequence').lower()} "
+                f"context_changed={context_changed} termination_reason={termination_reason}"
+            )
+            if failure_exception_type is not None:
+                logger.warning(
+                    "windows_cim_enumeration_summary %s exception_type=%s category=%s%s",
+                    fields, failure_exception_type, failure_category or "protocol",
+                    f" fault_code={failure_identifier}" if failure_identifier else "",
+                )
+            else:
+                logger.info("windows_cim_enumeration_summary %s", fields)
+
         try:
             enumerate_request = ET.Element("{http://schemas.xmlsoap.org/ws/2004/09/enumeration}Enumerate")
             enumerate_request.append(self._filter(class_name))
             body = wsman.enumerate(resource_uri, resource=enumerate_request, timeout=self.operation_timeout)
             if body is None or not isinstance(body, ET.Element):
                 raise CIMError("parsing", "Malformed WSMan enumeration response")
-            result = self._parse_items(body)
+            first_items = self._parse_items(body)
+            total_items = len(first_items)
+            if not first_items:
+                empty_pages += 1
+            result = first_items
             context = body.find(".//wsen:EnumerationContext", NAMESPACES)
             eos = body.find(".//wsen:EndOfSequence", NAMESPACES) is not None
             if context is None and not eos:
                 raise CIMError("parsing", "WSMan response omitted enumeration context")
+            previous_context = context.text if context is not None else None
+            context_changed = "unknown"
+            if eos:
+                termination_reason = "end_of_sequence"
             pages = 1
             while context is not None and not eos:
                 if pages >= self.limits.max_pages:
                     raise CIMError("protocol", "WSMan page limit exceeded")
-                # Deliberately omit MaxElements: this host rejects that Pull override.
+                operation = "pull"
+                final_operation = operation
                 pull_request = ET.Element("{http://schemas.xmlsoap.org/ws/2004/09/enumeration}Pull")
                 pull_request.append(context)
+                if class_name == "Win32_Process":
+                    ET.SubElement(
+                        pull_request,
+                        "{http://schemas.xmlsoap.org/ws/2004/09/enumeration}MaxElements",
+                    ).text = str(_PROCESS_PULL_MAX_ELEMENTS)
                 body = wsman.pull(resource_uri, resource=pull_request, timeout=self.operation_timeout)
                 if body is None or not isinstance(body, ET.Element):
                     raise CIMError("parsing", "Malformed WSMan pull response")
-                result.extend(self._parse_items(body))
+                pull_items = self._parse_items(body)
+                total_items += len(pull_items)
+                if not pull_items:
+                    empty_pages += 1
+                result.extend(pull_items)
                 if len(result) > self.limits.max_items:
                     raise CIMError("protocol", "WSMan item limit exceeded")
-                context = body.find(".//wsen:EnumerationContext", NAMESPACES)
+                next_context = body.find(".//wsen:EnumerationContext", NAMESPACES)
+                next_context_value = next_context.text if next_context is not None else None
+                if previous_context is not None and next_context_value is not None:
+                    context_changed = next_context_value != previous_context
+                    if not context_changed:
+                        unchanged_context_pages += 1
+                else:
+                    context_changed = "unknown"
+                context = next_context
+                previous_context = next_context_value
                 eos = body.find(".//wsen:EndOfSequence", NAMESPACES) is not None
                 if context is None and not eos:
                     raise CIMError("parsing", "WSMan response omitted enumeration context")
                 pages += 1
+                page = pages
+                if eos:
+                    termination_reason = "end_of_sequence"
+            if context is None and not eos:
+                termination_reason = "context_missing"
             return result
-        except CIMError:
+        except CIMError as error:
+            failure_exception_type = type(error).__name__
+            failure_category = error.category
+            if "page limit" in error.message.casefold():
+                termination_reason = "pagination_limit"
+            elif "item limit" in error.message.casefold():
+                termination_reason = "item_limit"
+            elif "response exceeded" in error.message.casefold():
+                termination_reason = "response_size_limit"
+            else:
+                termination_reason = "cim_error"
             raise
-        except (AuthenticationError,):
+        except (AuthenticationError,) as error:
+            failure_exception_type = type(error).__name__; failure_category = "authentication"; termination_reason = "authentication_failed"
             raise CIMError("authentication", "WSMan authentication failed") from None
-        except SSLError:
+        except SSLError as error:
+            failure_exception_type = type(error).__name__; failure_category = "tls"; termination_reason = "tls_failed"
             raise CIMError("tls", "TLS certificate validation failed") from None
-        except Timeout:
+        except Timeout as error:
+            failure_exception_type = type(error).__name__; failure_category = "timeout"; termination_reason = "timeout"
             raise CIMError("timeout", "WSMan operation timed out") from None
         except WSManFaultError as exc:
+            failure_exception_type = type(exc).__name__; failure_category = "protocol"; termination_reason = "soap_fault"
             # Keep diagnostics bounded and free of credentials/identifiers. The
             # fault code helps distinguish unsupported classes from provider
             # failures without exposing the raw SOAP payload.
             fault_code = getattr(exc, "code", None) or getattr(exc, "fault_code", None)
-            suffix = f" ({str(fault_code)[:80]})" if fault_code else ""
+            if fault_code:
+                failure_identifier = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(fault_code))[:80]
+            suffix = f" ({failure_identifier})" if failure_identifier else ""
             raise CIMError("protocol", f"WSMan returned a protocol fault{suffix}") from None
-        except PermissionError:
+        except PermissionError as error:
+            failure_exception_type = type(error).__name__; failure_category = "permission"; termination_reason = "permission_denied"
             raise CIMError("permission", "WSMan permission denied") from None
-        except WinRMTransportError:
+        except WinRMTransportError as error:
+            failure_exception_type = type(error).__name__; failure_category = "transport"; termination_reason = "transport_failed"
             raise CIMError("transport", "WSMan transport failed") from None
-        except (ET.ParseError, ValueError, TypeError):
+        except (ET.ParseError, ValueError, TypeError) as error:
+            failure_exception_type = type(error).__name__; failure_category = "parsing"; termination_reason = "parsing_failed"
             raise CIMError("parsing", "Malformed WSMan response") from None
-        except Exception:
+        except Exception as error:
+            failure_exception_type = type(error).__name__; failure_category = "protocol"; termination_reason = "protocol_failed"
             raise CIMError("protocol", "WSMan request failed") from None
         finally:
+            diagnostic_summary()
             close = getattr(wsman, "close", None)
             if callable(close):
                 close()
@@ -792,13 +886,64 @@ class WindowsCIMClient:
         ) for node in nodes]
 
     def processes(self) -> list[WindowsProcessResult]:
-        return [WindowsProcessResult(
-            name=self._text(node, "Name") or None,
-            process_id=self._optional_positive_int(self._text(node, "ProcessId")),
-            working_set_bytes=self._optional_positive_int(self._text(node, "WorkingSetSize")),
-            thread_count=self._optional_positive_int(self._text(node, "ThreadCount")),
-            executable_path=self._text(node, "ExecutablePath") or None,
-        ) for node in self._enumerate("Win32_Process")]
+        results = []
+        for node in self._enumerate("Win32_Process"):
+            kernel_time = self._optional_float(self._text(node, "KernelModeTime"))
+            user_time = self._optional_float(self._text(node, "UserModeTime"))
+            cpu_time_seconds = None
+            if kernel_time is not None or user_time is not None:
+                cpu_time_seconds = (kernel_time or 0) + (user_time or 0)
+                cpu_time_seconds /= 10_000_000
+            results.append(WindowsProcessResult(
+                name=self._text(node, "Name") or None,
+                process_id=self._optional_positive_int(self._text(node, "ProcessId")),
+                working_set_bytes=self._optional_positive_int(self._text(node, "WorkingSetSize")),
+                thread_count=self._optional_positive_int(self._text(node, "ThreadCount")),
+                executable_path=self._text(node, "ExecutablePath") or None,
+                parent_process_id=self._optional_positive_int(self._text(node, "ParentProcessId")),
+                private_memory_bytes=self._optional_positive_int(self._text(node, "PrivatePageCount")),
+                creation_time=self._wmi_datetime(self._text(node, "CreationDate")),
+                cpu_time_seconds=cpu_time_seconds,
+            ))
+        return results
+
+    def process_performance(self) -> dict[int, tuple[float | None, int | None]]:
+        """Return raw per-process performance values keyed by PID.
+
+        PercentProcessorTime is intentionally kept raw. It requires sampling
+        and normalization before it can be presented as Task Manager CPU %.
+        Duplicate counter rows are ignored after the first PID occurrence.
+        """
+        values: dict[int, tuple[float | None, int | None]] = {}
+        for node in self._enumerate("Win32_PerfFormattedData_PerfProc_Process"):
+            process_id = self._optional_positive_int(self._text(node, "IDProcess"))
+            if process_id is None or process_id in values:
+                continue
+            values[process_id] = (
+                self._optional_float(self._text(node, "PercentProcessorTime")),
+                self._optional_positive_int(self._text(node, "WorkingSetPrivate")),
+            )
+        return values
+
+    def process_snapshot(self) -> list[WindowsProcessResult]:
+        """Collect process details and best-effort raw performance counters.
+
+        The base process collection is authoritative. Counter-provider
+        failures, unsupported classes and permission errors leave the process
+        rows available with raw performance fields set to ``None``.
+        """
+        rows = self.processes()
+        if not rows:
+            return rows
+        try:
+            performance = self.process_performance()
+        except CIMError:
+            performance = {}
+        return [replace(
+            row,
+            raw_percent_processor_time=performance.get(row.process_id, (None, None))[0] if row.process_id is not None else None,
+            performance_working_set_private_bytes=performance.get(row.process_id, (None, None))[1] if row.process_id is not None else None,
+        ) for row in rows]
 
     def memory_performance(self) -> list[MemoryPerformanceResult]:
         return [MemoryPerformanceResult(

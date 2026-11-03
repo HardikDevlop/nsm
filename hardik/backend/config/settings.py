@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     snmp_raw_cache_ttl_seconds: float = 10.0
     snmp_raw_cache_max_entries: int = 2048
     snmp_root_concurrency: int = 3
+    windows_task_manager_collection_capacity: int = 2
+    windows_process_history_retention_days: int = 7
     # Proposal-only safety switch. No SNMP cleanup job runs while this is 0.
     snmp_history_retention_days: int = 0
     redis_url: str = "redis://localhost:6379/0"

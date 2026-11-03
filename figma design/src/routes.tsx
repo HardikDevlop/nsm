@@ -58,6 +58,7 @@ const Availability = lazyRetry(() => import("./pages/Availability"))
 const QoS = lazyRetry(() => import("./pages/QoS"))
 const BGP = lazyRetry(() => import("./pages/BGP"))
 const RemoteAccess = lazyRetry(() => import("./pages/RemoteAccess"))
+const HelpCenter = lazyRetry(() => import("./pages/HelpCenter"))
 
 export const router = createBrowserRouter([
   { path: "/login", Component: Login },
@@ -226,6 +227,7 @@ export const router = createBrowserRouter([
             ),
           },
           { path: "remote-access", Component: withPermission(RemoteAccess, "remote_access:view") },
+          { path: "help-center", Component: withPermission(HelpCenter, "dashboard:read") },
           {
             path: "device-types",
             Component: withPermission(DeviceTypes, "device_types:read"),

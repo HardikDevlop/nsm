@@ -42,6 +42,150 @@ def test_cpu_performance_preserves_logical_processors_and_optional_counters():
     assert queue[0].context_switches_per_sec is None
 
 
+def test_processes_parse_task_manager_fields_and_cpu_counter_data():
+    fake = FakeWSMan([response(node("Win32_Process", {
+        "Name": "worker.exe", "ProcessId": "42", "ParentProcessId": "7",
+        "WorkingSetSize": "1048576", "PrivatePageCount": "2097152",
+        "ThreadCount": "4", "CreationDate": "20260102112233.123456+000",
+        "KernelModeTime": "10000000", "UserModeTime": "30000000",
+        "ExecutablePath": "C:\\\\worker.exe",
+    }))])
+    client, _ = make_client(fake)
+
+    result = client.processes()
+
+    assert result[0].process_id == 42
+    assert result[0].name == "worker.exe"
+    assert result[0].parent_process_id == 7
+    assert result[0].working_set_bytes == 1048576
+    assert result[0].private_memory_bytes == 2097152
+    assert result[0].thread_count == 4
+    assert result[0].creation_time == "2026-01-02T11:22:33.123456+00:00"
+    assert result[0].cpu_time_seconds == 4
+    query = WindowsCIMClient._filter("Win32_Process").text
+    assert all(field in query for field in ("ParentProcessId", "PrivatePageCount", "CreationDate", "KernelModeTime", "UserModeTime"))
+
+
+def test_processes_preserve_rows_when_optional_values_are_missing_or_invalid():
+    fake = FakeWSMan([response(node("Win32_Process", {
+        "Name": "partial.exe", "ProcessId": "bad", "ParentProcessId": "-1",
+        "WorkingSetSize": "bad", "PrivatePageCount": "-1", "ThreadCount": "bad",
+        "CreationDate": "not-a-date", "KernelModeTime": "bad", "UserModeTime": "-1",
+    }))])
+    client, _ = make_client(fake)
+
+    result = client.processes()
+
+    assert len(result) == 1
+    assert result[0].process_id is None
+    assert result[0].parent_process_id is None
+    assert result[0].working_set_bytes is None
+    assert result[0].private_memory_bytes is None
+    assert result[0].thread_count is None
+    assert result[0].creation_time is None
+    assert result[0].cpu_time_seconds is None
+
+
+def test_processes_return_empty_result_without_rows():
+    client, _ = make_client(FakeWSMan([response("")]))
+    assert client.processes() == []
+
+
+def test_bounded_process_limit_allows_normal_process_counts_above_generic_limit():
+    rows = "".join(node("Win32_Process", {"Name": f"worker-{index}.exe", "ProcessId": str(index + 1)}) for index in range(40))
+    default_client, _ = make_client(FakeWSMan([response(rows)]))
+    with pytest.raises(CIMError) as exc:
+        default_client.processes()
+    assert exc.value.category == "protocol"
+
+    bounded_client, _ = make_client(FakeWSMan([response(rows)]), limits=CIMLimits(max_items=256))
+    assert len(bounded_client.processes()) == 40
+
+
+
+def test_processes_propagate_malformed_provider_response():
+    malformed = body('<s:Body xmlns:s="http://www.w3.org/2003/05/soap-envelope"><invalid /></s:Body>')
+    client, _ = make_client(FakeWSMan([malformed]))
+    with pytest.raises(CIMError) as exc:
+        client.processes()
+    assert exc.value.category == "parsing"
+
+
+def test_process_optional_cpu_counters_are_none_when_provider_omits_them():
+    fake = FakeWSMan([response(node("Win32_Process", {"Name": "no-counter.exe", "ProcessId": "8"}))])
+    client, _ = make_client(fake)
+    result = client.processes()[0]
+    assert result.cpu_time_seconds is None
+
+
+def test_process_snapshot_matches_raw_performance_by_pid_not_name():
+    processes = response(
+        node("Win32_Process", {"Name": "worker.exe", "ProcessId": "10", "WorkingSetSize": "100"})
+        + node("Win32_Process", {"Name": "worker.exe", "ProcessId": "11", "WorkingSetSize": "200"})
+    )
+    performance = response(
+        node("Win32_PerfFormattedData_PerfProc_Process", {"IDProcess": "11", "PercentProcessorTime": "88", "WorkingSetPrivate": "4096"})
+        + node("Win32_PerfFormattedData_PerfProc_Process", {"IDProcess": "10", "PercentProcessorTime": "12", "WorkingSetPrivate": "2048"})
+    )
+    client, _ = make_client(FakeWSMan([processes, performance]))
+
+    result = client.process_snapshot()
+
+    assert [row.name for row in result] == ["worker.exe", "worker.exe"]
+    assert [row.process_id for row in result] == [10, 11]
+    assert result[0].raw_percent_processor_time == 12
+    assert result[0].performance_working_set_private_bytes == 2048
+    assert result[1].raw_percent_processor_time == 88
+    assert result[1].performance_working_set_private_bytes == 4096
+
+
+def test_process_snapshot_keeps_processes_when_performance_class_is_unsupported():
+    client, _ = make_client(FakeWSMan([response(node("Win32_Process", {"Name": "worker.exe", "ProcessId": "10"}))]))
+    original = client.process_performance
+
+    def unsupported():
+        raise CIMError("protocol", "performance class unavailable")
+
+    client.process_performance = unsupported
+    result = client.process_snapshot()
+    client.process_performance = original
+
+    assert len(result) == 1
+    assert result[0].process_id == 10
+    assert result[0].raw_percent_processor_time is None
+    assert result[0].performance_working_set_private_bytes is None
+
+
+def test_process_performance_invalid_values_are_none_and_duplicate_pid_is_stable():
+    fake = FakeWSMan([response(
+        node("Win32_PerfFormattedData_PerfProc_Process", {"IDProcess": "5", "PercentProcessorTime": "bad", "WorkingSetPrivate": "-1"})
+        + node("Win32_PerfFormattedData_PerfProc_Process", {"IDProcess": "5", "PercentProcessorTime": "99", "WorkingSetPrivate": "100"})
+        + node("Win32_PerfFormattedData_PerfProc_Process", {"IDProcess": "bad", "PercentProcessorTime": "2"})
+    )])
+    client, _ = make_client(fake)
+
+    result = client.process_performance()
+
+    assert result == {5: (None, None)}
+
+
+def test_process_performance_empty_response_returns_empty_mapping():
+    client, _ = make_client(FakeWSMan([response("")]))
+    assert client.process_performance() == {}
+
+
+def test_process_snapshot_does_not_query_performance_for_empty_process_response():
+    client, fake = make_client(FakeWSMan([response("")]))
+    client.process_performance = lambda: (_ for _ in ()).throw(AssertionError("must not query performance"))
+    assert client.process_snapshot() == []
+    assert len(fake.get("calls", [])) == 0
+
+
+def test_process_performance_query_is_explicitly_allowlisted():
+    query = WindowsCIMClient._filter("Win32_PerfFormattedData_PerfProc_Process").text
+    assert query == "SELECT IDProcess,PercentProcessorTime,WorkingSetPrivate FROM Win32_PerfFormattedData_PerfProc_Process"
+
+
 def test_memory_performance_uses_allowlisted_properties_and_normalizes_values():
     fields = {"AvailableMBytes": "1024", "PagesPersec": "2.5", "PageReadsPersec": "1", "PageWritesPersec": "3", "PageFaultsPersec": "4", "CommittedBytes": "1000", "CommitLimit": "2000", "CacheBytes": "500", "PoolPagedBytes": "100", "PoolNonpagedBytes": "50", "PercentCommittedBytesInUse": "50"}
     fake = FakeWSMan([response(node("Win32_PerfFormattedData_PerfOS_Memory", fields))])
@@ -482,6 +626,63 @@ def test_transport_errors_are_sanitized(error, category):
     assert exc.value.category == category and "secret-value" not in str(exc.value)
 
 
+def test_unknown_cim_failure_logs_safe_class_and_exception_type(caplog):
+    client, _ = make_client(FakeWSMan([], error=RuntimeError("secret payload")))
+    with caplog.at_level("WARNING", logger="backend.windows_monitoring.cim"):
+        with pytest.raises(CIMError) as exc:
+            client._enumerate("Win32_Process")
+
+    assert exc.value.category == "protocol"
+    assert "class=Win32_Process" in caplog.text
+    assert "final_operation=enumerate" in caplog.text
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "category=protocol" in caplog.text
+    assert "secret payload" not in caplog.text
+
+
+def test_wsman_fault_logs_only_sanitized_fault_code(caplog):
+    client, _ = make_client(FakeWSMan([], error=WSManFaultError("0x80041010", "m", "secret fault", "r")))
+    with caplog.at_level("WARNING", logger="backend.windows_monitoring.cim"):
+        with pytest.raises(CIMError) as exc:
+            client._enumerate("Win32_Process")
+
+    assert exc.value.category == "protocol"
+    assert "fault_code=0x80041010" in caplog.text
+    assert "secret fault" not in caplog.text
+
+
+def test_instrumented_cim_summary_records_empty_and_unchanged_continuation(caplog):
+    fake = FakeWSMan([
+        response("", "same", False),
+        response("", "same", False),
+    ])
+    client, _ = make_client(fake, limits=CIMLimits(max_pages=2, max_items=10))
+    with caplog.at_level("WARNING", logger="backend.windows_monitoring.cim"):
+        with pytest.raises(CIMError) as exc:
+            client._enumerate("Win32_Process")
+    assert "page limit" in str(exc.value)
+    assert "final_operation=pull" in caplog.text
+    assert "empty_pages=2" in caplog.text
+    assert "unchanged_context_pages=1" in caplog.text
+    assert "context_changed=False" in caplog.text
+    assert "termination_reason=pagination_limit" in caplog.text
+    assert "same" not in caplog.text
+
+
+def test_instrumented_cim_summary_distinguishes_pull_failure(caplog):
+    fake = FakeWSMan([response("", "ctx", False)])
+    fake.pull = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret pull payload"))
+    client, _ = make_client(fake)
+    with caplog.at_level("WARNING", logger="backend.windows_monitoring.cim"):
+        with pytest.raises(CIMError) as exc:
+            client._enumerate("Win32_Process")
+    assert exc.value.category == "protocol"
+    assert "final_operation=pull" in caplog.text
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "termination_reason=protocol_failed" in caplog.text
+    assert "secret pull payload" not in caplog.text
+
+
 def test_malformed_missing_context_and_faults_are_rejected():
     for page in ["<broken>", response("", None, False), body('<s:Body xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Fault><x>bad</x></s:Fault></s:Body>')]:
         client, _ = make_client(FakeWSMan([page]))
@@ -503,6 +704,15 @@ def test_allowlist_limits_and_pull_does_not_send_max_elements():
     assert fake.calls[1][2][0].text == "ctx"
     assert all("MaxElements" not in str(call[2]) for call in fake.calls)
 
+
+def test_process_pull_uses_bounded_max_elements_option_only_for_processes():
+    process_fake = FakeWSMan([response(node("Win32_Process", {"ProcessId": "1"}), "ctx", False), response("")])
+    process_client, _ = make_client(process_fake)
+    process_client.processes()
+    assert process_fake.option_sets[0] is None
+    process_pull = process_fake.calls[1][2]
+    max_elements = process_pull.find("{http://schemas.xmlsoap.org/ws/2004/09/enumeration}MaxElements")
+    assert max_elements is not None and max_elements.text == "32"
 
 def test_response_and_data_limits_and_no_secret_disclosure():
     fake = FakeWSMan([response(node("x", {"Name": "_Total", "PercentProcessorTime": "1"}))])

@@ -1090,8 +1090,11 @@ a:focus-visible {
 /* Dashboard presentation layer. The data widgets intentionally keep their
    semantic status colours, while the surfaces adapt to the selected palette. */
 .dashboard-page {
-  max-width: 1920px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
   min-height: 100%;
 }
 

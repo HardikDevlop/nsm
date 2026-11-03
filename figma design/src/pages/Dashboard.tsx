@@ -448,6 +448,7 @@ function Speedometer({
   tone?: string
   size?: number
 }) {
+  const { theme } = useTheme()
   const pct = Math.max(0, Math.min(1, value / max))
   const [animatedPct, setAnimatedPct] = useState(0)
   useEffect(() => {
@@ -482,11 +483,15 @@ function Speedometer({
   const startAngle = 180
   const sweep = 180
   const endAngle = startAngle + sweep * animatedPct
+  const trackColor = theme === 'light' ? '#dbe5f1' : 'rgba(255,255,255,.08)'
+  const inactiveTickColor = theme === 'light' ? '#b8c8dc' : 'rgba(255,255,255,.2)'
+  const scaleColor = theme === 'light' ? '#7b8da5' : 'rgba(255,255,255,.42)'
+  const scalePos = (angle: number) => polar(angle, radius + 13)
 
   return (
     <div className="relative flex flex-col items-center" style={{ width: size, height: size * 1.34 }}>
       <svg width={size} height={size * 0.65} className="block shrink-0 overflow-visible">
-        <path d={arc(startAngle, startAngle + sweep, radius)} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="9" strokeLinecap="round" />
+        <path d={arc(startAngle, startAngle + sweep, radius)} fill="none" stroke={trackColor} strokeWidth="9" strokeLinecap="round" />
         <path
           d={arc(startAngle, endAngle, radius)} fill="none" stroke={tone} strokeWidth="9" strokeLinecap="round"
           style={{ filter: `drop-shadow(0 0 8px ${tone})`, transition: "all 1s ease-out" }}
@@ -497,7 +502,11 @@ function Speedometer({
           const inner = polar(a, radius - 15)
           const outer = polar(a, radius - 6)
           const active = a <= endAngle
-          return <line key={i} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} stroke={active ? tone : "rgba(255,255,255,.2)"} strokeWidth={i % 5 === 0 ? 2 : 1} strokeLinecap="round" />
+          return <line key={i} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} stroke={active ? tone : inactiveTickColor} strokeWidth={i % 5 === 0 ? 2 : 1} strokeLinecap="round" />
+        })}
+        {([startAngle, startAngle + sweep] as const).map((angle, i) => {
+          const position = scalePos(angle)
+          return <text key={angle} x={position.x} y={position.y} textAnchor="middle" dominantBaseline="middle" fontSize="8" fontFamily="monospace" fill={scaleColor}>{i === 0 ? 0 : max}</text>
         })}
         {/* needle */}
         <line
@@ -627,7 +636,6 @@ export default function Dashboard() {
   const [updated, setUpdated] = useState<Date | null>(null)
   const [server, setServer] = useState<LinuxServerRecord | null>(null)
   const [serverMetrics, setServerMetrics] = useState<LinuxMetricSnapshot | null>(null)
-
   const load = async (quiet = false, forceRefresh = false) => {
     if (!quiet && !data) setLoading(true)
     if (data) setRefreshing(true)
@@ -1250,6 +1258,7 @@ export default function Dashboard() {
                     tone={C.cyan}
                     size={140}
                     tickCount={40}
+                    showScale
                   />
                 </div>
               </div>

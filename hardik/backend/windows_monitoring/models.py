@@ -1,12 +1,13 @@
 """Minimal password-based WinRM credential persistence model."""
 
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from enum import Enum
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, JSON, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database.session import Base
@@ -227,6 +228,46 @@ class WindowsMetricSnapshot(Base):
     data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     device = relationship("Device")
 
+
+class WindowsProcessSnapshot(Base):
+    __tablename__ = "windows_process_snapshots"
+    __table_args__ = (
+        UniqueConstraint("collection_id", name="uq_windows_process_snapshots_collection_id"),
+        Index("ix_windows_process_snapshots_device_collected", "device_id", "collected_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    collection_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, unique=True, index=True)
+    process_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    device = relationship("Device")
+    items = relationship("WindowsProcessSnapshotItem", back_populates="snapshot", cascade="all, delete-orphan", passive_deletes=True)
+
+
+class WindowsProcessSnapshotItem(Base):
+    __tablename__ = "windows_process_snapshot_items"
+    __table_args__ = (
+        Index("ix_windows_process_snapshot_items_snapshot", "snapshot_id"),
+        Index("ix_windows_process_snapshot_items_device_identity", "device_id", "process_id", "process_creation_time"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("windows_process_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    process_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    process_creation_time: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    process_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    parent_process_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cpu_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cpu_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cpu_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    working_set_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    private_memory_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    thread_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    snapshot = relationship("WindowsProcessSnapshot", back_populates="items")
+    device = relationship("Device")
+
 class WindowsMetricHistory(Base):
     """Append-only Windows collection history; current snapshots remain separate."""
     __tablename__ = "windows_metric_history"
@@ -284,6 +325,8 @@ WINDOWS_MONITORING_TABLES = (
     WindowsCredential.__table__,
     WindowsSystemSnapshot.__table__,
     WindowsMetricSnapshot.__table__,
+    WindowsProcessSnapshot.__table__,
+    WindowsProcessSnapshotItem.__table__,
     WindowsHardwareSnapshot.__table__,
     WindowsEventLog.__table__,
 )

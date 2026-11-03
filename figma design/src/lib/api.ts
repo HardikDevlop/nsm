@@ -2029,6 +2029,134 @@ export async function runWindowsWinRMDiagnostic(deviceId: number): Promise<Windo
   return requestWindowsSafe<WindowsWinRMDiagnostic>(`/windows/devices/${deviceId}/diagnostics/winrm`, { method: "POST" })
 }
 
+export type WindowsTaskManagerStatus =
+  | "ok" | "no_snapshot" | "stale" | "collection_in_progress"
+  | "refresh_cooldown" | "concurrency_limit" | "collection_timeout"
+  | "collection_failed" | "busy" | "connection_error" | "lock_lost"
+  | "release_error" | "shutting_down"
+
+export type WindowsProcessCPUStatus = "ok" | "warming_up" | "unavailable" | "terminated"
+
+export interface WindowsProcessRecord {
+  name: string | null
+  pid: number | null
+  parent_pid: number | null
+  working_set_bytes: number | null
+  private_memory_bytes: number | null
+  thread_count: number | null
+  creation_time: string | null
+  cpu_percent: number | null
+  cpu_status: WindowsProcessCPUStatus
+  cpu_reason: string | null
+}
+
+export interface WindowsTaskManagerSnapshot<T> {
+  device_id: number
+  status: WindowsTaskManagerStatus
+  reason: string | null
+  collected_at: string | null
+  age_seconds: number
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface WindowsProcessQuery {
+  name?: string
+  sort?: "cpu" | "memory" | "name" | "pid"
+  direction?: "asc" | "desc"
+  limit?: number
+  offset?: number
+}
+
+function taskManagerQuery(params: Record<string, unknown>, maxLimit: number): string {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === "") continue
+    if (["name", "display_name", "state", "start_mode"].includes(key)) {
+      if (typeof value !== "string" || value.length > 100) throw new Error(`${key} must be at most 100 characters`)
+    }
+    if (key === "limit" && (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > maxLimit)) throw new Error("limit is out of range")
+    if (key === "offset" && (typeof value !== "number" || !Number.isInteger(value) || value < 0)) throw new Error("offset must be non-negative")
+    if (key === "direction" && value !== "asc" && value !== "desc") throw new Error("direction is invalid")
+    query.set(key, String(value))
+  }
+  const encoded = query.toString()
+  return encoded ? `?${encoded}` : ""
+}
+
+export async function getWindowsProcesses(
+  deviceId: number,
+  query: WindowsProcessQuery = {},
+  options: { cache?: RequestCache } = {},
+): Promise<WindowsTaskManagerSnapshot<WindowsProcessRecord>> {
+  const suffix = taskManagerQuery(query, 200)
+  return requestWindowsSafe<WindowsTaskManagerSnapshot<WindowsProcessRecord>>(
+    `/windows/devices/${deviceId}/processes${suffix}`,
+    { cache: options.cache ?? "no-store" },
+  )
+}
+
+export async function fetchWindowsProcesses(
+  deviceId: number,
+  query: WindowsProcessQuery = {},
+): Promise<WindowsTaskManagerSnapshot<WindowsProcessRecord>> {
+  const suffix = taskManagerQuery(query, 200)
+  return requestWindowsSafe<WindowsTaskManagerSnapshot<WindowsProcessRecord>>(
+    `/windows/devices/${deviceId}/processes/fetch${suffix}`,
+    { method: "POST", body: JSON.stringify({}) },
+  )
+}
+
+export interface WindowsProcessHistorySnapshot {
+  snapshot_id: number
+  device_id: number
+  collected_at: string | null
+  process_count: number
+}
+
+export interface WindowsProcessHistoryList {
+  device_id: number
+  items: WindowsProcessHistorySnapshot[]
+  limit: number
+  offset: number
+}
+
+export interface WindowsProcessHistoryItem {
+  pid: number | null
+  name: string | null
+  parent_pid: number | null
+  creation_time: string | null
+  started_at: string | null
+  cpu_percent: number | null
+  cpu_status: WindowsProcessCPUStatus | null
+  cpu_reason: string | null
+  working_set_bytes: number | null
+  private_memory_bytes: number | null
+  thread_count: number | null
+}
+
+export interface WindowsProcessHistoryDetail {
+  snapshot_id: number
+  device_id: number
+  collected_at: string | null
+  process_count: number
+  items: WindowsProcessHistoryItem[]
+}
+
+export async function getWindowsProcessHistory(
+  deviceId: number,
+  query: { limit?: number; offset?: number } = {},
+): Promise<WindowsProcessHistoryList> {
+  const suffix = taskManagerQuery(query, 200)
+  return requestWindowsSafe<WindowsProcessHistoryList>(`/windows/devices/${deviceId}/processes/history${suffix}`, { cache: "no-store" })
+}
+
+export async function getWindowsProcessHistoryDetail(deviceId: number, snapshotId: number): Promise<WindowsProcessHistoryDetail> {
+  return requestWindowsSafe<WindowsProcessHistoryDetail>(`/windows/devices/${deviceId}/processes/history/${snapshotId}`, { cache: "no-store" })
+}
+
 export interface WindowsSystemSnapshot {
   device_id: number
   collected_at: string | null

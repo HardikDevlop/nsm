@@ -19,13 +19,17 @@ from backend.models import Device
 from backend.database.session import get_db
 from backend.services.audit import record_audit_event
 
-from .models import WindowsCredential, WindowsSystemSnapshot, WindowsMetricSnapshot, WindowsEventLog, WindowsHardwareSnapshot, WindowsThresholdConfig, windows_now
-from .cim import WindowsCIMClient, CIMError
+from .models import WindowsCredential, WindowsSystemSnapshot, WindowsMetricSnapshot, WindowsEventLog, WindowsHardwareSnapshot, WindowsThresholdConfig, WindowsProcessSnapshot, WindowsProcessSnapshotItem, windows_now
+from .cim import WindowsCIMClient, CIMError, CIMLimits
 from backend.utils.crypto import decrypt_secret
 from backend.config.settings import get_settings
 from .schemas import WindowsCredentialCreate, WindowsCredentialRead, WindowsCredentialUpdate, WindowsHardwareSnapshotRead, WindowsUSBInventoryRead, WindowsThresholdConfigBase, WindowsThresholdConfigRead
 from dataclasses import asdict
+from functools import cmp_to_key
+from typing import Literal
 import errno
+import json
+import re
 import socket
 import ssl
 from .service import WindowsCredentialService
@@ -33,6 +37,12 @@ from .persistence import get_hardware_snapshot, serialize_hardware_information, 
 from .persistence import latest_system_event_time, list_system_events, save_system_events
 from .events import SystemEventError, collect_system_events
 from .winrm import WinRMHTTPSAdapter
+from .process_snapshot_service import ProcessSnapshotService
+from .process_persistence import persist_process_snapshot_isolated, cleanup_process_snapshot_retention_isolated
+import threading
+import time
+from .task_manager_lock import WorkerOwnedAdvisoryLock
+from .resource_budget import TaskManagerResourceBudget
 from .sensors import LibreHardwareMonitorProvider, NativeCIMSensorProvider
 from .ca_bundle_parser import parse_ca_bundle, CABundleParseError, MAX_BUNDLE_BYTES
 from .ca_bundle_storage import store_pem_bytes, delete_stored_bundle, CABundleStorageError
@@ -53,6 +63,57 @@ TCP_DIAGNOSTIC_TIMEOUT_SECONDS = 5.0
 TLS_DIAGNOSTIC_TIMEOUT_SECONDS = 5.0
 TLS_EXPIRING_SOON_DAYS = 30
 CA_UPLOAD_CHUNK_SIZE = 64 * 1024
+PROCESS_DEFAULT_LIMIT = 50
+PROCESS_MAX_LIMIT = 200
+# Process enumeration is intentionally larger than the generic CIM bound, but
+# remains finite. Response bytes, pages, timeouts, and API result limits remain
+# unchanged.
+PROCESS_CIM_MAX_ITEMS = 256
+
+# Snapshot status is authoritative for the collection as a whole. Process CPU
+# status remains an independent per-item field and is never folded into this
+# list. All snapshot responses retain the same envelope and use HTTP 200 for
+# both usable and recoverable collection outcomes; clients must inspect this
+# field before interpreting ``items`` as fresh data.
+TASK_MANAGER_SNAPSHOT_STATUSES = frozenset({
+    "ok", "no_snapshot", "stale", "collection_in_progress",
+    "refresh_cooldown", "concurrency_limit", "collection_timeout",
+    "collection_failed", "busy", "connection_error", "lock_lost",
+    "release_error", "shutting_down",
+})
+
+
+def _unconfigured_process_collector(device_id: int):
+    raise RuntimeError("process collector is not configured")
+
+
+task_manager_resource_budget = TaskManagerResourceBudget(
+    get_settings().windows_task_manager_collection_capacity
+)
+process_snapshot_service = ProcessSnapshotService(
+    _unconfigured_process_collector,
+    lock_factory=lambda device_id: WorkerOwnedAdvisoryLock(device_id),
+    resource_budget=task_manager_resource_budget,
+)
+_process_retention_lock = threading.Lock()
+_process_retention_last_run = 0.0
+PROCESS_RETENTION_INTERVAL_SECONDS = 3600.0
+
+
+def _maybe_cleanup_process_history() -> None:
+    global _process_retention_last_run
+    now = time.monotonic()
+    if now - _process_retention_last_run < PROCESS_RETENTION_INTERVAL_SECONDS:
+        return
+    if not _process_retention_lock.acquire(blocking=False):
+        return
+    try:
+        now = time.monotonic()
+        if now - _process_retention_last_run >= PROCESS_RETENTION_INTERVAL_SECONDS:
+            cleanup_process_snapshot_retention_isolated(retention_days=get_settings().windows_process_history_retention_days, limit=1000)
+            _process_retention_last_run = now
+    finally:
+        _process_retention_lock.release()
 
 
 def _diagnostic_stage(step: str, status: str, category: str, message: str, started: float) -> dict[str, object]:
@@ -706,6 +767,82 @@ def _cim_diagnostic_failure(error: CIMError) -> tuple[str, str]:
     return "cim_query_failed", "The read-only CIM query failed"
 
 
+def _task_manager_cim_failure(error: CIMError) -> tuple[str, str]:
+    """Return a bounded classification for Task Manager CIM diagnostics."""
+    message = error.message.casefold()
+    if "soap fault" in message:
+        classification = "soap_fault"
+    elif "enumeration context" in message:
+        classification = "invalid_enumeration_context"
+    elif "malformed wsman" in message:
+        classification = "malformed_response"
+    elif "item limit" in message:
+        classification = "item_limit_exceeded"
+    elif "response exceeded" in message:
+        classification = "response_size_exceeded"
+    elif "page limit" in message:
+        classification = "pagination_limit"
+    elif error.category == "permission":
+        classification = "permission_denied"
+    elif error.category == "authentication":
+        classification = "authentication_failed"
+    elif error.category == "tls":
+        classification = "tls_failed"
+    elif error.category == "timeout":
+        classification = "timeout"
+    elif error.category == "parsing":
+        classification = "parsing_error"
+    else:
+        classification = "protocol_error"
+    return error.category, classification
+
+
+def _task_manager_query_stage(step: str, query, started: float) -> dict[str, object]:
+    try:
+        query()
+    except CIMError as error:
+        category, classification = _task_manager_cim_failure(error)
+        logger.warning(
+            "windows_task_manager_diagnostic_failure step=%s stage=cim_query "
+            "exception_type=%s category=%s classification=%s",
+            step,
+            type(error).__name__,
+            category,
+            classification,
+        )
+        return {
+            "step": step,
+            "status": "FAIL",
+            "category": category,
+            "classification": classification,
+            "duration_ms": round((perf_counter() - started) * 1000, 1),
+        }
+    except Exception as error:
+        category, _message = _winrm_diagnostic_failure(error)
+        return {
+            "step": step,
+            "status": "FAIL",
+            "category": category,
+            "classification": "transport_failure",
+            "duration_ms": round((perf_counter() - started) * 1000, 1),
+        }
+    except Exception:
+        return {
+            "step": step,
+            "status": "FAIL",
+            "category": "protocol",
+            "classification": "protocol_error",
+            "duration_ms": round((perf_counter() - started) * 1000, 1),
+        }
+    return {
+        "step": step,
+        "status": "PASS",
+        "category": "success",
+        "classification": "success",
+        "duration_ms": round((perf_counter() - started) * 1000, 1),
+    }
+
+
 def _winrm_diagnostic(db: Session, device_id: int, user) -> list[dict[str, object]]:
     connection = _resolve_windows_connection(db, device_id, user)
     settings = get_settings()
@@ -777,6 +914,18 @@ def _winrm_diagnostic(db: Session, device_id: int, user) -> list[dict[str, objec
         stages.append(_diagnostic_stage("cim_query", "FAIL", category, message, cim_started))
     except Exception:
         stages.append(_diagnostic_stage("cim_query", "FAIL", "cim_query_failed", "The read-only CIM query failed", cim_started))
+    process_client = WindowsCIMClient(
+        connection.host,
+        connection.username,
+        connection.password,
+        trusted_ca_path=ca_trust_path,
+        connection_timeout=5,
+        read_timeout=5,
+        operation_timeout=5,
+        limits=CIMLimits(max_items=PROCESS_CIM_MAX_ITEMS),
+    )
+    process_started = perf_counter()
+    stages.append(_task_manager_query_stage("process_query", process_client.processes, process_started))
     return stages
 
 
@@ -1007,10 +1156,13 @@ def fetch_system_info(device_id: int, db: Session = Depends(get_db), user=Depend
 def _metric_read(row: WindowsMetricSnapshot | None, device_id: int, module: str):
     return {"device_id": device_id, "module": module, "collected_at": row.collected_at if row else None, "data": row.data if row else {}}
 
-def _metric_client(db: Session, device_id: int, user, *, device: Device | None = None):
+def _metric_client(db: Session, device_id: int, user, *, device: Device | None = None, cim_limits: CIMLimits | None = None):
     connection = _resolve_windows_connection(db, device_id, user, device=device)
     settings = get_settings()
-    return WindowsCIMClient(connection.host, connection.username, connection.password, trusted_ca_path=_effective_ca_path(db, device_id)), connection.credential
+    client_kwargs = {"trusted_ca_path": _effective_ca_path(db, device_id)}
+    if cim_limits is not None:
+        client_kwargs["limits"] = cim_limits
+    return WindowsCIMClient(connection.host, connection.username, connection.password, **client_kwargs), connection.credential
 
 
 def _hardware_read(row: WindowsHardwareSnapshot | None, device_id: int) -> dict:
@@ -1223,6 +1375,180 @@ def discover_disk_health(device_id: int, db: Session = Depends(get_db), user=Dep
     save_metric_history(db, device_id, "disk_health", payload)
     db.commit()
     return payload
+
+
+def _compare_values(left, right, *, descending: bool, numeric: bool = False) -> int:
+    left_missing = left is None
+    right_missing = right is None
+    if left_missing or right_missing:
+        if left_missing and right_missing:
+            return 0
+        return 1 if left_missing else -1
+    if not numeric:
+        left, right = str(left).casefold(), str(right).casefold()
+    result = (left > right) - (left < right)
+    return -result if descending else result
+
+
+def _process_response(snapshot, *, limit: int, offset: int, name: str | None = None,
+                     sort: Literal["cpu", "memory", "name", "pid"] | None = None,
+                     direction: Literal["asc", "desc"] = "asc") -> dict:
+    # CPU results for a reused PID can contain both the current process result
+    # and a terminated result for the previous process.  The latter must never
+    # overwrite the current row.  Process identity is PID + creation_time;
+    # ProcessCPUResult currently exposes PID only, so active rows are matched
+    # by PID while terminated results are explicitly excluded from this map.
+    cpu_by_pid = {
+        item.process_id: item
+        for item in snapshot.cpu
+        if item.status != "terminated"
+    }
+    rows = []
+    for row in snapshot.processes:
+        cpu = cpu_by_pid.get(row.process_id)
+        rows.append({
+            "name": row.name,
+            "pid": row.process_id,
+            "parent_pid": row.parent_process_id,
+            "working_set_bytes": row.working_set_bytes,
+            "private_memory_bytes": row.private_memory_bytes,
+            "thread_count": row.thread_count,
+            "creation_time": row.creation_time,
+            "cpu_percent": cpu.cpu_percent if cpu and cpu.status == "ok" else None,
+            "cpu_status": cpu.status if cpu else "unavailable",
+            "cpu_reason": cpu.reason if cpu else "missing_cpu_result",
+        })
+    for cpu in snapshot.cpu:
+        if cpu.status != "terminated" or any(row["pid"] == cpu.process_id for row in rows):
+            continue
+        rows.append({
+            "name": None, "pid": cpu.process_id, "parent_pid": None,
+            "working_set_bytes": None, "private_memory_bytes": None,
+            "thread_count": None, "creation_time": None,
+            "cpu_percent": None, "cpu_status": cpu.status, "cpu_reason": cpu.reason,
+        })
+    # Direct callers in existing offline integrations may invoke handlers
+    # without FastAPI dependency resolution, in which case Query defaults are
+    # objects rather than strings.
+    name = name if isinstance(name, str) else None
+    search = name.casefold() if name else ""
+    if search:
+        rows = [row for row in rows if search in (row["name"] or "").casefold()]
+    if sort:
+        descending = direction == "desc"
+        def compare(left, right):
+            if sort == "cpu":
+                primary = _compare_values(left["cpu_percent"], right["cpu_percent"], descending=descending, numeric=True)
+            elif sort == "memory":
+                primary = _compare_values(left["working_set_bytes"], right["working_set_bytes"], descending=descending, numeric=True)
+            elif sort == "name":
+                primary = _compare_values(left["name"], right["name"], descending=descending)
+            else:
+                primary = _compare_values(left["pid"], right["pid"], descending=descending, numeric=True)
+            if primary:
+                return primary
+            return _compare_values(left["pid"], right["pid"], descending=False, numeric=True)
+        rows = sorted(rows, key=cmp_to_key(compare))
+    return {
+        "device_id": snapshot.device_id,
+        "status": snapshot.status if snapshot.status != "error" else (snapshot.reason or "collection_failed"),
+        "reason": snapshot.reason,
+        "collected_at": snapshot.collected_at,
+        "age_seconds": snapshot.age_seconds,
+        "items": rows[offset:offset + limit],
+        "total": len(rows),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _task_manager_not_implemented() -> None:
+    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Windows Task Manager collection is not available yet")
+
+
+def _process_collection(client: WindowsCIMClient, device_id: int):
+    def collect(_device_id: int):
+        rows = client.process_snapshot()
+        processors = client.hardware_processors()
+        logical = next((item.number_of_logical_processors for item in processors if item.number_of_logical_processors and item.number_of_logical_processors > 0), None)
+        if logical is None:
+            systems = client.computer_system()
+            logical = next((item.number_of_logical_processors for item in systems if item.number_of_logical_processors and item.number_of_logical_processors > 0), None)
+        return rows, logical
+    return collect
+
+
+@router.get("/devices/{device_id}/processes", summary="Windows process snapshot")
+def get_process_snapshot(device_id: int, db: Session = Depends(get_db), user=Depends(require_permission("devices:read")), limit: int = Query(PROCESS_DEFAULT_LIMIT, ge=1, le=PROCESS_MAX_LIMIT), offset: int = Query(0, ge=0), name: str | None = Query(None, max_length=100), sort: Literal["cpu", "memory", "name", "pid"] | None = None, direction: Literal["asc", "desc"] = "asc"):
+    _windows_device(db, device_id, user)
+    return _process_response(process_snapshot_service.cached(device_id), limit=limit, offset=offset, name=name, sort=sort, direction=direction)
+
+
+@router.post("/devices/{device_id}/processes/fetch", summary="Fetch Windows process snapshot")
+def fetch_process_snapshot(device_id: int, db: Session = Depends(get_db), user=Depends(require_permission("devices:update")), limit: int = Query(PROCESS_DEFAULT_LIMIT, ge=1, le=PROCESS_MAX_LIMIT), offset: int = Query(0, ge=0), name: str | None = Query(None, max_length=100), sort: Literal["cpu", "memory", "name", "pid"] | None = None, direction: Literal["asc", "desc"] = "asc"):
+    device = _windows_device(db, device_id, user)
+    try:
+        client, credential = _metric_client(
+            db, device_id, user, device=device,
+            cim_limits=CIMLimits(max_items=PROCESS_CIM_MAX_ITEMS),
+        )
+        snapshot = process_snapshot_service.snapshot(
+            device_id,
+            force_refresh=True,
+            collector=_process_collection(client, device_id),
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("windows_process_fetch_failed device_id=%s", device_id)
+        raise HTTPException(status_code=502, detail="Windows process collection failed") from None
+    persisted = persist_process_snapshot_isolated(device.id, snapshot) if snapshot.status == "ok" else False
+    if not persisted and snapshot.status == "ok":
+        logger.warning("windows_process_fetch_completed_with_persistence_warning device_id=%s", device.id)
+    elif persisted:
+        _maybe_cleanup_process_history()
+    record_audit_event(
+        db, actor=user, action="PROCESS_FETCH", resource_type="windows_device",
+        resource_id=device.id, site_id=device.site_id, outcome="success" if snapshot.status in {"ok", "stale"} else "failure",
+        metadata={"device_id": device.id, "module": "processes", "status": snapshot.status},
+    )
+    return _process_response(snapshot, limit=limit, offset=offset, name=name, sort=sort, direction=direction)
+
+
+@router.get("/devices/{device_id}/processes/history", summary="Windows process snapshot history")
+def list_process_history(device_id: int, db: Session = Depends(get_db), user=Depends(require_permission("devices:read")), limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+    _windows_device(db, device_id, user)
+    rows = (db.query(WindowsProcessSnapshot)
+            .filter(WindowsProcessSnapshot.device_id == device_id)
+            .order_by(WindowsProcessSnapshot.collected_at.desc(), WindowsProcessSnapshot.id.desc())
+            .offset(offset).limit(limit).all())
+    return {"device_id": device_id, "items": [{
+        "snapshot_id": row.id, "device_id": row.device_id,
+        "collected_at": row.collected_at, "process_count": row.process_count,
+    } for row in rows], "limit": limit, "offset": offset}
+
+
+@router.get("/devices/{device_id}/processes/history/{snapshot_id}", summary="Windows process snapshot detail")
+def get_process_history(device_id: int, snapshot_id: int, db: Session = Depends(get_db), user=Depends(require_permission("devices:read"))):
+    _windows_device(db, device_id, user)
+    snapshot = (db.query(WindowsProcessSnapshot)
+                .filter(WindowsProcessSnapshot.id == snapshot_id, WindowsProcessSnapshot.device_id == device_id)
+                .first())
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Process snapshot not found")
+    items = (db.query(WindowsProcessSnapshotItem)
+             .filter(WindowsProcessSnapshotItem.snapshot_id == snapshot.id)
+             .order_by(WindowsProcessSnapshotItem.process_id.asc(), WindowsProcessSnapshotItem.id.asc())
+             .limit(PROCESS_CIM_MAX_ITEMS).all())
+    return {"snapshot_id": snapshot.id, "device_id": snapshot.device_id,
+            "collected_at": snapshot.collected_at, "process_count": snapshot.process_count,
+            "items": [{"pid": item.process_id, "name": item.process_name,
+                       "parent_pid": item.parent_process_id, "creation_time": item.process_creation_time,
+                       "cpu_percent": item.cpu_percent, "cpu_status": item.cpu_status,
+                       "cpu_reason": item.cpu_reason, "working_set_bytes": item.working_set_bytes,
+                       "private_memory_bytes": item.private_memory_bytes, "thread_count": item.thread_count,
+                       "started_at": item.started_at} for item in items]}
+
 
 @router.get("/devices/{device_id}/metrics/{module}")
 def get_metric(device_id: int, module: str, db: Session = Depends(get_db), user=Depends(require_permission("devices:read"))):
