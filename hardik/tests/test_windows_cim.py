@@ -48,7 +48,7 @@ def test_processes_parse_task_manager_fields_and_cpu_counter_data():
         "WorkingSetSize": "1048576", "PrivatePageCount": "2097152",
         "ThreadCount": "4", "CreationDate": "20260102112233.123456+000",
         "KernelModeTime": "10000000", "UserModeTime": "30000000",
-        "ExecutablePath": "C:\\\\worker.exe",
+        "ExecutablePath": "C:\\\\worker.exe", "SessionId": "0",
     }))])
     client, _ = make_client(fake)
 
@@ -62,8 +62,9 @@ def test_processes_parse_task_manager_fields_and_cpu_counter_data():
     assert result[0].thread_count == 4
     assert result[0].creation_time == "2026-01-02T11:22:33.123456+00:00"
     assert result[0].cpu_time_seconds == 4
+    assert result[0].session_id == 0
     query = WindowsCIMClient._filter("Win32_Process").text
-    assert all(field in query for field in ("ParentProcessId", "PrivatePageCount", "CreationDate", "KernelModeTime", "UserModeTime"))
+    assert all(field in query for field in ("ParentProcessId", "PrivatePageCount", "CreationDate", "KernelModeTime", "UserModeTime", "SessionId"))
 
 
 def test_processes_preserve_rows_when_optional_values_are_missing_or_invalid():
@@ -71,6 +72,7 @@ def test_processes_preserve_rows_when_optional_values_are_missing_or_invalid():
         "Name": "partial.exe", "ProcessId": "bad", "ParentProcessId": "-1",
         "WorkingSetSize": "bad", "PrivatePageCount": "-1", "ThreadCount": "bad",
         "CreationDate": "not-a-date", "KernelModeTime": "bad", "UserModeTime": "-1",
+        "SessionId": "bad",
     }))])
     client, _ = make_client(fake)
 
@@ -84,6 +86,15 @@ def test_processes_preserve_rows_when_optional_values_are_missing_or_invalid():
     assert result[0].thread_count is None
     assert result[0].creation_time is None
     assert result[0].cpu_time_seconds is None
+    assert result[0].session_id is None
+
+
+@pytest.mark.parametrize("session_id", ["1", "2"])
+def test_processes_parse_nonzero_session_ids(session_id):
+    client, _ = make_client(FakeWSMan([response(node("Win32_Process", {
+        "Name": "same.exe", "ProcessId": session_id, "SessionId": session_id,
+    }))]))
+    assert client.processes()[0].session_id == int(session_id)
 
 
 def test_processes_return_empty_result_without_rows():

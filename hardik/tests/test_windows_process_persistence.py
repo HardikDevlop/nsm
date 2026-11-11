@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 from backend.windows_monitoring import process_persistence
 
@@ -17,6 +18,33 @@ class FakeSession:
 
     def close(self):
         self.closed += 1
+
+    def add(self, row):
+        self.parent = row
+
+    def flush(self):
+        return None
+
+    def add_all(self, rows):
+        list(rows)
+
+
+def test_persistence_reuses_snapshot_collection_id(monkeypatch):
+    collection_id = uuid4()
+    captured = {}
+
+    class Parent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.id = 1
+
+    monkeypatch.setattr(process_persistence, "WindowsProcessSnapshot", Parent)
+    db = FakeSession()
+    snapshot = SimpleNamespace(collection_id=collection_id, collected_at=None, processes=(), cpu=())
+
+    process_persistence.persist_process_snapshot(db, 361, snapshot)
+
+    assert captured["collection_id"] == collection_id
 
 
 def test_isolated_persistence_commits_without_request_session(monkeypatch):

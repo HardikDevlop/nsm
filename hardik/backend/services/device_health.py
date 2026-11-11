@@ -134,6 +134,11 @@ def derive_device_health(db: Session, device: Device, *, now: datetime | None = 
         status, reason = "degraded", f"ICMP is reachable; SNMP is {snmp_health}"
     elif icmp == "reachable" or snmp_health == "healthy":
         status, reason = "online", "Recent liveness/monitoring evidence is available"
+    elif not icmp_enabled and not enabled and device.status in {"online", "offline"}:
+        # Devices discovered/imported before monitoring was enabled can still
+        # have a valid inventory state. Do not label a known active device as
+        # UNKNOWN merely because no optional probe is configured yet.
+        status, reason = device.status, "Using the latest saved device status; monitoring is not enabled"
     else:
         status, reason = "unknown", "Insufficient current monitoring evidence"
 

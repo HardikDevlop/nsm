@@ -699,6 +699,7 @@ export default function Dashboard() {
     warning: summary?.warning_devices ?? ((summary?.health_counts?.degraded ?? 0) + (summary?.health_counts?.stale ?? 0)),
     unknown: summary?.health_counts?.unknown ?? 0,
   }
+  const unknownDevices = devices.filter((device) => device.health?.status === "unknown")
 
   const avgCpu = n?.performance?.avg_cpu ?? null
   const avgMem = n?.performance?.avg_memory ?? null
@@ -912,8 +913,8 @@ export default function Dashboard() {
 
       {loading && !data ? (
         <div className="space-y-4" aria-busy="true" aria-label={d.loadingStored}>
-          <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-8 gap-3">
-            {Array.from({ length: 8 }, (_, index) => <div key={index} className="glass rounded-xl h-28 animate-pulse" />)}
+          <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-7 gap-3">
+            {Array.from({ length: 7 }, (_, index) => <div key={index} className="glass rounded-xl h-28 animate-pulse" />)}
           </div>
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             {Array.from({ length: 3 }, (_, index) => <div key={index} className="glass rounded-xl h-72 animate-pulse" />)}
@@ -923,7 +924,7 @@ export default function Dashboard() {
         <>
           {/* ── METRIC CARDS ── */}
           <SectionLabel label="Overview" />
-          <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-8 gap-3 animate-slideUp">
+          <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-7 gap-3 animate-slideUp">
             <Metric label={d.totalDevices} number={summary?.total_devices ?? 0} hint={d.inventory} onClick={canDevices ? () => navigate("/devices") : undefined} />
             <Metric label={d.online} number={health.online} hint={d.reachable} tone="green" onClick={canDevices ? () => navigate("/devices") : undefined} />
             <Metric label={d.offline} number={health.offline} hint={d.unreachable} tone="red" onClick={canDevices ? () => navigate("/devices") : undefined} />
@@ -931,7 +932,6 @@ export default function Dashboard() {
             <Metric label={d.snmpFailed} number={n?.polling.failure ?? 0} hint={rangeLabel} tone="red" onClick={canMonitoringJobs ? () => navigate("/monitoring-jobs") : undefined} />
             <Metric label={d.criticalAlerts} number={summary?.critical_alerts ?? 0} hint={d.openAcknowledged} tone="red" onClick={canAlerts ? () => navigate("/alerts") : undefined} />
             <Metric label={d.warningAlerts} number={(n?.alerts_by_severity.warning ?? 0) + (n?.alerts_by_severity.medium ?? 0)} hint={d.openAcknowledged} tone="amber" onClick={canAlerts ? () => navigate("/alerts") : undefined} />
-          <Metric label={d.interfacesDown} number={n?.interface_summary.down ?? 0} hint={d.latestSnmpState} tone="red" />
           </div>
 
           
@@ -1030,6 +1030,31 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+              {unknownDevices.length > 0 && (
+                <div className="mt-3 rounded-lg p-3" style={{ border: `1px solid ${C.muted}45`, background: `${C.muted}08` }}>
+                  <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.muted }}>
+                    Unknown devices — investigation needed
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {unknownDevices.map((device) => (
+                      <button
+                        key={device.id}
+                        type="button"
+                        className="w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5"
+                        onClick={() => navigate(`/device-monitoring?device=${device.id}`)}
+                      >
+                        <div className="flex items-center justify-between gap-2 font-mono text-[10px]">
+                          <span style={{ color: "var(--t-text, #c8d8ee)" }}>{device.hostname}</span>
+                          <span style={{ color: C.muted }}>{device.ip_address}</span>
+                        </div>
+                        <div className="mt-0.5 font-mono text-[9px]" style={{ color: C.muted }}>
+                          {device.health?.health_reason || "No current monitoring evidence"}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </Panel>
           </div>
 

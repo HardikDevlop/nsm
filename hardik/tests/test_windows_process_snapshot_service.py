@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
+from uuid import UUID
 
 from backend.windows_monitoring.cim import WindowsProcessResult
 from backend.windows_monitoring.process_snapshot_service import ProcessSnapshotService
@@ -31,6 +32,24 @@ def test_first_and_second_collection_calculate_cpu():
     second = service.snapshot(1, force_refresh=True)
     assert first.status == "ok" and first.cpu[0].status == "warming_up"
     assert second.cpu[0].cpu_percent == 50
+
+
+def test_collection_id_is_created_once_per_collection_and_preserved_in_cache():
+    clock = Clock()
+    calls = []
+    service = ProcessSnapshotService(lambda _: (calls.append(1) or ([row(1)], 1)), clock=clock)
+
+    first = service.snapshot(1)
+    cached = service.snapshot(1)
+
+    assert isinstance(first.collection_id, UUID)
+    assert cached.collection_id == first.collection_id
+    assert len(calls) == 1
+
+    clock.advance(11)
+    second = service.snapshot(1, force_refresh=True)
+    assert isinstance(second.collection_id, UUID)
+    assert second.collection_id != first.collection_id
 
 
 def test_cache_hit_and_expiry():

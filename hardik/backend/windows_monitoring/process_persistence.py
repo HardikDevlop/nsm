@@ -26,7 +26,7 @@ def persist_process_snapshot(db: Session, device_id: int, snapshot, *, collectio
     parent = WindowsProcessSnapshot(
         device_id=device_id,
         collected_at=_collected_at(snapshot.collected_at),
-        collection_id=collection_id or uuid4(),
+        collection_id=getattr(snapshot, "collection_id", None) or collection_id or uuid4(),
         process_count=len(snapshot.processes),
     )
     db.add(parent)
@@ -47,6 +47,11 @@ def persist_process_snapshot(db: Session, device_id: int, snapshot, *, collectio
             private_memory_bytes=row.private_memory_bytes,
             thread_count=row.thread_count,
             started_at=row.creation_time,
+            session_id=row.session_id,
+            classification=row.classification,
+            classification_source=row.classification_source,
+            classification_confidence=row.classification_confidence,
+            application_group_id=row.application_group_id,
         )
         for row in snapshot.processes if row.process_id is not None
         for cpu in [active_cpu.get(row.process_id)]

@@ -17,6 +17,7 @@ import threading
 import time
 import logging
 from typing import Callable, Iterable
+from uuid import UUID, uuid4
 
 from .cim import WindowsProcessResult
 from .process_cpu import ProcessCPUResult, calculate_process_cpu
@@ -37,6 +38,7 @@ class ProcessSnapshot:
     status: str
     reason: str | None = None
     collected_at: str | None = None
+    collection_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,7 @@ class _Cached:
     cpu: tuple[ProcessCPUResult, ...]
     collected_monotonic_seconds: float
     collected_at: str
+    collection_id: UUID
 
 
 Collector = Callable[[int], tuple[Iterable[WindowsProcessResult], int | None]]
@@ -103,7 +106,7 @@ class ProcessSnapshotService:
         self._active_futures: set[object] = set()
         self._shutdown_deadline: float | None = None
 
-    def snapshot(self, device_id: int, *, force_refresh: bool = False, collector: Collector | None = None) -> ProcessSnapshot:
+    def snapshot(self, device_id: int, *, force_refresh: bool = False, collector: Collector | None = None, collection_id: UUID | None = None) -> ProcessSnapshot:
         now = self._clock()
         with self._state_lock:
             cached = self._cache.get(device_id)
@@ -130,6 +133,7 @@ class ProcessSnapshotService:
             permit = self._resource_budget.acquire(timeout=self._timeout)
             if permit is None:
                 return self._stale_or_empty(device_id, cached, now, "concurrency_limit")
+            collection_id = collection_id or uuid4()
             try:
                 executor = ThreadPoolExecutor(max_workers=1)
                 future = executor.submit(self._collect, device_id, collector or self._collector)
@@ -182,7 +186,7 @@ class ProcessSnapshotService:
                     ))
                 self._baselines[device_id] = _Baseline(process_rows, collected, logical_processors)
                 self._baselines.move_to_end(device_id)
-                entry = _Cached(process_rows, cpu, collected, datetime.now(timezone.utc).isoformat())
+                entry = _Cached(process_rows, cpu, collected, datetime.now(timezone.utc).isoformat(), collection_id)
                 self._cache[device_id] = entry
                 self._cache.move_to_end(device_id)
                 self._evict()
@@ -283,7 +287,7 @@ class ProcessSnapshotService:
             self._last_attempt.pop(device_id, None)
 
     def _response(self, device_id: int, cached: _Cached, now: float, status: str, reason: str | None = None) -> ProcessSnapshot:
-        return ProcessSnapshot(device_id, cached.processes, cached.cpu, cached.collected_monotonic_seconds, max(0.0, now - cached.collected_monotonic_seconds), status, reason, cached.collected_at)
+        return ProcessSnapshot(device_id, cached.processes, cached.cpu, cached.collected_monotonic_seconds, max(0.0, now - cached.collected_monotonic_seconds), status, reason, cached.collected_at, cached.collection_id)
 
     def _stale_or_empty(self, device_id: int, cached: _Cached | None, now: float, reason: str) -> ProcessSnapshot:
         if cached is None:

@@ -390,7 +390,17 @@ class SessionManager:
             # HOST_KEY_UNKNOWN, TCP_TIMEOUT, etc. and every failure appeared
             # as SESSION_CREATE_FAILED.
             wrapped = ConnectionError("Remote Access session could not be established")
-            wrapped.code = getattr(exc, "code", None) or "SESSION_CREATE_FAILED"
+            # Preserve adapter-specific failures. Older adapters and a few
+            # socket/Paramiko exceptions do not expose ``code``; classify
+            # those by protocol instead of collapsing every failure into the
+            # misleading SESSION_CREATE_FAILED response.
+            adapter_code = getattr(exc, "code", None)
+            if adapter_code:
+                wrapped.code = adapter_code
+            elif protocol == "telnet":
+                wrapped.code = "TELNET_CONNECTION_FAILED"
+            else:
+                wrapped.code = "SSH_CONNECTION_FAILED"
             if wrapped.code == "TCP_TIMEOUT":
                 wrapped.code = "SSH_TIMEOUT"
             wrapped.stage = getattr(exc, "stage", None)

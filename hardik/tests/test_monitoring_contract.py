@@ -37,13 +37,14 @@ def test_explicit_stop_is_stopped():
     }
 
 
-def test_last_seen_is_not_reported_as_icmp_reachable_when_icmp_is_disabled():
+def test_saved_status_is_used_when_monitoring_is_disabled():
     device = SimpleNamespace(
         id=284, monitoring_status=False, last_icmp_attempt_at=None,
         last_icmp_status=None, last_seen=None, status="online",
     )
     health = derive_device_health(_NoQueryDB(), device)
     assert health["icmp_health"]["status"] == "disabled"
+    assert health["status"] == "online"
 
 
 class _NoQueryDB:

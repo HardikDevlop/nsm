@@ -2048,6 +2048,12 @@ export interface WindowsProcessRecord {
   cpu_percent: number | null
   cpu_status: WindowsProcessCPUStatus
   cpu_reason: string | null
+  classification?: "app" | "background" | "windows" | "unknown" | null
+  classification_source?: string | null
+  classification_confidence?: string | null
+  classification_reason?: string | null
+  session_id?: number | null
+  application_group_id?: string | null
 }
 
 export interface WindowsTaskManagerSnapshot<T> {
@@ -2135,6 +2141,11 @@ export interface WindowsProcessHistoryItem {
   working_set_bytes: number | null
   private_memory_bytes: number | null
   thread_count: number | null
+  session_id?: number | null
+  classification?: "app" | "background" | "windows" | "unknown" | null
+  classification_source?: string | null
+  classification_confidence?: string | null
+  application_group_id?: string | null
 }
 
 export interface WindowsProcessHistoryDetail {

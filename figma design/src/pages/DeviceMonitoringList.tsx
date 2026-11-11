@@ -16,6 +16,7 @@ import {
 import { useI18n } from '../i18n/I18nContext'
 
 type LiveDevice = Record<string, unknown>
+type DeviceFilter = 'all' | 'monitored' | 'online' | 'offline'
 
 export default function DeviceMonitoringList() {
   const { t } = useI18n()
@@ -29,6 +30,7 @@ export default function DeviceMonitoringList() {
   const [stoppingAll, setStoppingAll] = useState(false)
   const [actionInProgress, setActionInProgress] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | null>(null)
+  const [activeFilter, setActiveFilter] = useState<DeviceFilter>('all')
   const cleanupRef = useRef<(() => void) | null>(null)
 
   // Load devices from DB
@@ -189,6 +191,29 @@ export default function DeviceMonitoringList() {
   const totalUp = summary?.up ?? 0
   const totalDown = summary?.down ?? 0
 
+  const filteredDevices = useMemo(() => devices.filter(device => {
+    if (activeFilter === 'all') return true
+    const live = liveMap.get(device.ip_address)
+    if (activeFilter === 'monitored') return !!live
+    if (!live) return false
+    const status = String(live.status ?? '').toLowerCase()
+    return activeFilter === 'online' ? status === 'up' || status === 'online' : status === 'down' || status === 'offline'
+  }), [activeFilter, devices, liveMap])
+
+  const filterLabels: Record<DeviceFilter, string> = {
+    all: 'All Devices',
+    monitored: 'Monitored Devices',
+    online: 'Online Devices',
+    offline: 'Offline Devices',
+  }
+
+  const summaryCards: Array<{ filter: DeviceFilter; label: string; value: number; color: string }> = [
+    { filter: 'all', label: tr.totalDevices, value: devices.length, color: '#00d4ff' },
+    { filter: 'monitored', label: tr.monitored, value: totalMonitored, color: '#00d4ff' },
+    { filter: 'online', label: tr.online, value: totalUp, color: '#00ff88' },
+    { filter: 'offline', label: tr.offline, value: totalDown, color: '#ff3366' },
+  ]
+
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
       {/* Header */}
@@ -229,36 +254,49 @@ export default function DeviceMonitoringList() {
 
       {/* Summary cards */}
       <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-        <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.totalDevices}</div>
-          <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00d4ff' }}>{devices.length}</div>
-        </GlassCard>
-        <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.monitored}</div>
-          <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00d4ff' }}>{totalMonitored}</div>
-        </GlassCard>
-        <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.online}</div>
-          <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#00ff88' }}>{totalUp}</div>
-        </GlassCard>
-        <GlassCard className="p-4">
-          <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.offline}</div>
-          <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: '#ff3366' }}>{totalDown}</div>
-        </GlassCard>
+        {summaryCards.map(card => {
+          const selected = activeFilter === card.filter
+          return (
+            <button
+              key={card.filter}
+              type="button"
+              aria-pressed={selected}
+              aria-label={`Show ${card.label}`}
+              onClick={() => setActiveFilter(card.filter)}
+              className="text-left rounded-lg p-4 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              style={{
+                background: selected ? `${card.color}12` : 'rgba(255,255,255,0.01)',
+                border: `1px solid ${selected ? `${card.color}80` : 'rgba(255,255,255,0.14)'}`,
+                boxShadow: selected ? `0 0 18px ${card.color}18` : 'none',
+              }}
+            >
+              <div className="font-mono text-xs mb-1" style={{ color: 'var(--t-muted, #8899bb)' }}>{card.label}</div>
+              <div className="font-display text-2xl sm:text-3xl font-bold" style={{ color: card.color }}>{card.value}</div>
+              <div className="font-mono text-[10px] mt-2 uppercase tracking-wider" style={{ color: selected ? card.color : 'var(--t-muted, #667799)' }}>
+                {selected ? 'Showing now' : 'Click to filter'}
+              </div>
+            </button>
+          )
+        })}
       </div>
 
       {/* Device list */}
       <GlassCard className="p-4 md:p-5">
-        <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan mb-4">{tr.allDevices}</div>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="font-display font-bold text-sm sm:text-base tracking-wider neon-cyan">{filterLabels[activeFilter]}</div>
+          <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--t-muted, #8899bb)' }}>
+            {filteredDevices.length} of {devices.length}
+          </div>
+        </div>
         {loading ? (
           <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{tr.loadingDevices}</div>
-        ) : devices.length === 0 ? (
+        ) : filteredDevices.length === 0 ? (
           <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>
-            {tr.noDevices}
+            {devices.length === 0 ? tr.noDevices : `No ${filterLabels[activeFilter].toLowerCase()} found.`}
           </div>
         ) : (
           <div className="space-y-2">
-            {devices.map(device => {
+            {filteredDevices.map(device => {
               const live = liveMap.get(device.ip_address)
               const isMonitored = !!live
               const liveStatus = live ? String(live.status ?? 'unknown') : 'unknown'

@@ -49,6 +49,67 @@ class WindowsCredential(Base):
     device = relationship("Device")
 
 
+class WindowsHelperCredential(Base):
+    """One-time-issued, helper-only credential; plaintext is never persisted."""
+    __tablename__ = "windows_helper_credentials"
+    __table_args__ = (
+        UniqueConstraint("token_prefix", name="uq_windows_helper_credentials_prefix"),
+        Index("ix_windows_helper_credentials_device_active", "device_id", "is_active"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    device = relationship("Device")
+
+
+class WindowsHelperSubmission(Base):
+    """Durable idempotency/replay record with short-lived helper evidence."""
+    __tablename__ = "windows_helper_submissions"
+    __table_args__ = (UniqueConstraint("collection_id", name="uq_windows_helper_submission_collection"),
+                      Index("ix_windows_helper_submission_expiry", "expires_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    collection_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, unique=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=windows_now, nullable=False)
+    device = relationship("Device")
+
+
+class WindowsHelperChallenge(Base):
+    """Durable, device-bound challenge state for helper collection binding."""
+    __tablename__ = "windows_helper_challenges"
+    __table_args__ = (
+        UniqueConstraint("challenge_id", name="uq_windows_helper_challenges_id"),
+        UniqueConstraint("device_id", "collection_id", name="uq_windows_helper_challenges_device_collection"),
+        Index("ix_windows_helper_challenges_device_expiry", "device_id", "expires_at"),
+        Index("ix_windows_helper_challenges_collection", "collection_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    challenge_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, unique=True, index=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True)
+    collection_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False)
+    nonce_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    device = relationship("Device")
+
+
 class WindowsThresholdConfig(Base):
     """Per-device UI threshold configuration for Windows monitoring."""
 
@@ -229,6 +290,29 @@ class WindowsMetricSnapshot(Base):
     device = relationship("Device")
 
 
+class WindowsProcessCollection(Base):
+    """Durable lifecycle state for one device process collection."""
+    __tablename__ = "windows_process_collections"
+    __table_args__ = (
+        UniqueConstraint("collection_id", name="uq_windows_process_collections_collection"),
+        Index("ix_windows_process_collections_device_state", "device_id", "state"),
+        Index("ix_windows_process_collections_expiry", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    collection_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, unique=True, index=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    device = relationship("Device")
+
+
 class WindowsProcessSnapshot(Base):
     __tablename__ = "windows_process_snapshots"
     __table_args__ = (
@@ -265,6 +349,11 @@ class WindowsProcessSnapshotItem(Base):
     private_memory_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     thread_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    classification: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    classification_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    classification_confidence: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    application_group_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     snapshot = relationship("WindowsProcessSnapshot", back_populates="items")
     device = relationship("Device")
 
@@ -323,10 +412,14 @@ class WindowsEventLog(Base):
 
 WINDOWS_MONITORING_TABLES = (
     WindowsCredential.__table__,
+    WindowsHelperCredential.__table__,
+    WindowsHelperSubmission.__table__,
+    WindowsHelperChallenge.__table__,
     WindowsSystemSnapshot.__table__,
     WindowsMetricSnapshot.__table__,
     WindowsProcessSnapshot.__table__,
     WindowsProcessSnapshotItem.__table__,
+    WindowsProcessCollection.__table__,
     WindowsHardwareSnapshot.__table__,
     WindowsEventLog.__table__,
 )

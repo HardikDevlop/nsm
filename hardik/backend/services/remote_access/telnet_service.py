@@ -19,6 +19,10 @@ IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 class TelnetConnectionError(ConnectionError):
     """A Telnet connection could not be established or used."""
 
+    def __init__(self, message: str, code: str = "TELNET_CONNECTION_FAILED"):
+        super().__init__(message)
+        self.code = code
+
 
 class TelnetConnectionAdapter:
     """Persistent Telnet socket exposing raw device prompts and output."""
@@ -54,11 +58,12 @@ class TelnetConnectionAdapter:
         except (socket.timeout, TimeoutError) as exc:
             if sock:
                 sock.close()
-            raise TelnetConnectionError("Telnet connection timed out") from exc
+            raise TelnetConnectionError("Telnet connection timed out", "TELNET_TIMEOUT") from exc
         except (ConnectionRefusedError, OSError) as exc:
             if sock:
                 sock.close()
-            raise TelnetConnectionError("Telnet connection failed") from exc
+            code = "TELNET_REFUSED" if isinstance(exc, ConnectionRefusedError) else "TELNET_CONNECTION_FAILED"
+            raise TelnetConnectionError("Telnet connection failed", code) from exc
 
     def _require_socket(self) -> socket.socket:
         if self._socket is None:

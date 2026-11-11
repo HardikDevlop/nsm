@@ -16,6 +16,9 @@ test("processes panel provides bounded search, sorting, pagination, and human-re
   assert.match(source, /value\.slice\(0, 100\)/)
   assert.match(source, /pidSearch/)
   assert.match(source, /setExpanded/)
+  assert.match(source, /grid-cols-\[40fr_15fr_20fr_25fr\]/)
+  assert.doesNotMatch(source, /aria-label="Process category"/)
+  assert.doesNotMatch(source, /<span[^>]*>\{group\.category\}<\/span>/)
 })
 
 test("processes panel handles permission, status, null CPU, and no polling safely", () => {

@@ -365,7 +365,9 @@ app.include_router(bgp_router)
 app.include_router(syslog_router)
 app.include_router(linux_monitoring_router)
 from backend.windows_monitoring.api import router as windows_monitoring_router
+from backend.windows_monitoring.helper_api import router as windows_helper_router
 app.include_router(windows_monitoring_router)
+app.include_router(windows_helper_router)
 
 # Overview + Kill-all service control
 app.include_router(overview_router)

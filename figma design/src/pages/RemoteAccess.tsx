@@ -412,6 +412,28 @@ export default function RemoteAccess() {
       connectingSessionsRef.current.delete("pending")
       setConnectingRequest(false)
       const message = error instanceof Error ? error.message : "unable to create session"
+      // A direct terminal connect can discover an SSH host key before the
+      // user has run Test Connection. Fetch the fingerprint now so the same
+      // trust dialog can be used instead of leaving the user with a generic
+      // SESSION_CREATE_FAILED error.
+      if (protocol === "ssh" && message === "HOST_KEY_UNKNOWN") {
+        try {
+          const keyResult = await testRemoteAccess({
+            device_id: deviceId,
+            protocol,
+            port,
+            ...(savedCredentialId
+              ? { credential_id: savedCredentialId }
+              : { username: username.trim(), secret: password }),
+            auth_type: "password",
+            remember_credential: false,
+          })
+          setTestResult(keyResult)
+          setHostKeyDialog(keyResult.error_code === "HOST_KEY_UNKNOWN" ? "unknown" : keyResult.error_code === "HOST_KEY_MISMATCH" ? "mismatch" : null)
+        } catch {
+          // Keep the original, structured connection error visible.
+        }
+      }
       const duplicate = message.match(/^DEVICE_ALREADY_CONNECTED:(ssh|telnet)$/i)
       if (duplicate) {
         toast.warning(`${deviceName} is already connected via ${duplicate[1].toUpperCase()}.`)

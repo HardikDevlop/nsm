@@ -28,6 +28,18 @@ def test_process_filter_sort_and_total_before_pagination():
     assert result["items"][0]["pid"] == 1
 
 
+def test_process_response_exposes_verified_path_classification_and_unknown_metadata():
+    system = process("svchost.exe", 4, 100, 0)
+    system[0].executable_path = r"C:\Windows\System32\svchost.exe"
+    unknown = process("mystery.exe", 5, 100, 0)
+    unknown[0].executable_path = None
+    result = api._process_response(process_snapshot([system, unknown]), limit=10, offset=0)
+    by_pid = {row["pid"]: row for row in result["items"]}
+    assert by_pid[4]["classification"] == "windows"
+    assert by_pid[4]["classification_source"] == "cim_metadata"
+    assert by_pid[5]["classification"] is None
+
+
 def test_process_null_cpu_sorts_last_in_both_directions():
     snapshot = process_snapshot([process("a", 1, 1, None, "warming_up"), process("b", 2, 1, 1)])
     for direction in ("asc", "desc"):
@@ -65,7 +77,10 @@ def test_pid_reuse_does_not_allow_terminated_result_to_overwrite_active_cpu():
     assert result["items"] == [{
         "name": "worker", "pid": 7, "parent_pid": None,
         "working_set_bytes": 1, "private_memory_bytes": None,
-        "thread_count": 1, "creation_time": "new", "cpu_percent": 42,
+            "thread_count": 1, "creation_time": "new", "session_id": None,
+            "classification": None, "classification_source": None,
+            "classification_confidence": None, "classification_reason": None, "application_group_id": None,
+            "cpu_percent": 42,
         "cpu_status": "ok", "cpu_reason": None,
     }]
 

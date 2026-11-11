@@ -20,6 +20,7 @@ import {
   presentProcessCPU,
   presentTaskManagerStatus,
 } from "../../lib/windowsTaskManagerDisplay"
+import { groupWindowsProcesses, paginateProcessGroups, processGroupPageCount, sortProcessGroups, type ProcessCategory, type ProcessGroup } from "../../lib/windowsProcessGroups"
 
 const DEFAULT_PAGE_SIZE = 50
 const MAX_PAGE_SIZE = 200
@@ -47,7 +48,7 @@ const FRIENDLY_PROCESS_NAMES: Record<string, string> = {
   "spoolsv.exe": "Print Spooler",
 }
 
-const NOT_AVAILABLE = "Not available"
+const NOT_AVAILABLE = "N/A" // Not available values are rendered explicitly as N/A.
 
 function localTimestamp(value: string | null | undefined): string {
   if (!value) return NOT_AVAILABLE
@@ -69,6 +70,7 @@ function HistoryView({ deviceId, colors }: { deviceId: number; colors: typeof co
   const [detailPage, setDetailPage] = useState(1)
   const [search, setSearch] = useState("")
   const [sort, setSort] = useState<"name" | "pid" | "cpu" | "memory" | "threads">("name")
+  const [expanded, setExpanded] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const pageSize = 50
@@ -100,14 +102,16 @@ function HistoryView({ deviceId, colors }: { deviceId: number; colors: typeof co
       return value || (a.pid ?? 0) - (b.pid ?? 0)
     })
   }, [detail, search, sort])
-  const shown = filtered.slice((detailPage - 1) * pageSize, detailPage * pageSize)
+  const historicalRows = filtered.map((item) => ({ ...item, cpu_status: item.cpu_status ?? "unavailable" } as WindowsProcessRecord))
+  const historyGroups = sortProcessGroups(groupWindowsProcesses(historicalRows), sort === "threads" ? "name" : sort)
+  const shownGroups = paginateProcessGroups(historyGroups, detailPage, pageSize)
   const memory = (value: number | null) => value == null ? NOT_AVAILABLE : formatTaskManagerMemory(value).replace("Unavailable", NOT_AVAILABLE)
 
   return <div className="p-4">
     {error && <p role="alert" className="mb-4 rounded border p-3 font-mono text-xs" style={{ color: colors.danger, borderColor: colors.danger }}>{error}</p>}
     {loading && <p role="status" className="p-6 text-center font-mono text-xs" style={{ color: colors.muted }}>Loading history…</p>}
     {!loading && !detail && <><table className="w-full text-left"><thead><tr>{["Collection Time", "Total Processes", "Snapshot ID", ""].map((label) => <th key={label} className="px-3 py-2 font-mono text-[10px] uppercase" style={{ color: colors.muted }}>{label}</th>)}</tr></thead><tbody>{history.map((item) => <tr key={item.snapshot_id} className="border-t" style={{ borderColor: colors.border }}><td className="px-3 py-2 text-xs">{localTimestamp(item.collected_at)}</td><td className="px-3 py-2 text-xs">{item.process_count}</td><td className="px-3 py-2 font-mono text-xs">{item.snapshot_id}</td><td className="px-3 py-2"><button type="button" className="rounded border px-2 py-1 font-mono text-[10px]" onClick={() => setSelected(item.snapshot_id)} style={{ borderColor: colors.border, color: colors.accent }}>VIEW DETAILS</button></td></tr>)}</tbody></table>{history.length === 0 && <p className="p-6 text-center font-mono text-xs" style={{ color: colors.muted }}>No historical snapshots are available.</p>}<TablePagination page={page} pageCount={history.length === pageSize ? page + 1 : page} pageSize={pageSize} startItem={history.length ? (page - 1) * pageSize + 1 : 0} endItem={(page - 1) * pageSize + history.length} totalItems={(page - 1) * pageSize + history.length} onPageChange={setPage} onPageSizeChange={() => undefined} pageSizes={[50]} /></>}
-    {!loading && detail && <><div className="mb-4 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={() => { setSelected(null); setDetail(null) }} className="rounded border px-3 py-2 font-mono text-[10px]" style={{ borderColor: colors.border, color: colors.accent }}>← SNAPSHOT LIST</button><span className="font-mono text-xs" style={{ color: colors.muted }}>Snapshot {detail.snapshot_id} · {localTimestamp(detail.collected_at)}</span></div><div className="mb-4 flex flex-wrap gap-2"><input aria-label="History process search" value={search} onChange={(e) => { setSearch(e.target.value); setDetailPage(1) }} placeholder="Search name or PID" className="rounded-lg border px-3 py-2 font-mono text-xs" style={{ background: colors.card, color: colors.text, borderColor: colors.border }} /><select aria-label="History sort" value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} className="rounded-lg border px-3 py-2 font-mono text-xs" style={{ background: colors.card, color: colors.text, borderColor: colors.border }}><option value="name">Name</option><option value="pid">PID</option><option value="cpu">CPU</option><option value="memory">Memory</option><option value="threads">Threads</option></select></div><table className="w-full text-left"><thead><tr>{["Process Name", "PID", "CPU Usage", "Memory Usage", "Threads", "Started At"].map((label) => <th key={label} className="px-3 py-2 font-mono text-[10px] uppercase" style={{ color: colors.muted }}>{label}</th>)}</tr></thead><tbody>{shown.map((item, index) => <tr key={`${item.pid}-${index}`} className="border-t" style={{ borderColor: colors.border }}><td className="px-3 py-2 text-xs">{friendlyProcessName(item.name)}<div className="font-mono text-[10px]" style={{ color: colors.muted }}>Original: {originalProcessName(item.name)} · Parent PID: {metricText(item.parent_pid)} · {item.cpu_status !== "ok" ? `${item.cpu_status ?? "unavailable"}: ${item.cpu_reason ?? ""}` : ""}</div></td><td className="px-3 py-2 font-mono text-xs">{metricText(item.pid)}</td><td className="px-3 py-2 text-xs">{historyCpu(item)}</td><td className="px-3 py-2 text-xs">{memory(item.working_set_bytes)}<div className="font-mono text-[10px]" style={{ color: colors.muted }}>Private: {memory(item.private_memory_bytes)}</div></td><td className="px-3 py-2 font-mono text-xs">{metricText(item.thread_count)}</td><td className="px-3 py-2 text-xs">{localTimestamp(item.started_at ?? item.creation_time)}</td></tr>)}</tbody></table>{shown.length === 0 && <p className="p-6 text-center font-mono text-xs" style={{ color: colors.muted }}>No processes match this search.</p>}<TablePagination page={detailPage} pageCount={Math.max(1, Math.ceil(filtered.length / pageSize))} pageSize={pageSize} startItem={filtered.length ? (detailPage - 1) * pageSize + 1 : 0} endItem={Math.min(detailPage * pageSize, filtered.length)} totalItems={filtered.length} onPageChange={setDetailPage} onPageSizeChange={() => undefined} pageSizes={[50]} /></>}
+    {!loading && detail && <><div className="mb-4 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={() => { setSelected(null); setDetail(null) }} className="rounded border px-3 py-2 font-mono text-[10px]" style={{ borderColor: colors.border, color: colors.accent }}>← SNAPSHOT LIST</button><span className="font-mono text-xs" style={{ color: colors.muted }}>Snapshot {detail.snapshot_id} · {localTimestamp(detail.collected_at)}</span></div><div className="mb-4 flex flex-wrap gap-2"><input aria-label="History process search" value={search} onChange={(e) => { setSearch(e.target.value); setDetailPage(1) }} placeholder="Search name or PID" className="rounded-lg border px-3 py-2 font-mono text-xs" style={{ background: colors.card, color: colors.text, borderColor: colors.border }} /><select aria-label="History sort" value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} className="rounded-lg border px-3 py-2 font-mono text-xs" style={{ background: colors.card, color: colors.text, borderColor: colors.border }}><option value="name">Name</option><option value="pid">PID</option><option value="cpu">CPU</option><option value="memory">Memory</option><option value="threads">Threads</option></select></div>{(["app", "background", "windows", "unknown"] as ProcessCategory[]).map((category) => { const categoryGroups = shownGroups.filter((group) => group.category === category); if (!categoryGroups.length) return null; return <section key={category} aria-label={CATEGORY_LABELS[category]}><div className="px-3 py-3 text-xs font-bold" style={{ color: colors.text }}>{CATEGORY_LABELS[category]}</div>{categoryGroups.map((group) => <GroupTable key={group.key} group={group} expanded={expanded} setExpanded={setExpanded} memoryBasis={Math.max(...historicalRows.map((row) => row.working_set_bytes ?? 0), 0)} />)}</section> })}{!shownGroups.length && <p className="p-6 text-center font-mono text-xs" style={{ color: colors.muted }}>No processes match this search.</p>}<TablePagination page={detailPage} pageCount={processGroupPageCount(historyGroups, pageSize)} pageSize={pageSize} startItem={historyGroups.length ? (detailPage - 1) * pageSize + 1 : 0} endItem={Math.min(detailPage * pageSize, historyGroups.length)} totalItems={historyGroups.length} onPageChange={setDetailPage} onPageSizeChange={() => undefined} pageSizes={[50]} /></>}
   </div>
 }
 
@@ -152,6 +156,28 @@ function processTimestamp(value: string | null | undefined): string {
   return `${date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}, ${time}`
 }
 
+const CATEGORY_LABELS: Record<ProcessCategory, string> = { app: "Apps", background: "Background Processes", windows: "Windows Processes", unknown: "Unknown Processes" }
+
+function GroupTable({ group, expanded, setExpanded, memoryBasis }: { group: ProcessGroup; expanded: string | null; setExpanded: (value: string | null) => void; memoryBasis: number }) {
+  const groupKey = group.key
+  return <div className="border-t" style={{ borderColor: colors.border }}>
+    {group.rows.map((row, index) => {
+      const key = `${groupKey}:${row.pid ?? "terminated"}:${index}`
+      const isExpanded = expanded === key
+      const cpu = presentProcessCPU(row.cpu_status, row.cpu_percent)
+      return <div key={key}>
+        <div className="grid min-w-[700px] grid-cols-[40fr_15fr_20fr_25fr] items-center gap-2 border-t px-3 py-2 text-xs transition-colors odd:bg-black/[.02] hover:bg-black/5" style={{ borderColor: colors.border }}>
+          <div className="flex min-w-0 items-center gap-2"><button type="button" className="rounded p-0.5 font-mono focus:outline-none focus:ring-2" aria-label={`${isExpanded ? "Hide" : "Show"} details for ${originalProcessName(row.name)}`} onClick={() => setExpanded(isExpanded ? null : key)}>{isExpanded ? "▾" : "▸"}</button><span className="truncate font-semibold" style={{ color: colors.text }}>{friendlyProcessName(row.name)}</span><span className="sr-only">Original: {originalProcessName(row.name)}</span></div>
+          <span className="font-mono" style={{ color: colors.muted }}>{metricText(row.pid)}</span>
+          <span style={{ color: cpu.severity === "success" ? colors.text : colors.muted }}>{cpu.text === "Unavailable" ? NOT_AVAILABLE : cpu.text}{cpu.status === "ok" && usageBar(row.cpu_percent)}</span>
+          <span style={{ color: colors.text }}>{memoryText(row.working_set_bytes)}{typeof row.working_set_bytes === "number" && usageBar(row.working_set_bytes, memoryBasis)}</span>
+        </div>
+        {isExpanded && <div className="bg-black/5 px-10 py-3 text-xs" style={{ color: colors.muted }}><div className="grid gap-2 sm:grid-cols-3">{row.session_id != null && <span>Session: {row.session_id}</span>}{row.parent_pid != null && <span>Parent Process ID: {row.parent_pid}</span>}<span>Category: {CATEGORY_LABELS[group.category]}</span>{row.cpu_status && <span>CPU: {row.cpu_status}{row.cpu_reason ? ` · ${row.cpu_reason}` : ""}</span>}{row.private_memory_bytes != null && <span>Private Memory: {memoryText(row.private_memory_bytes)}</span>}{row.thread_count != null && <span>Threads: {row.thread_count}</span>}{row.creation_time && <span>Created: {processTimestamp(row.creation_time)}</span>}{row.classification_source && <span>Classification source: {row.classification_source}</span>}{row.classification_reason && <span>Classification note: {row.classification_reason}</span>}</div></div>}
+      </div>
+    })}
+  </div>
+}
+
 export default function WindowsProcessesPanel({ deviceId }: Props) {
   const { hasPermission } = useAuth()
   const canRefresh = hasPermission("devices:update")
@@ -175,7 +201,7 @@ export default function WindowsProcessesPanel({ deviceId }: Props) {
   const pidSearch = /^\d+$/.test(name.trim()) ? Number(name.trim()) : null
   const query = useMemo<WindowsProcessQuery>(() => ({
     ...(name && pidSearch == null ? { name } : {}), ...(sort ? { sort } : {}), direction,
-    limit: Math.min(pageSize, MAX_PAGE_SIZE), offset: (page - 1) * pageSize,
+    limit: MAX_PAGE_SIZE, offset: 0,
   }), [name, pidSearch, sort, direction, page, pageSize])
 
   useEffect(() => {
@@ -264,13 +290,16 @@ export default function WindowsProcessesPanel({ deviceId }: Props) {
 
   const status = presentTaskManagerStatus(snapshot?.status)
   const rows = (snapshot?.items ?? []).filter((row) => pidSearch == null || row.pid === pidSearch)
-  const pageCount = Math.max(1, Math.ceil((snapshot?.total ?? 0) / pageSize))
   const emptyMessage = snapshot?.status === "no_snapshot" ? "No process snapshot is available. Use Refresh to collect one." : name ? "No processes match this search." : "No processes are available in this snapshot."
   const cpuCandidates = rows.filter((row) => row.name !== "System Idle Process" && row.cpu_status === "ok" && typeof row.cpu_percent === "number" && Number.isFinite(row.cpu_percent))
   const memoryCandidates = rows.filter((row) => typeof row.working_set_bytes === "number" && Number.isFinite(row.working_set_bytes))
   const highestCpu = cpuCandidates.reduce<WindowsProcessRecord | null>((best, row) => !best || (row.cpu_percent ?? -1) > (best.cpu_percent ?? -1) ? row : best, null)
   const highestMemory = memoryCandidates.reduce<WindowsProcessRecord | null>((best, row) => !best || (row.working_set_bytes ?? -1) > (best.working_set_bytes ?? -1) ? row : best, null)
   const memoryBasis = memoryCandidates.reduce((max, row) => Math.max(max, row.working_set_bytes ?? 0), 0)
+  const groups = sortProcessGroups(groupWindowsProcesses(rows, pidSearch == null ? name : ""), (sort ?? "name") as "name" | "cpu" | "memory" | "pid", direction)
+  const pageCount = processGroupPageCount(groups, pageSize)
+  const visibleGroups = paginateProcessGroups(groups, page, pageSize)
+  const groupedCategories = (["app", "background", "windows", "unknown"] as ProcessCategory[]).map((category) => ({ category, groups: visibleGroups.filter((group) => group.category === category) })).filter((section) => section.groups.length > 0)
 
   const updatePageSize = (value: number) => { setPageSize(Math.min(MAX_PAGE_SIZE, value)); setPage(1) }
   const updateSearch = (value: string) => { setName(value.slice(0, 100)); setPage(1) }
@@ -302,9 +331,9 @@ export default function WindowsProcessesPanel({ deviceId }: Props) {
       </div>}
       {error && <p role="alert" className="m-4 rounded border p-3 font-mono text-xs" style={{ color: colors.danger, borderColor: colors.danger }}>{error}</p>}
       {loading ? <p role="status" className="p-6 text-center font-mono text-xs" style={{ color: colors.muted }}>Loading processes…</p> : rows.length === 0 ? <p className="p-6 text-center font-mono text-xs" style={{ color: colors.muted }}>{emptyMessage}</p> : (
-        <div className="max-h-[620px] overflow-auto"><table className="w-full min-w-[980px] text-left"><thead className="sticky top-0 z-10"><tr style={{ background: "var(--wd-table-header, var(--t-table-header))" }}>{["Process Name", "Process ID", "CPU Usage", "Memory Usage", "Threads", "Started At"].map((label) => <th key={label} className="px-3 py-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: colors.muted }}>{label}</th>)}</tr></thead><tbody>{rows.map((row, index) => { const cpu = presentProcessCPU(row.cpu_status, row.cpu_percent); const key = `${row.pid ?? "terminated"}-${index}`; const isExpanded = expanded === key; return <><tr key={key} className="border-t transition-colors hover:bg-black/5" style={{ borderColor: colors.border }}><td className="px-3 py-3 text-xs" style={{ color: colors.text }}><button type="button" className="mr-2 rounded p-1 font-mono focus:outline-none focus:ring-2" aria-label={`${isExpanded ? "Hide" : "Show"} details for ${originalProcessName(row.name)}`} onClick={() => setExpanded(isExpanded ? null : key)}>{isExpanded ? "▾" : "▸"}</button><span className="font-semibold">{friendlyProcessName(row.name)}</span><div className="ml-8 font-mono text-[10px]" style={{ color: colors.muted }}>Original: {originalProcessName(row.name)}</div></td><td className="px-3 py-3 font-mono text-xs text-right">{metricText(row.pid)}</td><td className="px-3 py-3 text-xs" style={{ color: cpu.severity === "success" ? colors.text : colors.muted }}><div>{cpu.text === "Unavailable" ? NOT_AVAILABLE : cpu.text}</div>{cpu.status === "ok" && usageBar(row.cpu_percent)}</td><td className="px-3 py-3 text-xs"><div>{memoryText(row.working_set_bytes)}</div>{typeof row.working_set_bytes === "number" && usageBar(row.working_set_bytes, memoryBasis)}</td><td className="px-3 py-3 font-mono text-xs text-right">{metricText(row.thread_count)}</td><td className="px-3 py-3 text-xs">{processTimestamp(row.creation_time)}</td></tr>{isExpanded && <tr key={`${key}-details`}><td colSpan={6} className="bg-black/5 px-10 py-4 text-xs" style={{ color: colors.muted }}><div className="grid gap-2 sm:grid-cols-2"><span>Parent Process ID: {metricText(row.parent_pid)}</span><span>CPU Status: {row.cpu_status}{row.cpu_reason ? ` · ${row.cpu_reason}` : ""}</span><span>Working Set: {memoryText(row.working_set_bytes)}</span><span>Private Memory: {memoryText(row.private_memory_bytes)}</span><span>Threads: {metricText(row.thread_count)}</span><span>Process Creation: {processTimestamp(row.creation_time)}</span></div></td></tr>}</> })}</tbody></table></div>
+        <div className="overflow-x-auto"><div className="sticky top-0 z-10 grid min-w-[700px] grid-cols-[40fr_15fr_20fr_25fr] gap-2 border-b px-3 py-2.5 font-mono text-[10px] uppercase tracking-wider" style={{ background: "var(--wd-table-header, var(--t-table-header))", color: colors.muted }}><span aria-label="Process Name">Process Name</span><span aria-label="Process ID">Process ID</span><span aria-label="CPU Usage">CPU Usage</span><span aria-label="Memory Usage">Memory Usage</span><span aria-label="Started At" className="sr-only">Started At</span></div>{groupedCategories.map(({ category, groups: categoryGroups }) => { const showHeader = groupedCategories.length > 1 || category !== "unknown"; return <section key={category} aria-label={CATEGORY_LABELS[category]}>{showHeader && <div className="flex items-center justify-between px-3 py-2"><h3 className="text-xs font-bold" style={{ color: colors.text }}>{CATEGORY_LABELS[category]}</h3><span className="font-mono text-[10px]" style={{ color: colors.muted }}>{categoryGroups.reduce((count, group) => count + group.rows.length, 0)} process{categoryGroups.reduce((count, group) => count + group.rows.length, 0) === 1 ? "" : "es"}</span></div>}{categoryGroups.map((group) => <GroupTable key={group.key} group={group} expanded={expanded} setExpanded={setExpanded} memoryBasis={memoryBasis} />)}</section>})}</div>
       )}
-      {snapshot && snapshot.total > 0 && <TablePagination page={page} pageCount={pageCount} pageSize={pageSize} startItem={Math.min((page - 1) * pageSize + 1, snapshot.total)} endItem={Math.min(page * pageSize, snapshot.total)} totalItems={snapshot.total} onPageChange={setPage} onPageSizeChange={updatePageSize} pageSizes={[50, 100, 200]} />}
+      {groups.length > 0 && <TablePagination page={page} pageCount={pageCount} pageSize={pageSize} startItem={Math.min((page - 1) * pageSize + 1, groups.length)} endItem={Math.min(page * pageSize, groups.length)} totalItems={groups.length} onPageChange={setPage} onPageSizeChange={updatePageSize} pageSizes={[50, 100, 200]} />}
     </section>
   )
 }

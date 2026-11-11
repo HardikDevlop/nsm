@@ -1,6 +1,6 @@
 """Minimal secured Windows credential endpoints."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
@@ -19,7 +19,8 @@ from backend.models import Device
 from backend.database.session import get_db
 from backend.services.audit import record_audit_event
 
-from .models import WindowsCredential, WindowsSystemSnapshot, WindowsMetricSnapshot, WindowsEventLog, WindowsHardwareSnapshot, WindowsThresholdConfig, WindowsProcessSnapshot, WindowsProcessSnapshotItem, windows_now
+from .models import WindowsCredential, WindowsSystemSnapshot, WindowsMetricSnapshot, WindowsEventLog, WindowsHardwareSnapshot, WindowsThresholdConfig, WindowsProcessSnapshot, WindowsProcessSnapshotItem, WindowsHelperSubmission, windows_now
+from .application_helper import classify_process_metadata, classify_visible_processes
 from .cim import WindowsCIMClient, CIMError, CIMLimits
 from backend.utils.crypto import decrypt_secret
 from backend.config.settings import get_settings
@@ -39,6 +40,8 @@ from .events import SystemEventError, collect_system_events
 from .winrm import WinRMHTTPSAdapter
 from .process_snapshot_service import ProcessSnapshotService
 from .process_persistence import persist_process_snapshot_isolated, cleanup_process_snapshot_retention_isolated
+from .collection_lifecycle import reserve_collection, mark_collecting, finalize_collection, fail_collection, CollectionLifecycleError
+from .helper_challenge import issue_challenge, ChallengeError
 import threading
 import time
 from .task_manager_lock import WorkerOwnedAdvisoryLock
@@ -1406,6 +1409,9 @@ def _process_response(snapshot, *, limit: int, offset: int, name: str | None = N
     rows = []
     for row in snapshot.processes:
         cpu = cpu_by_pid.get(row.process_id)
+        metadata_classification, classification_reason = classify_process_metadata(row)
+        classification = getattr(row, "classification", None) or metadata_classification
+        classification_source = getattr(row, "classification_source", None) or ("cim_metadata" if metadata_classification else None)
         rows.append({
             "name": row.name,
             "pid": row.process_id,
@@ -1414,6 +1420,12 @@ def _process_response(snapshot, *, limit: int, offset: int, name: str | None = N
             "private_memory_bytes": row.private_memory_bytes,
             "thread_count": row.thread_count,
             "creation_time": row.creation_time,
+            "session_id": getattr(row, "session_id", None),
+            "classification": classification,
+            "classification_source": classification_source,
+            "classification_confidence": getattr(row, "classification_confidence", None),
+            "classification_reason": classification_reason,
+            "application_group_id": getattr(row, "application_group_id", None),
             "cpu_percent": cpu.cpu_percent if cpu and cpu.status == "ok" else None,
             "cpu_status": cpu.status if cpu else "unavailable",
             "cpu_reason": cpu.reason if cpu else "missing_cpu_result",
@@ -1425,6 +1437,9 @@ def _process_response(snapshot, *, limit: int, offset: int, name: str | None = N
             "name": None, "pid": cpu.process_id, "parent_pid": None,
             "working_set_bytes": None, "private_memory_bytes": None,
             "thread_count": None, "creation_time": None,
+            "session_id": None, "classification": None,
+            "classification_source": None, "classification_confidence": None,
+            "application_group_id": None,
             "cpu_percent": None, "cpu_status": cpu.status, "cpu_reason": cpu.reason,
         })
     # Direct callers in existing offline integrations may invoke handlers
@@ -1478,16 +1493,45 @@ def _process_collection(client: WindowsCIMClient, device_id: int):
     return collect
 
 
+def _apply_helper_evidence(db: Session, snapshot):
+    """Best-effort classification from durable, already-authenticated evidence."""
+    if snapshot.status != "ok" or not snapshot.processes or snapshot.collection_id is None:
+        return snapshot
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows = (db.query(WindowsHelperSubmission)
+            .filter(WindowsHelperSubmission.device_id == snapshot.device_id,
+                    WindowsHelperSubmission.collection_id == snapshot.collection_id,
+                    WindowsHelperSubmission.expires_at > now)
+            .order_by(WindowsHelperSubmission.collected_at.desc())
+            .limit(32).all())
+    processes = snapshot.processes
+    for row in rows:
+        try:
+            processes = classify_visible_processes(processes, row.evidence, now=datetime.now(timezone.utc))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return replace(snapshot, processes=tuple(processes))
+
+
 @router.get("/devices/{device_id}/processes", summary="Windows process snapshot")
 def get_process_snapshot(device_id: int, db: Session = Depends(get_db), user=Depends(require_permission("devices:read")), limit: int = Query(PROCESS_DEFAULT_LIMIT, ge=1, le=PROCESS_MAX_LIMIT), offset: int = Query(0, ge=0), name: str | None = Query(None, max_length=100), sort: Literal["cpu", "memory", "name", "pid"] | None = None, direction: Literal["asc", "desc"] = "asc"):
     _windows_device(db, device_id, user)
-    return _process_response(process_snapshot_service.cached(device_id), limit=limit, offset=offset, name=name, sort=sort, direction=direction)
+    snapshot = _apply_helper_evidence(db, process_snapshot_service.cached(device_id))
+    return _process_response(snapshot, limit=limit, offset=offset, name=name, sort=sort, direction=direction)
 
 
 @router.post("/devices/{device_id}/processes/fetch", summary="Fetch Windows process snapshot")
 def fetch_process_snapshot(device_id: int, db: Session = Depends(get_db), user=Depends(require_permission("devices:update")), limit: int = Query(PROCESS_DEFAULT_LIMIT, ge=1, le=PROCESS_MAX_LIMIT), offset: int = Query(0, ge=0), name: str | None = Query(None, max_length=100), sort: Literal["cpu", "memory", "name", "pid"] | None = None, direction: Literal["asc", "desc"] = "asc"):
     device = _windows_device(db, device_id, user)
+    lifecycle = None
     try:
+        if get_settings().windows_helper_challenge_key_map:
+            lifecycle = reserve_collection(db, device.id, site_id=device.site_id)
+            db.flush()
+            issue_challenge(db, device_id=device.id, site_id=device.site_id, collection_id=lifecycle.collection_id)
+            db.commit()
+            lifecycle = mark_collecting(db, lifecycle.collection_id)
+            db.commit()
         client, credential = _metric_client(
             db, device_id, user, device=device,
             cim_limits=CIMLimits(max_items=PROCESS_CIM_MAX_ITEMS),
@@ -1496,13 +1540,27 @@ def fetch_process_snapshot(device_id: int, db: Session = Depends(get_db), user=D
             device_id,
             force_refresh=True,
             collector=_process_collection(client, device_id),
+            collection_id=lifecycle.collection_id if lifecycle is not None else None,
         )
     except HTTPException:
         raise
     except Exception:
+        if lifecycle is not None:
+            try:
+                fail_collection(db, lifecycle.collection_id)
+                db.commit()
+            except Exception:
+                db.rollback()
         logger.exception("windows_process_fetch_failed device_id=%s", device_id)
         raise HTTPException(status_code=502, detail="Windows process collection failed") from None
+    snapshot = _apply_helper_evidence(db, snapshot)
     persisted = persist_process_snapshot_isolated(device.id, snapshot) if snapshot.status == "ok" else False
+    if lifecycle is not None:
+        try:
+            (finalize_collection if persisted else fail_collection)(db, lifecycle.collection_id)
+            db.commit()
+        except Exception:
+            db.rollback()
     if not persisted and snapshot.status == "ok":
         logger.warning("windows_process_fetch_completed_with_persistence_warning device_id=%s", device.id)
     elif persisted:
@@ -1547,7 +1605,11 @@ def get_process_history(device_id: int, snapshot_id: int, db: Session = Depends(
                        "cpu_percent": item.cpu_percent, "cpu_status": item.cpu_status,
                        "cpu_reason": item.cpu_reason, "working_set_bytes": item.working_set_bytes,
                        "private_memory_bytes": item.private_memory_bytes, "thread_count": item.thread_count,
-                       "started_at": item.started_at} for item in items]}
+                       "started_at": item.started_at, "session_id": item.session_id,
+                       "classification": item.classification,
+                       "classification_source": item.classification_source,
+                       "classification_confidence": item.classification_confidence,
+                       "application_group_id": item.application_group_id} for item in items]}
 
 
 @router.get("/devices/{device_id}/metrics/{module}")

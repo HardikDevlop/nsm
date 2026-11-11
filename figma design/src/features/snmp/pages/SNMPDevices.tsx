@@ -836,11 +836,8 @@ export default function SNMPDevicesPage() {
                       { key: "hostname", label: "HOSTNAME" },
                       { key: "mac_address", label: "MAC ADDRESS" },
                       // { key: 'model', label: 'MODEL' },
-                      { key: "snmp_version", label: "SNMP" },
-                      { key: "snmp_status", label: "SNMP STATUS" },
                       { key: "status", label: "STATUS" },
                       { key: "monitoring_enabled", label: "MONITORING" },
-                      { key: "modules_monitored", label: "MODULES" },
                       { key: "last_seen", label: "LAST SEEN" },
                       { key: "last_poll_at", label: "LAST POLL" },
                     ].map((col) => (
@@ -944,15 +941,6 @@ export default function SNMPDevicesPage() {
                         {device.mac_address || "—"}
                       </td>
                       {/* <td className="px-4 py-2 font-mono text-xs truncate max-w-[150px]" style={{ color: '#8899bb' }}>{device.model || '—'}</td> */}
-                      <td
-                        className="px-4 py-2 font-mono text-xs"
-                        style={{ color: "#7c3aed" }}
-                      >
-                        {device.snmp_version || "—"}
-                      </td>
-                      <td className="px-4 py-2">
-                        <StatusBadge status={device.snmp_status} type="snmp" />
-                      </td>
                       <td className="px-4 py-2">
                         <StatusBadge status={device.status} type="device" />
                       </td>
@@ -962,12 +950,6 @@ export default function SNMPDevicesPage() {
                         ) : (
                           <StatusBadge status="stopped" type="monitoring" />
                         )}
-                      </td>
-                      <td
-                        className="px-4 py-2 font-mono text-xs"
-                        style={{ color: "#00d4ff" }}
-                      >
-                        {device.modules_monitored}
                       </td>
                       <td
                         className="px-4 py-2 font-mono text-[10px]"

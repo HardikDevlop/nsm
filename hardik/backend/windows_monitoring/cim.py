@@ -52,7 +52,7 @@ _FILTER_CLASS = {
     "Win32_USBControllerDevice": "SELECT Antecedent,Dependent FROM Win32_USBControllerDevice",
     "Win32_PnPEntity_USB": "SELECT Name,PNPDeviceID,PNPClass,Manufacturer,Status,ConfigManagerErrorCode,Present,Service,ClassGuid FROM Win32_PnPEntity WHERE PNPDeviceID LIKE 'USB\\\\%' OR PNPClass = 'USB' OR Service = 'USBSTOR'",
     "Win32_PerfFormattedData_Tcpip_NetworkInterface": "SELECT Name,BytesReceivedPerSec,BytesSentPerSec,CurrentBandwidth FROM Win32_PerfFormattedData_Tcpip_NetworkInterface",
-    "Win32_Process": "SELECT Name,ProcessId,ParentProcessId,WorkingSetSize,PrivatePageCount,ThreadCount,CreationDate,KernelModeTime,UserModeTime,ExecutablePath FROM Win32_Process",
+    "Win32_Process": "SELECT Name,ProcessId,ParentProcessId,WorkingSetSize,PrivatePageCount,ThreadCount,CreationDate,KernelModeTime,UserModeTime,ExecutablePath,SessionId FROM Win32_Process",
     "Win32_PerfFormattedData_PerfProc_Process": "SELECT IDProcess,PercentProcessorTime,WorkingSetPrivate FROM Win32_PerfFormattedData_PerfProc_Process",
     "Win32_NTLogEvent": "SELECT TimeGenerated,EventCode,Type,SourceName,Logfile,Message FROM Win32_NTLogEvent",
     "Win32_ComputerSystem": "SELECT Manufacturer,Model,SystemType,Domain,Workgroup,PartOfDomain,NumberOfProcessors,NumberOfLogicalProcessors FROM Win32_ComputerSystem",
@@ -136,6 +136,11 @@ class WindowsProcessResult:
     cpu_time_seconds: float | None = None
     raw_percent_processor_time: float | None = None
     performance_working_set_private_bytes: int | None = None
+    session_id: int | None = None
+    classification: str | None = None
+    classification_source: str | None = None
+    classification_confidence: str | None = None
+    application_group_id: str | None = None
 
 @dataclass(frozen=True)
 class MemoryPerformanceResult:
@@ -904,6 +909,7 @@ class WindowsCIMClient:
                 private_memory_bytes=self._optional_positive_int(self._text(node, "PrivatePageCount")),
                 creation_time=self._wmi_datetime(self._text(node, "CreationDate")),
                 cpu_time_seconds=cpu_time_seconds,
+                session_id=self._optional_positive_int(self._text(node, "SessionId")),
             ))
         return results
 
