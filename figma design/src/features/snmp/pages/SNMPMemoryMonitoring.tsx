@@ -4,7 +4,7 @@ import { getModuleConfig, getHealthColor, getStatusColor, formatBytes } from '..
 import GlassCard from '../../../components/GlassCard'
 import SNMPMetricChart from '../components/SNMPMetricChart'
 import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
-import { useDeviceCapabilities, useMonitoringData } from '../modules/useSNMPModules'
+import { useDeviceCapabilities } from '../modules/useSNMPModules'
 import { useLatestMemory } from '../hooks/useSnmpQueries'
 
 function memoryHealth(util: number | undefined): 'healthy' | 'warning' | 'critical' | 'unknown' {
@@ -21,17 +21,12 @@ export default function SNMPMemoryMonitoring() {
 
   const { data: caps } = useDeviceCapabilities(id)
   const { data: latestMemory } = useLatestMemory(id)
-  const { data: monitoringData, isLoading: monitoringLoading, error: monitoringError } = useMonitoringData(id)
-  
-  const memoryModuleData = monitoringData?.modules?.memory
-  const stats = memoryModuleData as any
-  const memoryData = memoryModuleData?.data || latestMemory || {}
+  const memoryData = latestMemory || {}
   const hasMemoryData = Object.keys(memoryData || {}).length > 0
   const supported =
-    monitoringData?.capabilities?.memory === true ||
     caps?.memory === true ||
-    memoryModuleData?.supported === true ||
-    hasMemoryData
+    latestMemory?.supported === true ||
+    (hasMemoryData && latestMemory?.supported !== false)
 
   if (!supported) {
     return (
@@ -41,7 +36,7 @@ export default function SNMPMemoryMonitoring() {
     )
   }
 
-  const history = stats?.history || []
+  const history: any[] = []
   const utilization = memoryData?.utilization_percent ?? latestMemory?.utilization_percent
   const totalBytes = memoryData?.total_bytes ?? latestMemory?.total_bytes
   const usedBytes = memoryData?.used_bytes ?? latestMemory?.used_bytes
@@ -50,11 +45,11 @@ export default function SNMPMemoryMonitoring() {
   const health = memoryHealth(utilization)
   const memoryCollector = {
     collector: 'memory',
-    supported: true,
-    timestamp: memoryModuleData?.timestamp || memoryData?.polled_at,
+    supported: latestMemory?.supported ?? caps?.memory ?? false,
+    timestamp: latestMemory?.last_poll,
     data: memoryData,
-    missing: memoryModuleData?.missing || [],
-    warnings: memoryModuleData?.warnings || [],
+    missing: [],
+    warnings: [],
   }
 
   return (

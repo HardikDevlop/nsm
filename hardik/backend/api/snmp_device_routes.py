@@ -1497,6 +1497,10 @@ def get_snmp_memory(device_id: int, db: Session = Depends(get_db), _: Any = Depe
             "utilization_percent": col_data.get("utilization_percent"),
             "display":             col_data.get("display"),
             "source":              col_data.get("source"),
+            "memory_source":       col_data.get("memory_source"),
+            "memory_semantic":     col_data.get("memory_semantic"),
+            "memory_source_status": col_data.get("memory_source_status"),
+            "memory_source_error": col_data.get("memory_source_error"),
         },
     }
 
@@ -2737,7 +2741,7 @@ def get_latest_metrics(
 ) -> dict[str, Any]:
     """Get all latest metrics for a device (from latest-value tables)."""
     from backend.cache.redis_cache import get_json, set_json
-    cache_key = f"nms:snmp:device:{device_id}:metrics-latest:v1"
+    cache_key = f"nms:snmp:device:{device_id}:metrics-latest:v2"
     cached = get_json(cache_key)
     if isinstance(cached, dict):
         return cached
@@ -2759,7 +2763,8 @@ def get_latest_metrics(
                 FROM (
                     SELECT total_bytes, used_bytes, free_bytes, cached_bytes,
                            buffer_bytes, swap_total, swap_free,
-                           utilization_percent, polled_at
+                           utilization_percent, memory_source, memory_semantic,
+                           memory_source_status, memory_source_error, polled_at
                     FROM latest_memory
                     WHERE device_id = :device_id
                     LIMIT 1
@@ -2830,6 +2835,10 @@ def get_latest_metrics(
             "swap_total": mem.get("swap_total"),
             "swap_free": mem.get("swap_free"),
             "utilization_percent": mem.get("utilization_percent"),
+            "memory_source": mem.get("memory_source"),
+            "memory_semantic": mem.get("memory_semantic"),
+            "memory_source_status": mem.get("memory_source_status"),
+            "memory_source_error": mem.get("memory_source_error"),
             "polled_at": _iso(mem.get("polled_at")),
         } if mem else None,
         "storage": [
@@ -2925,6 +2934,10 @@ def get_latest_memory(
         "swap_total": mem.swap_total,
         "swap_free": mem.swap_free,
         "utilization_percent": mem.utilization_percent,
+        "memory_source": mem.memory_source,
+        "memory_semantic": mem.memory_semantic,
+        "memory_source_status": mem.memory_source_status,
+        "memory_source_error": mem.memory_source_error,
         "last_poll": mem.polled_at.isoformat() if mem.polled_at else None,
     }
 
@@ -3409,6 +3422,10 @@ def get_device_details(
                 "used_bytes": mem.used_bytes if mem else None,
                 "free_bytes": mem.free_bytes if mem else None,
                 "utilization_percent": mem.utilization_percent if mem else None,
+                "memory_source": mem.memory_source if mem else None,
+                "memory_semantic": mem.memory_semantic if mem else None,
+                "memory_source_status": mem.memory_source_status if mem else None,
+                "memory_source_error": mem.memory_source_error if mem else None,
                 "polled_at": mem.polled_at.isoformat() if mem and mem.polled_at else None,
             } if mem else None,
             "storage": [

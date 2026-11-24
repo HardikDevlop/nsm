@@ -94,6 +94,17 @@ function inventoryDate(value: unknown): string {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: true })
 }
 
+function memorySourceLabel(data: any): string {
+  if (!data?.memory_source) return "Unknown / not recorded"
+  const labels: Record<string, string> = {
+    "net-snmp-extend": "Canonical Linux MemAvailable",
+    "ucd-snmp": "UCD-SNMP legacy/fallback",
+    "hr-storage": "HOST-RESOURCES RAM",
+    vendor: "Vendor-defined RAM",
+  }
+  return labels[data.memory_source] || String(data.memory_source)
+}
+
 export default function SNMPCollectorDataCard({
   name,
   collector,
@@ -243,6 +254,8 @@ export default function SNMPCollectorDataCard({
       : null
   const dataQuality = collector?.data?.data_quality ||
     (collector?.collection_status === "FAILED" ? "stale" : "partial")
+  const sampleAgeMs = collector?.timestamp ? Date.now() - new Date(collector.timestamp).getTime() : null
+  const memoryStale = name === "memory" && sampleAgeMs != null && sampleAgeMs > 5 * 60 * 1000
   const qualityTone = dataQuality === "complete" ? "#00ff88" : dataQuality === "stale" ? "#ff6b8a" : "#ffaa00"
 
   return (
@@ -294,6 +307,7 @@ export default function SNMPCollectorDataCard({
               LAST POLL · {new Date(collector.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
             </span>
           )}
+          {memoryStale && <span className="font-mono text-[10px] uppercase" style={{ color: "#ffaa00" }}>STALE SAMPLE</span>}
           {name === "mac_table" && onRefresh && (
             <button type="button" onClick={onRefresh} disabled={refreshing} className="tool ml-auto h-7 border-cyan-400/30 px-2 text-[9px]" style={{ color: refreshing ? "#ffaa00" : "#00d4ff" }}>
               {refreshing ? "REFRESHING..." : "REFRESH"}
@@ -340,6 +354,23 @@ export default function SNMPCollectorDataCard({
                 {clickable && <div className="mt-1 font-mono text-[9px] uppercase tracking-wider" style={{ color: "var(--t-accent)" }}>View details</div>}
               </div>
             })}
+          </div>
+        )}
+        {name === "memory" && collector?.supported && (
+          <div className="relative mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              ["Total", collector.data?.total_bytes],
+              ["Used", collector.data?.used_bytes],
+              ["Available / free", collector.data?.free_bytes],
+              ["Utilization", collector.data?.utilization_percent],
+            ].map(([label, value]) => <div key={String(label)} className="rounded-lg p-3" style={{ background: "var(--t-card)", border: "1px solid var(--t-border-alpha)" }}>
+              <div className="font-mono text-[10px] uppercase tracking-wide" style={{ color: "var(--t-muted)" }}>{label}</div>
+              <div className="mt-1 font-mono text-sm font-semibold" style={{ color: value == null ? "var(--t-muted)" : "var(--t-text)" }}>{value == null ? "N/A" : label === "Utilization" ? `${Number(value).toFixed(1)}%` : formatBytes(Number(value))}</div>
+            </div>)}
+            <div className="sm:col-span-2 lg:col-span-4 font-mono text-[10px] uppercase tracking-wider" style={{ color: "var(--t-muted)" }}>
+              SOURCE · {memorySourceLabel(collector.data)} · SEMANTIC · {collector.data?.memory_semantic || "Unknown / not recorded"} · STATUS · {collector.data?.memory_source_status || "unknown"}
+              {collector.data?.memory_source_error && <span style={{ color: "#ffaa00" }}> · REASON · {collector.data.memory_source_error}</span>}
+            </div>
           </div>
         )}
         {macTableStats && (

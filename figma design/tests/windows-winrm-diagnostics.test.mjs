@@ -7,7 +7,7 @@ const page = fs.readFileSync(new URL("../src/pages/WindowsDevices.tsx", import.m
 
 test("WinRM diagnostics are permission gated and explicit", () => {
   assert.match(component, /hasPermission\("devices:update"\)/)
-  assert.match(component, /runWindowsWinRMDiagnostic\(deviceId\)/)
+  assert.match(component, /runWindowsWinRMDiagnostic\(\s*deviceId\s*,\s*siteId\s*\)/)
   assert.match(component, /onClick=\{\(\) => void run\(\)\}/)
   assert.match(component, /Not tested/)
   assert.match(component, /setRunning\(true\)/)

@@ -58,6 +58,18 @@ def test_different_workers_own_distinct_runtime_state(monkeypatch):
     assert len(created) == len(closed) == 2
 
 
+def test_eight_worker_runtimes_cleanup_independently(monkeypatch):
+    created, closed = _install_engine(monkeypatch)
+    pool = client_module.SNMPWorkerPool(workers=8)
+    try:
+        for _ in range(8):
+            pool.submit(_runtime_identity(), 1)
+    finally:
+        pool.shutdown()
+    assert len(created) == len(closed) == 8
+    assert all(not worker.thread.is_alive() for worker in pool._workers)
+
+
 def test_failed_operation_does_not_poison_worker(monkeypatch):
     created, _closed = _install_engine(monkeypatch)
     pool = client_module.SNMPWorkerPool(workers=1)
@@ -100,3 +112,38 @@ def test_shutdown_rejects_new_work_without_coroutine_leak(monkeypatch):
     with pytest.raises(RuntimeError, match="shut down"):
         pool.submit(coro, 1)
     assert all(not worker.thread.is_alive() for worker in pool._workers)
+
+
+def test_cancelled_worker_tasks_are_drained_before_loop_close():
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        blocker = loop.create_task(asyncio.sleep(60))
+        client_module._drain_cancelled_tasks(loop)
+        assert blocker.done()
+        assert not asyncio.all_tasks(loop)
+    finally:
+        if not loop.is_closed():
+            loop.close()
+        asyncio.set_event_loop(None)
+
+
+def test_dispatcher_close_exception_still_closes_worker_loop(monkeypatch):
+    closed = []
+
+    class FailingDispatcher:
+        def closeDispatcher(self):
+            raise RuntimeError("dispatcher close failed")
+
+    class Engine:
+        transportDispatcher = FailingDispatcher()
+
+    loop = asyncio.new_event_loop()
+    try:
+        monkeypatch.setattr(client_module, "_drain_cancelled_tasks", lambda current_loop: closed.append(current_loop))
+        client_module._close_worker_runtime(1, loop, Engine())
+        assert loop.is_closed()
+        assert closed == [loop]
+    finally:
+        if not loop.is_closed():
+            loop.close()

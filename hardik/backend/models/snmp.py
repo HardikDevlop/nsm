@@ -89,6 +89,10 @@ class MemoryStatistic(SNMPRecord, Base):
     used_bytes: Mapped[float | None] = mapped_column(Float)
     total_bytes: Mapped[float | None] = mapped_column(Float)
     utilization_percent: Mapped[float | None] = mapped_column(Float)
+    memory_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    memory_semantic: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    memory_source_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    memory_source_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class StorageStatistic(SNMPRecord, Base):
@@ -265,6 +269,10 @@ class LatestMemory(SNMPBase, Base):
     swap_total: Mapped[float | None] = mapped_column(Float)
     swap_free: Mapped[float | None] = mapped_column(Float)
     utilization_percent: Mapped[float | None] = mapped_column(Float)
+    memory_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    memory_semantic: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    memory_source_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    memory_source_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     polled_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 

@@ -27,6 +27,7 @@ from typing import Any
 
 from .base import BaseCollector, CollectorResponse
 from ..normalizer import RawDevice
+from ..memory_resolver import CanonicalMemoryResolution
 
 
 # hrStorageType OID for physical RAM
@@ -73,6 +74,7 @@ class MemoryCollector(BaseCollector):
         raw: dict[str, Any],
         oid_registry: Any,
         vendor_profile: Any,
+        canonical_memory: CanonicalMemoryResolution | None = None,
     ) -> CollectorResponse:
 
         missing:  list[str] = []
@@ -95,11 +97,28 @@ class MemoryCollector(BaseCollector):
         swap_total: int | None = None
         swap_free:  int | None = None
         source = "none"
+        utilization: float | None = None
+
+        if canonical_memory and canonical_memory.status == "canonical" and canonical_memory.data:
+            canonical = canonical_memory.data
+            total = canonical.total_bytes
+            used = canonical.used_bytes
+            free = canonical.available_bytes
+            utilization = canonical.utilization_percent
+            cached = device.mem_cached
+            buffers = device.mem_buffers
+            swap_total = device.mem_swap_total
+            swap_free = device.mem_swap_free
+            source = canonical.source
+        elif canonical_memory and canonical_memory.eligible and canonical_memory.error_code:
+            warnings.append(
+                f"canonical_memory_unavailable:{canonical_memory.error_code}"
+            )
 
         # ---------------------------------------------------------------
         # 1. Normalizer already computed memory scalars
         # ---------------------------------------------------------------
-        if device.mem_total:
+        if total is None and device.mem_total:
             total   = device.mem_total
             used    = device.mem_used
             free    = device.mem_free
@@ -168,7 +187,38 @@ class MemoryCollector(BaseCollector):
         if used is None and free is not None:
             used = total - free
 
-        utilization = self.percent(used, total)
+        if utilization is None:
+            utilization = self.percent(used, total)
+
+        if source == "net-snmp-extend":
+            semantic = "linux_proc_meminfo_memavailable"
+            source_status = "canonical"
+        elif source in ("ucd-snmp", "normalizer"):
+            source = "ucd-snmp"
+            semantic = "ucd_snmp_memtotalreal_memavailreal"
+            source_status = "fallback" if any(
+                warning.startswith("canonical_memory_unavailable:")
+                for warning in warnings
+            ) else "legacy"
+        elif source == "hr-storage":
+            semantic = "hr_storage_ram"
+            source_status = "fallback"
+        elif source.startswith("vendor:"):
+            source = "vendor"
+            semantic = "vendor_defined"
+            source_status = "fallback"
+        else:
+            semantic = "unknown"
+            source_status = "unknown"
+
+        source_error = next(
+            (
+                warning.split(":", 1)[1]
+                for warning in warnings
+                if warning.startswith("canonical_memory_unavailable:")
+            ),
+            None,
+        )
 
         # Display string
         display = (
@@ -187,6 +237,10 @@ class MemoryCollector(BaseCollector):
             "utilization_percent": utilization,
             "display":            display,
             "source":             source,
+            "memory_source":      source,
+            "memory_semantic":    semantic,
+            "memory_source_status": source_status,
+            "memory_source_error": source_error,
         }
 
         return CollectorResponse.ok(self.name, data, missing, warnings)

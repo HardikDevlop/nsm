@@ -18,7 +18,7 @@ import { useAuth } from "../../../components/AuthContext"
 import { confirmDanger, toast } from "../../../lib/swal"
 import { formatIST } from '../../../time'
 
-const STATUS_COLORS: Record<string, { dot: string text: string }> = {
+const STATUS_COLORS: Record<string, { dot: string; text: string }> = {
   online: { dot: "#00ff88", text: "#00ff88" },
   offline: { dot: "#ff3366", text: "#ff3366" },
   warning: { dot: "#ffaa00", text: "#ffaa00" },

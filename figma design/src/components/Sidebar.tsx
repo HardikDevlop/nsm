@@ -23,7 +23,7 @@ const nav = [
   // { to: '/incidents', label: 'Incidents', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', permission: 'incidents:read' },
   // { to: '/attack-path', label: 'Attack Path', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7', permission: 'attack_path:read' },
   { to: '/packet-analysis', label: 'Packet Analysis', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', permission: 'packet_analysis:read' },
-  // { to: '/flow-analytics', label: 'Flow Analytics', icon: 'M4 19V5m0 14h16M8 16v-5m4 5V7m4 9v-8', permission: 'flows:read' },
+  { to: '/flow-analytics', label: 'Flow Analytics', icon: 'M4 19V5m0 14h16M8 16v-5m4 5V7m4 9v-8', permission: 'flows:read' },
   { to: '/apm', label: 'APM Service Health', icon: 'M4 19h16M6 16v-5m4 5V7m4 9v-3m4 3V4', permission: 'apm:read' },
   // { to: '/cmdb', label: 'CMDB', icon: 'M4 5h16v14H4zM8 9h8M8 13h5M8 17h8', permission: 'cmdb:read' },
   // { to: '/rca', label: 'Root Cause Analysis', icon: 'M12 3v18M3 12h18M5 5l14 14M19 5L5 19', permission: 'rca:read' },

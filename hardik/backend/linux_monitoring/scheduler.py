@@ -1,6 +1,7 @@
 """Durable, isolated scheduler for Linux Server Monitoring only."""
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
@@ -10,6 +11,7 @@ from backend.linux_monitoring.threshold_evaluation import evaluate_sample
 from backend.linux_monitoring.models import LinuxServerMonitoringConfig, LinuxServerSNMPCredential, linux_now
 
 LINUX_POLL_INTERVAL_SECONDS = 180
+logger = logging.getLogger(__name__)
 
 
 class LinuxMonitoringScheduler:
@@ -106,6 +108,7 @@ class LinuxMonitoringScheduler:
     async def _run(self, server_id: int) -> None:
         try:
             while True:
+                cycle_started_at = linux_now()
                 try:
                     payload = None
                     missing_credentials = False
@@ -121,7 +124,7 @@ class LinuxMonitoringScheduler:
                         else:
                             payload = service.metrics_payload_from_credential(credential)
                     if missing_credentials:
-                        self._record_failure(server_id, "SNMPv3 credentials are not configured")
+                        self._record_failure(server_id, "SNMPv3 credentials are not configured", cycle_started_at)
                     elif payload is not None:
                         loop = asyncio.get_running_loop()
                         collected = False
@@ -137,7 +140,8 @@ class LinuxMonitoringScheduler:
                 except Exception as exc:
                     # A single bad response or collector error must not kill an
                     # enabled server's monitoring task. The next cycle can recover.
-                    self._record_failure(server_id, str(exc))
+                    logger.exception("LINUX_MONITOR_CYCLE_FAILED server_id=%s", server_id)
+                    self._record_failure(server_id, str(exc), cycle_started_at)
                 await asyncio.sleep(LINUX_POLL_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             raise
@@ -158,6 +162,12 @@ class LinuxMonitoringScheduler:
                 if not config.last_success_at or config.last_success_at < attempt_started_at:
                     config.monitoring_status = "failed"
                     config.last_error = error.message
+                    logger.warning(
+                        "LINUX_MONITOR_COLLECTION_FAILED server_id=%s code=%s message=%s",
+                        server_id,
+                        getattr(error, "code", "unknown"),
+                        error.message,
+                    )
                 else:
                     config.monitoring_status = "running"
                     config.last_error = None
@@ -166,17 +176,37 @@ class LinuxMonitoringScheduler:
                 config.monitoring_status = "running"
                 config.last_success_at = sample.collected_at if sample else linux_now()
                 config.last_error = None
+                logger.info(
+                    "LINUX_MONITOR_COLLECTION_SUCCEEDED server_id=%s collected_at=%s",
+                    server_id,
+                    config.last_success_at,
+                )
             db.commit()
             return error is None
 
     @staticmethod
-    def _record_failure(server_id: int, message: str) -> None:
+    def _record_failure(server_id: int, message: str, attempt_started_at=None) -> None:
         with SessionLocal() as db:
             config = db.query(LinuxServerMonitoringConfig).filter_by(linux_server_id=server_id).first()
             if config:
-                config.monitoring_status = "failed"
                 config.last_run_at = linux_now()
-                config.last_error = message[:2000]
+                if not config.last_success_at or attempt_started_at is None or config.last_success_at < attempt_started_at:
+                    config.monitoring_status = "failed"
+                    config.last_error = message[:2000]
+                    logger.warning(
+                        "LINUX_MONITOR_FAILURE_RECORDED server_id=%s message=%s",
+                        server_id,
+                        message[:2000],
+                    )
+                else:
+                    config.monitoring_status = "running"
+                    config.last_error = None
+                    logger.info(
+                        "LINUX_MONITOR_STALE_FAILURE_IGNORED server_id=%s last_success_at=%s attempt_started_at=%s",
+                        server_id,
+                        config.last_success_at,
+                        attempt_started_at,
+                    )
                 db.commit()
 
     @staticmethod

@@ -164,7 +164,10 @@ def collect_metrics(db: Session, server_id: int, payload: LinuxServerMetricsColl
         failed = LinuxServerMetricSample(
             linux_server_id=server.id,
             collection_status="error",
-            details={"warnings": [exc.message]},
+            details={
+                "warnings": [exc.message],
+                "memory": {"canonical": _canonical_memory_unavailable(exc.code)},
+            },
             error_message=exc.message,
         )
         db.add(failed)
@@ -187,7 +190,10 @@ def collect_metrics(db: Session, server_id: int, payload: LinuxServerMetricsColl
             linux_server_id=server.id,
             collected_at=linux_now(),
             collection_status="error",
-            details={"warnings": (values.get("details") or {}).get("warnings", [])},
+            details={
+                "warnings": (values.get("details") or {}).get("warnings", []),
+                "memory": {"canonical": _canonical_memory_unavailable("unavailable")},
+            },
             error_message=error.message,
         )
         db.add(failed)
@@ -219,6 +225,27 @@ def collect_metrics(db: Session, server_id: int, payload: LinuxServerMetricsColl
     db.commit()
     db.refresh(sample)
     return sample, None
+
+
+def _canonical_memory_unavailable(error_code: str) -> dict[str, Any]:
+    return {
+        "semantic": "linux_proc_meminfo_memavailable",
+        "status": "unavailable",
+        "source": "net-snmp-extend",
+        "usage_percent": None,
+        "total_bytes": None,
+        "available_bytes": None,
+        "used_bytes": None,
+        "error_code": error_code,
+    }
+
+
+def _mark_canonical_memory_unavailable(details: dict | None, error_code: str) -> dict:
+    updated = dict(details or {})
+    memory = dict(updated.get("memory") or {})
+    memory["canonical"] = _canonical_memory_unavailable(error_code)
+    updated["memory"] = memory
+    return updated
 
 
 def get_current_metrics(db: Session, server_id: int) -> LinuxServerCurrentMetric:

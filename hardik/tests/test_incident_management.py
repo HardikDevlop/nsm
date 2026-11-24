@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import create_engine
+from sqlalchemy.sql.ddl import sort_tables
 from sqlalchemy.orm import sessionmaker
 
 from backend.api.incident_routes import IncidentCreatePayload, IncidentUpdatePayload, router
@@ -8,6 +9,7 @@ from backend.database.session import Base
 from backend.incidents.service import _category, _priority, process_alert_for_incident, process_alert_recovery
 from backend.models import Alert, Device, Incident, IncidentAlert, IncidentHistory, IncidentSLAConfig, IncidentSLATimer, Interface
 from backend.services.alerting import create_threshold_alert, resolve_interface_down_alert
+from backend.linux_monitoring.models import LinuxServer
 
 
 def test_incident_payloads_validate_workflow_fields():
@@ -36,7 +38,31 @@ def test_incident_routes_cover_crud_comments_and_attachments():
 
 def _db():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    seed_tables = {
+        "devices",
+        "alerts",
+        "interfaces",
+        "incidents",
+        "incident_alerts",
+        "incident_history",
+        "incident_sla_configs",
+        "incident_sla_timers",
+        "incident_sla_history",
+        "notifications",
+    }
+    required_names = set(seed_tables)
+    pending = list(seed_tables)
+    while pending:
+        table_name = pending.pop()
+        table = Base.metadata.tables[table_name]
+        for foreign_key in table.foreign_keys:
+            parent_name = foreign_key.target_fullname.split(".", 1)[0]
+            if parent_name in Base.metadata.tables and parent_name not in required_names:
+                required_names.add(parent_name)
+                pending.append(parent_name)
+    required_tables = [table for table in Base.metadata.tables.values() if table.name in required_names]
+    required_tables = sort_tables(required_tables)
+    Base.metadata.create_all(engine, tables=required_tables)
     return sessionmaker(bind=engine)()
 
 

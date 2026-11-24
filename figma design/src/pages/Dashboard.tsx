@@ -1,5 +1,24 @@
-import { useEffect, useMemo, useState } from "react"
+import { Children, isValidElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router"
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+  type SortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import {
   Area,
   AreaChart,
@@ -24,15 +43,18 @@ import { useTheme } from "../components/ThemeContext"
 import { useAuth } from "../components/AuthContext"
 import {
   getOverview,
+  getEffectiveMemoryAggregate,
   getLinuxCurrentMetrics,
   listLinuxServers,
   type LinuxMetricSnapshot,
   type LinuxServerRecord,
   type NormalizedOverview,
   type OverviewResponse,
+  type EffectiveMemoryAggregate,
 } from "../lib/api"
 import { formatISTTime, parseISTDate } from "../time"
 import { formatBitsPerSecond } from "../unitFormatting"
+import { confirmAction } from "../lib/swal"
 
 /* ─────────────────────────────  THEME  ───────────────────────────── */
 const C = {
@@ -54,6 +76,83 @@ const PALETTE = [
   "#ec4899", "#ff6b35", "#3b82f6", "#14b8a6", "#a3e635",
   "#f472b6", "#22d3ee", "#facc15", "#fb7185", "#c084fc",
 ]
+
+type DashboardZoneKey =
+  | "overviewMetrics"
+  | "performanceTraffic"
+  | "areaTraffic"
+  | "inventoryAlerts"
+  | "trafficTrendMonitoring"
+  | "fullWidthMonitoring"
+  | "topologyRecentActivity"
+
+type DashboardLayoutV1 = {
+  version: 1
+  zones: Record<DashboardZoneKey, string[]>
+}
+
+const DEFAULT_DASHBOARD_ZONES: Record<DashboardZoneKey, string[]> = {
+  overviewMetrics: [
+    "metric-total-devices", "metric-online", "metric-offline", "metric-snmp-enabled",
+    "metric-snmp-failed", "metric-critical-alerts", "metric-warning-alerts",
+  ],
+  performanceTraffic: ["live-traffic", "network-health", "status-share"],
+  areaTraffic: ["network-traffic", "top-devices-by-traffic"],
+  inventoryAlerts: ["device-type-map", "device-types", "alerts-by-severity"],
+  trafficTrendMonitoring: ["traffic-trend", "interfaces", "snmp-monitoring"],
+  fullWidthMonitoring: ["system-vitals", "worker-job-health", "historical-correlation"],
+  topologyRecentActivity: ["network-information", "recent-devices-activity"],
+}
+
+const DASHBOARD_LAYOUT_VERSION = 1 as const
+
+function defaultDashboardLayout(): DashboardLayoutV1 {
+  return {
+    version: DASHBOARD_LAYOUT_VERSION,
+    zones: Object.fromEntries(
+      Object.entries(DEFAULT_DASHBOARD_ZONES).map(([key, ids]) => [key, [...ids]]),
+    ) as Record<DashboardZoneKey, string[]>,
+  }
+}
+
+function normalizeDashboardLayout(value: unknown): DashboardLayoutV1 {
+  const fallback = defaultDashboardLayout()
+  if (!value || typeof value !== "object" || (value as { version?: unknown }).version !== DASHBOARD_LAYOUT_VERSION) return fallback
+  const rawZones = (value as { zones?: unknown }).zones
+  if (!rawZones || typeof rawZones !== "object") return fallback
+
+  const owners = new Map<string, DashboardZoneKey>()
+  Object.entries(DEFAULT_DASHBOARD_ZONES).forEach(([zone, ids]) => ids.forEach((id) => owners.set(id, zone as DashboardZoneKey)))
+  const seen = new Set<string>()
+  const zones = {} as Record<DashboardZoneKey, string[]>
+
+  for (const zone of Object.keys(DEFAULT_DASHBOARD_ZONES) as DashboardZoneKey[]) {
+    const raw = (rawZones as Record<string, unknown>)[zone]
+    const source = Array.isArray(raw) ? raw : []
+    const normalized = source.filter((id): id is string => (
+      typeof id === "string" && owners.get(id) === zone && !seen.has(id) && seen.add(id)
+    ))
+    zones[zone] = [...normalized, ...DEFAULT_DASHBOARD_ZONES[zone].filter((id) => !seen.has(id) && seen.add(id))]
+  }
+  return { version: DASHBOARD_LAYOUT_VERSION, zones }
+}
+
+function readDashboardLayout(userUuid: string): DashboardLayoutV1 {
+  try {
+    const stored = window.localStorage.getItem(`nms.dashboard.layout.v1.${userUuid}`)
+    return stored ? normalizeDashboardLayout(JSON.parse(stored)) : defaultDashboardLayout()
+  } catch {
+    return defaultDashboardLayout()
+  }
+}
+
+function writeDashboardLayout(userUuid: string, layout: DashboardLayoutV1) {
+  try {
+    window.localStorage.setItem(`nms.dashboard.layout.v1.${userUuid}`, JSON.stringify(layout))
+  } catch {
+    // Layout persistence is optional; in-memory ordering remains active.
+  }
+}
 
 const fmt = (n: number | null | undefined, suffix = "") =>
   n == null || Number.isNaN(n) ? "N/A" : `${n.toFixed(n < 10 ? 1 : 0)}${suffix}`
@@ -213,6 +312,121 @@ function Panel({
   )
 }
 
+function SortableDashboardPanel({
+  id,
+  className = "",
+  fill = true,
+  children,
+}: {
+  id: string
+  className?: string
+  fill?: boolean
+  children: React.ReactNode
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id })
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${fill ? "h-full min-h-0" : ""} ${className}`.trim()}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 1 : undefined,
+        opacity: isDragging ? 0.75 : undefined,
+      }}
+    >
+      <div className={fill ? "relative h-full min-h-0 [&>.glass]:h-full" : "relative h-fit"}>
+        <button
+          type="button"
+          className="absolute right-4 top-4 z-10 rounded p-1 font-mono text-[10px] opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+          style={{ color: C.muted, touchAction: "none" }}
+          aria-label={`Reorder ${id} dashboard panel`}
+          {...attributes}
+          {...listeners}
+          onClick={(event) => event.stopPropagation()}
+        >
+          ⋮⋮
+        </button>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function SortableMetricCard({
+  id,
+  label,
+  children,
+}: {
+  id: string
+  label: string
+  children: React.ReactNode
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+
+  return (
+    <div
+      ref={setNodeRef}
+      className="h-full min-w-0"
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 1 : undefined,
+        opacity: isDragging ? 0.75 : undefined,
+      }}
+    >
+      <div className="relative h-full min-w-0 [&>.glass]:h-full">
+        <button
+          type="button"
+          className="absolute right-2 top-2 z-10 rounded p-1 font-mono text-[9px] opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+          style={{ color: C.muted, background: "var(--t-card)", touchAction: "none" }}
+          aria-label={`Reorder ${label} summary card`}
+          {...attributes}
+          {...listeners}
+          onClick={(event) => event.stopPropagation()}
+        >
+          ⋮⋮
+        </button>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function SortableDashboardZone({
+  items,
+  className,
+  strategy = rectSortingStrategy,
+  children,
+}: {
+  items: string[]
+  className: string
+  strategy?: SortingStrategy
+  children: React.ReactNode
+}) {
+  const childMap = new Map(
+    Children.toArray(children)
+      .filter(isValidElement)
+      .map((child) => [String(child.props.id), child]),
+  )
+
+  return (
+    <SortableContext items={items} strategy={strategy}>
+      <div className={className}>
+        {items.map((id) => childMap.get(id))}
+      </div>
+    </SortableContext>
+  )
+}
+
 function BarLine({
   label, current, total, tone = C.green,
 }: {
@@ -268,7 +482,7 @@ function ClockGauge({
   value, max = 100, label, unit = "%", size = 180, valueLabel,
   tone = C.cyan, tickCount = 60, showTicks = true, showScale = false,
 }: {
-  value: number
+  value: number | null | undefined
   max?: number
   label: string
   unit?: string
@@ -283,8 +497,10 @@ function ClockGauge({
   // A non-numeric valueLabel ("NO DATA", "WAITING"...) means there's nothing
   // real to plot. Render a calm, static ring instead of a needle pointing at
   // a meaningless 0% — that's what was overlapping the "NO DATA" text.
-  const isNoData = Boolean(valueLabel && !/^\d/.test(valueLabel))
-  const pct = isNoData ? 0 : Math.max(0, Math.min(1, value / max))
+  const hasNumericValue = typeof value === "number" && Number.isFinite(value)
+  const isNoData = !hasNumericValue || Boolean(valueLabel && !/^\d/.test(valueLabel))
+  const numericValue = hasNumericValue ? value : 0
+  const pct = isNoData ? 0 : Math.max(0, Math.min(1, numericValue / max))
   const [animatedPct, setAnimatedPct] = useState(0)
   useEffect(() => {
     setAnimatedPct(0)
@@ -625,7 +841,7 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const { t } = useI18n()
   const { theme } = useTheme()
-  const { hasPermission } = useAuth()
+  const { hasPermission, user } = useAuth()
   const d = t.dashboard
 
   const [data, setData] = useState<OverviewResponse | null>(null)
@@ -636,17 +852,164 @@ export default function Dashboard() {
   const [updated, setUpdated] = useState<Date | null>(null)
   const [server, setServer] = useState<LinuxServerRecord | null>(null)
   const [serverMetrics, setServerMetrics] = useState<LinuxMetricSnapshot | null>(null)
+  const [memoryAggregate, setMemoryAggregate] = useState<EffectiveMemoryAggregate | null>(null)
+  const [inventoryWidgetOrder, setInventoryWidgetOrder] = useState([
+    "device-type-map",
+    "device-types",
+    "alerts-by-severity",
+  ])
+  const [performanceWidgetOrder, setPerformanceWidgetOrder] = useState([
+    "live-traffic",
+    "network-health",
+    "status-share",
+  ])
+  const [trafficWidgetOrder, setTrafficWidgetOrder] = useState([
+    "network-traffic",
+    "top-devices-by-traffic",
+  ])
+  const [monitoringWidgetOrder, setMonitoringWidgetOrder] = useState([
+    "traffic-trend",
+    "interfaces",
+    "snmp-monitoring",
+  ])
+  const [topologyWidgetOrder, setTopologyWidgetOrder] = useState([
+    "network-information",
+    "recent-devices-activity",
+  ])
+  const [fullWidthWidgetOrder, setFullWidthWidgetOrder] = useState([
+    "system-vitals",
+    "worker-job-health",
+    "historical-correlation",
+  ])
+  const [metricWidgetOrder, setMetricWidgetOrder] = useState([
+    "metric-total-devices",
+    "metric-online",
+    "metric-offline",
+    "metric-snmp-enabled",
+    "metric-snmp-failed",
+    "metric-critical-alerts",
+    "metric-warning-alerts",
+  ])
+  const layoutRef = useRef<DashboardLayoutV1>(defaultDashboardLayout())
+  const userUuidRef = useRef<string | null>(null)
+  const resetDialogOpenRef = useRef(false)
+
+  useLayoutEffect(() => {
+    const userUuid = user?.uuid ?? null
+    userUuidRef.current = userUuid
+    const layout = userUuid ? readDashboardLayout(userUuid) : defaultDashboardLayout()
+    layoutRef.current = layout
+    setMetricWidgetOrder(layout.zones.overviewMetrics)
+    setPerformanceWidgetOrder(layout.zones.performanceTraffic)
+    setTrafficWidgetOrder(layout.zones.areaTraffic)
+    setInventoryWidgetOrder(layout.zones.inventoryAlerts)
+    setMonitoringWidgetOrder(layout.zones.trafficTrendMonitoring)
+    setFullWidthWidgetOrder(layout.zones.fullWidthMonitoring)
+    setTopologyWidgetOrder(layout.zones.topologyRecentActivity)
+  }, [user?.uuid])
+
+  const commitZoneOrder = (
+    zone: DashboardZoneKey,
+    activeId: string,
+    overId: string,
+    setOrder: (value: string[]) => void,
+  ) => {
+    const current = layoutRef.current.zones[zone]
+    const oldIndex = current.indexOf(activeId)
+    const newIndex = current.indexOf(overId)
+    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return
+    const nextOrder = arrayMove(current, oldIndex, newIndex)
+    const nextLayout: DashboardLayoutV1 = {
+      version: DASHBOARD_LAYOUT_VERSION,
+      zones: { ...layoutRef.current.zones, [zone]: nextOrder },
+    }
+    layoutRef.current = nextLayout
+    setOrder(nextOrder)
+    const userUuid = userUuidRef.current
+    if (userUuid) writeDashboardLayout(userUuid, nextLayout)
+  }
+
+  const handleResetLayout = async () => {
+    const userUuid = userUuidRef.current
+    if (!userUuid || resetDialogOpenRef.current) return
+    resetDialogOpenRef.current = true
+    try {
+      const confirmed = await confirmAction({
+        title: "Reset Dashboard Layout?",
+        text: "All seven Dashboard zones will return to their default widget order. Monitoring data and settings will remain unchanged.",
+        confirmText: "Reset Layout",
+      })
+      if (!confirmed || userUuidRef.current !== userUuid) return
+      const layout = defaultDashboardLayout()
+      layoutRef.current = layout
+      setMetricWidgetOrder(layout.zones.overviewMetrics)
+      setPerformanceWidgetOrder(layout.zones.performanceTraffic)
+      setTrafficWidgetOrder(layout.zones.areaTraffic)
+      setInventoryWidgetOrder(layout.zones.inventoryAlerts)
+      setMonitoringWidgetOrder(layout.zones.trafficTrendMonitoring)
+      setFullWidthWidgetOrder(layout.zones.fullWidthMonitoring)
+      setTopologyWidgetOrder(layout.zones.topologyRecentActivity)
+      writeDashboardLayout(userUuid, layout)
+    } finally {
+      resetDialogOpenRef.current = false
+    }
+  }
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const handleInventoryDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    commitZoneOrder("inventoryAlerts", String(active.id), String(over.id), setInventoryWidgetOrder)
+  }
+  const handlePerformanceDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    commitZoneOrder("performanceTraffic", String(active.id), String(over.id), setPerformanceWidgetOrder)
+  }
+  const handleTrafficDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    commitZoneOrder("areaTraffic", String(active.id), String(over.id), setTrafficWidgetOrder)
+  }
+  const handleMonitoringDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    commitZoneOrder("trafficTrendMonitoring", String(active.id), String(over.id), setMonitoringWidgetOrder)
+  }
+  const handleTopologyDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    commitZoneOrder("topologyRecentActivity", String(active.id), String(over.id), setTopologyWidgetOrder)
+  }
+  const handleFullWidthDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    commitZoneOrder("fullWidthMonitoring", String(active.id), String(over.id), setFullWidthWidgetOrder)
+  }
+  const handleMetricDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    commitZoneOrder("overviewMetrics", String(active.id), String(over.id), setMetricWidgetOrder)
+  }
   const load = async (quiet = false, forceRefresh = false) => {
     if (!quiet && !data) setLoading(true)
     if (data) setRefreshing(true)
     try {
-      setError(null)
       const hours = range === "1H" ? 1 : range === "6H" ? 6 : range === "12H" ? 12 : range === "7D" ? 168 : 24
-      const snapshot = await getOverview(hours, forceRefresh)
-      setData(snapshot)
-      setUpdated(new Date())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : d.noStoredData)
+      const [overviewResult, memoryResult] = await Promise.allSettled([
+        getOverview(hours, forceRefresh),
+        getEffectiveMemoryAggregate(),
+      ])
+      if (overviewResult.status === "fulfilled") {
+        setData(overviewResult.value)
+        setError(null)
+        setUpdated(new Date())
+      } else {
+        setError(overviewResult.reason instanceof Error ? overviewResult.reason.message : d.noStoredData)
+      }
+
+      // Memory is independent of the overview payload. A failed memory
+      // request only affects AVG MEMORY; it must not discard other widgets.
+      if (memoryResult.status === "fulfilled") {
+        setMemoryAggregate(memoryResult.value)
+      } else {
+        setMemoryAggregate(null)
+      }
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -713,9 +1076,12 @@ export default function Dashboard() {
     .map((device) => n?.devices[String(device.id)]?.memory ?? device.memory_usage)
     .filter((value): value is number => value != null && Number.isFinite(value))
   const displayCpu = serverMetrics?.cpu_percent ?? null
-  const displayMem = serverMetrics?.memory_percent ?? null
+  // The mixed-source aggregate intentionally excludes stale samples. Keep the
+  // dashboard useful when that strict current-sample check returns no data by
+  // falling back to the range aggregate already returned by /overview.
+  const displayMem = memoryAggregate?.average_percent ?? null
   const hasCpuData = serverMetrics?.cpu_percent != null
-  const hasMemoryData = serverMetrics?.memory_percent != null
+  const hasMemoryData = memoryAggregate?.average_percent != null
   const hasAvailabilityData = Boolean(summary?.total_devices)
 
   /* Traffic history aggregated per minute */
@@ -892,6 +1258,16 @@ export default function Dashboard() {
           >
             {loading || refreshing ? d.loading : d.refresh}
           </button>
+          <button
+            type="button"
+            onClick={handleResetLayout}
+            disabled={!user?.uuid}
+            aria-label="Reset Dashboard layout"
+            className="font-mono text-xs px-3 py-2 rounded glass-bright transition-all duration-300 hover:scale-105 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:opacity-60 disabled:cursor-not-allowed"
+            style={{ color: C.muted, border: "1px solid var(--t-border-alpha)" }}
+          >
+            Reset Layout
+          </button>
         </div>
       </div>
 
@@ -924,21 +1300,47 @@ export default function Dashboard() {
         <>
           {/* ── METRIC CARDS ── */}
           <SectionLabel label="Overview" />
-          <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-7 gap-3 animate-slideUp">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleMetricDragEnd}
+          >
+          <SortableDashboardZone items={metricWidgetOrder} className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-7 gap-4 animate-slideUp">
+            <SortableMetricCard id="metric-total-devices" label="Total Devices">
             <Metric label={d.totalDevices} number={summary?.total_devices ?? 0} hint={d.inventory} onClick={canDevices ? () => navigate("/devices") : undefined} />
+            </SortableMetricCard>
+            <SortableMetricCard id="metric-online" label="Online">
             <Metric label={d.online} number={health.online} hint={d.reachable} tone="green" onClick={canDevices ? () => navigate("/devices") : undefined} />
+            </SortableMetricCard>
+            <SortableMetricCard id="metric-offline" label="Offline">
             <Metric label={d.offline} number={health.offline} hint={d.unreachable} tone="red" onClick={canDevices ? () => navigate("/devices") : undefined} />
+            </SortableMetricCard>
+            <SortableMetricCard id="metric-snmp-enabled" label="SNMP Enabled">
             <Metric label={d.snmpEnabled} number={snmpEnabled} hint={d.credentialsConfigured} tone="green" onClick={canDevices ? () => navigate("/snmp/devices") : undefined} />
+            </SortableMetricCard>
+            <SortableMetricCard id="metric-snmp-failed" label="SNMP Failed">
             <Metric label={d.snmpFailed} number={n?.polling.failure ?? 0} hint={rangeLabel} tone="red" onClick={canMonitoringJobs ? () => navigate("/monitoring-jobs") : undefined} />
+            </SortableMetricCard>
+            <SortableMetricCard id="metric-critical-alerts" label="Critical Alerts">
             <Metric label={d.criticalAlerts} number={summary?.critical_alerts ?? 0} hint={d.openAcknowledged} tone="red" onClick={canAlerts ? () => navigate("/alerts") : undefined} />
+            </SortableMetricCard>
+            <SortableMetricCard id="metric-warning-alerts" label="Warning Alerts">
             <Metric label={d.warningAlerts} number={(n?.alerts_by_severity.warning ?? 0) + (n?.alerts_by_severity.medium ?? 0)} hint={d.openAcknowledged} tone="amber" onClick={canAlerts ? () => navigate("/alerts") : undefined} />
-          </div>
+            </SortableMetricCard>
+          </SortableDashboardZone>
+          </DndContext>
 
           
 
           {/* ═══════════ ROW: SPEEDOMETERS + SPARKLINES ═══════════ */}
           <SectionLabel label="Performance & Traffic" />
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-stretch">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handlePerformanceDragEnd}
+          >
+          <SortableDashboardZone items={performanceWidgetOrder} className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-stretch">
+            <SortableDashboardPanel id="live-traffic">
             <Panel title="Live Traffic" subtitle="RX / TX current load">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
                 {[{ label: "Receive", short: "RX", value: currentRx, tone: C.green, spark: rxSpark }, { label: "Transmit", short: "TX", value: currentTx, tone: C.cyan, spark: txSpark }].map((item) => {
@@ -962,8 +1364,10 @@ export default function Dashboard() {
                 })}
               </div>
             </Panel>
+            </SortableDashboardPanel>
 
             {/* ═══════════ HEALTH — readable scorecard with radar context ═══════════ */}
+            <SortableDashboardPanel id="network-health">
             <Panel title="Network Health" subtitle="Six signals that explain the current operating condition">
               <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
                   {radarData.map((item) => {
@@ -979,8 +1383,10 @@ export default function Dashboard() {
                 Higher is better. Availability, polling and interface scores show reliability; traffic is normalized against the busiest point in the selected time range.
               </div>
             </Panel>
+            </SortableDashboardPanel>
 
             {/* ═══════════ RADIAL BAR — device status share ═══════════ */}
+            <SortableDashboardPanel id="status-share">
             <Panel title="Status Share" subtitle="Devices by state (radial bars)">
               <div className="relative h-[260px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -1056,10 +1462,18 @@ export default function Dashboard() {
                 </div>
               )}
             </Panel>
-          </div>
+            </SortableDashboardPanel>
+          </SortableDashboardZone>
+          </DndContext>
 
           {/* ═══════════ ROW: Area Traffic + Top Devices ═══════════ */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleTrafficDragEnd}
+          >
+          <SortableDashboardZone items={trafficWidgetOrder} className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
+            <SortableDashboardPanel id="network-traffic">
             <Panel title={d.networkTraffic} subtitle={`${d.storedInterfaceSamples} · ${range}`}>
               <div className="flex gap-6 mb-3">
                 <div>
@@ -1106,7 +1520,9 @@ export default function Dashboard() {
                 </div>
               )}
             </Panel>
+            </SortableDashboardPanel>
 
+            <SortableDashboardPanel id="top-devices-by-traffic">
             <Panel title={d.topDevicesByTraffic} subtitle={d.latestInterfaceTotals}>
               {topDevicesData.length ? (
                 <ResponsiveContainer width="100%" height={280}>
@@ -1122,12 +1538,20 @@ export default function Dashboard() {
                 </ResponsiveContainer>
               ) : <Empty text={d.noStoredData} />}
             </Panel>
-          </div>
+            </SortableDashboardPanel>
+          </SortableDashboardZone>
+          </DndContext>
 
           {/* ═══════════ ROW: Treemap + Donut + Alerts ═══════════ */}
           <SectionLabel label="Inventory & Alerts" />
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleInventoryDragEnd}
+          >
+          <SortableDashboardZone items={inventoryWidgetOrder} className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-stretch">
             {/* ═══ TREEMAP ═══ */}
+            <SortableDashboardPanel id="device-type-map">
             <Panel title="Device Type Map" subtitle="Treemap · proportional inventory">
               {treemapData.length ? (
                 <div className="space-y-4 py-2">
@@ -1159,8 +1583,10 @@ export default function Dashboard() {
                 </div>
               ) : <Empty text={d.noDeviceTypes} />}
             </Panel>
+            </SortableDashboardPanel>
 
             {/* ═══ DONUT ═══ */}
+            <SortableDashboardPanel id="device-types">
             <Panel title={d.deviceTypes} subtitle={d.inventoryClassification}>
               {deviceTypePie.length ? (
                 <ResponsiveContainer width="100%" height={280}>
@@ -1193,8 +1619,10 @@ export default function Dashboard() {
                 </ResponsiveContainer>
               ) : <Empty text={d.noDeviceTypes} />}
             </Panel>
+            </SortableDashboardPanel>
 
             {/* ═══ ALERTS BY SEVERITY ═══ */}
+            <SortableDashboardPanel id="alerts-by-severity">
             <Panel title={d.alerts} subtitle={d.activeAlertSeverity} onClick={() => navigate("/alerts")}>
               {alertChart.some((b) => b.value > 0) ? (
                 <ResponsiveContainer width="100%" height={280}>
@@ -1210,10 +1638,18 @@ export default function Dashboard() {
                 </ResponsiveContainer>
               ) : <Empty text={d.noStoredData} />}
             </Panel>
-          </div>
+            </SortableDashboardPanel>
+          </SortableDashboardZone>
+          </DndContext>
 
           {/* ═══════════ ROW: Line Trend + Interfaces + SNMP ═══════════ */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleMonitoringDragEnd}
+          >
+          <SortableDashboardZone items={monitoringWidgetOrder} className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-stretch">
+            <SortableDashboardPanel id="traffic-trend">
             <Panel title="Traffic Trend" subtitle={`DB persisted samples · ${range}${latestTrafficSample ? ` · last sample ${clock(latestTrafficSample)}` : " · awaiting samples"}`} onClick={() => navigate("/snmp")}>
               {chart.length ? (
                 <ResponsiveContainer width="100%" height={230}>
@@ -1228,7 +1664,9 @@ export default function Dashboard() {
                 </ResponsiveContainer>
               ) : <Empty text={d.noInterfaceHistory} />}
             </Panel>
+            </SortableDashboardPanel>
 
+            <SortableDashboardPanel id="interfaces">
             <Panel title={d.interfaces} subtitle={d.latestSnmpState} onClick={() => navigate("/snmp")}>
               <div className="grid grid-cols-3 gap-2 mb-4">
                 <Mini label={d.total} number={n?.interface_summary.total ?? 0} />
@@ -1255,7 +1693,9 @@ export default function Dashboard() {
                 />
               </div>
             </Panel>
+            </SortableDashboardPanel>
 
+            <SortableDashboardPanel id="snmp-monitoring">
           <Panel title={d.snmpMonitoring} subtitle="Historical polling attempt outcomes">
               <div className="space-y-3">
                 <BarLine label={d.successfulAttempts} current={n?.polling.successful_attempts ?? 0} total={n?.polling.total_attempts ?? 0} />
@@ -1288,10 +1728,23 @@ export default function Dashboard() {
                 </div>
               </div>
             </Panel>
-          </div>
+            </SortableDashboardPanel>
+          </SortableDashboardZone>
+          </DndContext>
 
           {/* ═══════════ ROW: 4 CLOCK GAUGES ═══════════ */}
-          <Panel title="System Vitals" subtitle="Real-time circular gauges · clock-style readouts" className="system-vitals-panel">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleFullWidthDragEnd}
+          >
+          <SortableDashboardZone
+            items={fullWidthWidgetOrder}
+            strategy={verticalListSortingStrategy}
+            className="flex w-full flex-col gap-5"
+          >
+          <SortableDashboardPanel id="system-vitals" fill={false} className="w-full">
+          <Panel title="System Vitals" subtitle="Real-time circular gauges · clock-style readouts" className="system-vitals-panel w-full">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-5 py-2">
               {[
       { value: historicalAvailability, valueLabel: hasAvailabilityData ? undefined : "N/A", label: "Availability", tone: theme === 'light' ? '#e11d48' : C.green },
@@ -1312,8 +1765,10 @@ export default function Dashboard() {
               ))}
             </div>
           </Panel>
+          </SortableDashboardPanel>
 
-          <Panel title="Worker & Job Health" subtitle="Background monitoring services" onClick={() => navigate("/monitoring-jobs")}>
+          <SortableDashboardPanel id="worker-job-health" fill={false} className="w-full">
+          <Panel title="Worker & Job Health" subtitle="Background monitoring services" onClick={() => navigate("/monitoring-jobs")} className="w-full">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {[
                 { key: "snmp_polling", fallback: "SNMP Polling Worker" },
@@ -1344,8 +1799,10 @@ export default function Dashboard() {
               })}
             </div>
           </Panel>
+          </SortableDashboardPanel>
 
-          <Panel title="Historical Correlation" subtitle={`${rangeLabel} · alerts, outages and performance evidence`}>
+          <SortableDashboardPanel id="historical-correlation" fill={false} className="w-full">
+          <Panel title="Historical Correlation" subtitle={`${rangeLabel} · alerts, outages and performance evidence`} className="w-full">
             <div className="grid grid-cols-3 gap-3">
               {[
                 { label: "ALERTS", value: n?.alerts_by_severity ? Object.values(n.alerts_by_severity).reduce((sum, count) => sum + Number(count || 0), 0) : 0, tone: C.red },
@@ -1362,10 +1819,19 @@ export default function Dashboard() {
               Exact same-device timestamp match within ±{n?.correlation?.window_minutes ?? 5} minutes of an alert.
             </div>
           </Panel>
+          </SortableDashboardPanel>
+          </SortableDashboardZone>
+          </DndContext>
 
           {/* ═══════════ ROW: Network Info + Recent Table ═══════════ */}
           <SectionLabel label="Topology & Recent Activity" />
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleTopologyDragEnd}
+          >
+          <SortableDashboardZone items={topologyWidgetOrder} className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-stretch">
+            <SortableDashboardPanel id="network-information" fill={false}>
             <Panel title={d.networkInformation} subtitle={d.normalizedTopologyInventory} className="self-start h-fit">
               <div className="grid grid-cols-2 gap-3">
                 {Object.entries({
@@ -1383,7 +1849,9 @@ export default function Dashboard() {
                 ))}
               </div>
             </Panel>
+            </SortableDashboardPanel>
 
+            <SortableDashboardPanel id="recent-devices-activity" className="xl:col-span-2">
             <Panel
               title={d.recentDevicesActivity}
               subtitle={d.lastPersistedState}
@@ -1435,7 +1903,9 @@ export default function Dashboard() {
                 {!devices.length && <Empty text={d.noDevices} />}
               </div>
           </Panel>
-          </div>
+            </SortableDashboardPanel>
+          </SortableDashboardZone>
+          </DndContext>
         </>
       )}
 

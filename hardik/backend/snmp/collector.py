@@ -31,6 +31,7 @@ from .credentials import SNMPCredentials
 from .normalizer import NormalizationLayer
 from .oid_catalog import STANDARD_OIDS, VENDOR_OID_CATALOG
 from .oid_mapper import build_registry
+from .memory_resolver import resolve_canonical_linux_memory
 from .vendor_detector import VendorDetector
 from .collectors import (
     ARPCollector, CDPCollector, CPUCollector, EnvironmentCollector,
@@ -311,6 +312,14 @@ class SNMPService:
         walk_oid_count = len(walked)
         raw.update(walked)
 
+        canonical_memory = resolve_canonical_linux_memory(
+            host,
+            self.credentials,
+            device_type=device_type,
+            sys_descr=raw.get(STANDARD_OIDS["system.description"]),
+            timeout_seconds=getattr(self.client, "operation_timeout", None),
+        )
+
         logger.info(
             "%s walk complete: %d OID roots walked, %d total OIDs in raw",
             host, len(walks), len(raw),
@@ -335,7 +344,15 @@ class SNMPService:
         for collector in _COLLECTORS:
             c_t0 = time.perf_counter()
             try:
-                resp = collector.collect(device, registry, registry.profile)
+                if collector.name == "memory":
+                    resp = collector.collect(
+                        device,
+                        registry,
+                        registry.profile,
+                        canonical_memory=canonical_memory,
+                    )
+                else:
+                    resp = collector.collect(device, registry, registry.profile)
                 c_ms = round((time.perf_counter() - c_t0) * 1000, 1)
                 from backend.observability import record_collector_duration  # noqa: PLC0415
                 record_collector_duration(c_ms)
@@ -430,7 +447,8 @@ class SNMPService:
         try:
             raw.update(self.client.get(host, _IDENTITY_OIDS))
         except Exception as exc:
-            return {"supported": False, "reason": str(exc)}
+            logger.debug("SNMP identity GET failed for %s: %s", host, exc)
+            return {"supported": False, "reason": "SNMP identity collection failed"}
 
         detection   = self._detector.detect_from_walk(raw)
         vendor      = detection["vendor"]
@@ -438,18 +456,39 @@ class SNMPService:
 
         raw.update(self._walk_roots(host, _DOMAIN_WALKS.get(domain) or {}))
 
+        canonical_memory = resolve_canonical_linux_memory(
+            host,
+            self.credentials,
+            device_type=device_type,
+            sys_descr=raw.get(STANDARD_OIDS["system.description"]),
+            timeout_seconds=getattr(self.client, "operation_timeout", None),
+        ) if domain == "memory" else None
+
         device   = self._normalizer.normalize(raw, vendor=vendor, device_type=device_type)
         registry = build_registry(vendor=vendor, walk=raw)
         c_t0 = time.perf_counter()
         try:
-            result = collector.collect(device, registry, registry.profile).to_dict()
+            if collector.name == "memory":
+                result = collector.collect(
+                    device,
+                    registry,
+                    registry.profile,
+                    canonical_memory=canonical_memory,
+                ).to_dict()
+            else:
+                result = collector.collect(
+                    device,
+                    registry,
+                    registry.profile,
+                ).to_dict()
             from backend.observability import record_collector_duration  # noqa: PLC0415
             record_collector_duration((time.perf_counter() - c_t0) * 1000)
             return result
         except Exception as exc:
+            logger.exception("SNMP %s collector failed for %s", domain, host)
             from backend.observability import record_collector_duration  # noqa: PLC0415
             record_collector_duration((time.perf_counter() - c_t0) * 1000)
-            return {"supported": False, "reason": str(exc)}
+            return {"supported": False, "reason": "SNMP collector execution failed"}
 
     @staticmethod
     def _dead(host: str, reason: str) -> dict[str, Any]:

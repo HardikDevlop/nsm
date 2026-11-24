@@ -8,7 +8,10 @@ It never registers with or changes the existing SNMP scheduler.
 from __future__ import annotations
 
 import time
-from typing import Any
+import logging
+from dataclasses import dataclass
+import re
+from typing import Any, Literal
 
 from backend.snmp.client import SNMPClient
 from backend.snmp.credentials import SNMPCredentials
@@ -55,6 +58,148 @@ DISK_IO_WRITE_BYTES = "1.3.6.1.4.1.2021.13.15.1.1.4"
 UCD_CPU_USER = "1.3.6.1.4.1.2021.11.9.0"
 UCD_CPU_SYSTEM = "1.3.6.1.4.1.2021.11.10.0"
 UCD_CPU_IDLE = "1.3.6.1.4.1.2021.11.11.0"
+
+_MEMORY_EXTEND_KEYS = frozenset(("version", "MemTotalKiB", "MemAvailableKiB"))
+_MEMORY_EXTEND_INTEGER = re.compile(r"[0-9]+\Z")
+LINUX_MEMORY_EXTEND_TOKEN = "agnigateLinuxMem"
+_NS_EXTEND_OUTPUT1_LINE_BASE = "1.3.6.1.4.1.8072.1.3.2.3.1.1"
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LinuxEffectiveMemoryResult:
+    """Validated Linux effective-memory values from a Net-SNMP extension."""
+
+    version: int
+    total_kib: int
+    available_kib: int
+    total_bytes: int
+    available_bytes: int
+    used_bytes: int
+    utilization_percent: float
+    source: str = "net-snmp-extend"
+    semantic: str = "linux_proc_meminfo_memavailable"
+
+
+@dataclass(frozen=True)
+class LinuxEffectiveMemorySNMPResult:
+    """Outcome of the opt-in effective-memory SNMP query."""
+
+    status: Literal["success", "unavailable", "error"]
+    data: LinuxEffectiveMemoryResult | None = None
+    error_code: str | None = None
+
+
+def linux_memory_extend_output_oid(token: str = LINUX_MEMORY_EXTEND_TOKEN) -> str:
+    """Build nsExtendOutput1Line's numeric OID for an ASCII token index."""
+    if not token:
+        raise ValueError("Net-SNMP extend token must not be empty")
+    index = ".".join((str(len(token)), *(str(ord(char)) for char in token)))
+    return f"{_NS_EXTEND_OUTPUT1_LINE_BASE}.{index}"
+
+
+def parse_linux_effective_memory_extend_output(output: str) -> LinuxEffectiveMemoryResult:
+    """Parse the strict version-1 Linux MemAvailable extension response.
+
+    The parser is intentionally isolated from SNMP transport and persistence.
+    It rejects unknown or duplicate keys so an incomplete or changed agent
+    response cannot be mistaken for a valid effective-memory sample.
+    """
+    if not isinstance(output, str):
+        raise ValueError("memory extension output must be text")
+
+    fields: dict[str, str] = {}
+    tokens = output.split()
+    if not tokens:
+        raise ValueError("memory extension output is empty")
+    for token in tokens:
+        if token.count("=") != 1:
+            raise ValueError(f"malformed memory extension field: {token!r}")
+        key, value = token.split("=", 1)
+        if key not in _MEMORY_EXTEND_KEYS:
+            raise ValueError(f"unknown memory extension field: {key!r}")
+        if key in fields:
+            raise ValueError(f"duplicate memory extension field: {key!r}")
+        if not value or not _MEMORY_EXTEND_INTEGER.fullmatch(value):
+            raise ValueError(f"invalid integer for memory extension field: {key!r}")
+        fields[key] = value
+
+    if set(fields) != _MEMORY_EXTEND_KEYS:
+        missing = sorted(_MEMORY_EXTEND_KEYS - set(fields))
+        raise ValueError(f"missing memory extension fields: {', '.join(missing)}")
+
+    version = int(fields["version"])
+    total_kib = int(fields["MemTotalKiB"])
+    available_kib = int(fields["MemAvailableKiB"])
+    if version != 1:
+        raise ValueError(f"unsupported memory extension version: {version}")
+    if total_kib <= 0:
+        raise ValueError("MemTotalKiB must be positive")
+    if available_kib > total_kib:
+        raise ValueError("MemAvailableKiB must not exceed MemTotalKiB")
+
+    total_bytes = total_kib * 1024
+    available_bytes = available_kib * 1024
+    used_bytes = total_bytes - available_bytes
+    return LinuxEffectiveMemoryResult(
+        version=version,
+        total_kib=total_kib,
+        available_kib=available_kib,
+        total_bytes=total_bytes,
+        available_bytes=available_bytes,
+        used_bytes=used_bytes,
+        utilization_percent=(used_bytes / total_bytes) * 100,
+    )
+
+
+def collect_linux_effective_memory_via_extend(
+    host: str,
+    credentials: SNMPCredentials,
+    timeout_seconds: float = 10.0,
+) -> LinuxEffectiveMemorySNMPResult:
+    """Query and parse the opt-in Net-SNMP effective-memory extension.
+
+    This helper is deliberately separate from ``collect_linux_metrics`` and
+    has no persistence, scheduler, alert, or legacy-metric fallback behavior.
+    """
+    if timeout_seconds <= 0:
+        return LinuxEffectiveMemorySNMPResult("error", error_code="invalid_timeout")
+
+    client = SNMPClient(
+        credentials,
+        timeout=min(timeout_seconds, 5.0),
+        retries=0,
+        operation_timeout=timeout_seconds,
+    )
+    oid = linux_memory_extend_output_oid()
+    try:
+        values = client.get(host, (oid,))
+    except TimeoutError:
+        return LinuxEffectiveMemorySNMPResult("unavailable", error_code="timeout")
+    except OSError as exc:
+        message = str(exc).lower()
+        if any(marker in message for marker in ("no such", "nosuch", "unknown object", "not found")):
+            code = "no_such_instance"
+        elif any(marker in message for marker in ("authorization", "access", "not authorized", "permission")):
+            code = "access_denied"
+        else:
+            code = "snmp_error"
+        return LinuxEffectiveMemorySNMPResult("unavailable", error_code=code)
+    except Exception:
+        return LinuxEffectiveMemorySNMPResult("error", error_code="snmp_error")
+
+    raw = values.get(oid)
+    if raw is None:
+        return LinuxEffectiveMemorySNMPResult("unavailable", error_code="no_such_instance")
+    if isinstance(raw, str) and any(marker in raw.lower() for marker in ("no such", "nosuch", "unknown object")):
+        return LinuxEffectiveMemorySNMPResult("unavailable", error_code="no_such_instance")
+    if not isinstance(raw, str):
+        return LinuxEffectiveMemorySNMPResult("error", error_code="unsupported_response")
+    try:
+        parsed = parse_linux_effective_memory_extend_output(raw)
+    except ValueError:
+        return LinuxEffectiveMemorySNMPResult("error", error_code="malformed_output")
+    return LinuxEffectiveMemorySNMPResult("success", data=parsed)
 
 
 class LinuxMetricCollectionError(Exception):
@@ -276,10 +421,74 @@ def collect_linux_metrics(host: str, request: Any, previous: Any | None = None) 
     memory_used = ((total_memory - available_memory) if total_memory and available_memory is not None else None)
     swap_used = ((total_swap - available_swap) if total_swap and available_swap is not None else None)
 
+    # Keep the legacy UCD-SNMP percentage above unchanged for existing Linux
+    # dashboards and threshold evaluation.  The canonical effective-memory
+    # sample is stored separately and is consumed only by the normalized
+    # aggregation path.
+    canonical_timeout = request.timeout_seconds - (time.monotonic() - started)
+    canonical = collect_linux_effective_memory_via_extend(
+        host,
+        credentials,
+        timeout_seconds=canonical_timeout,
+    )
+    canonical_data: dict[str, Any] = {
+        "semantic": "linux_proc_meminfo_memavailable",
+        "status": canonical.status,
+        "source": "net-snmp-extend",
+        "usage_percent": None,
+        "total_bytes": None,
+        "available_bytes": None,
+        "used_bytes": None,
+    }
+    if canonical.status == "success" and canonical.data is not None:
+        canonical_data.update({
+            "status": "ok",
+            "source": canonical.data.source,
+            "usage_percent": canonical.data.utilization_percent,
+            "total_bytes": canonical.data.total_bytes,
+            "available_bytes": canonical.data.available_bytes,
+            "used_bytes": canonical.data.used_bytes,
+        })
+    else:
+        canonical_data["error_code"] = canonical.error_code
+        logger.warning(
+            "LINUX_MEMORY_CANONICAL_UNAVAILABLE host=%s status=%s error_code=%s",
+            host,
+            canonical.status,
+            canonical.error_code,
+        )
+
+    details = {
+        "cpu_cores": [round(value, 3) for value in processor],
+        "memory": {
+            "total_bytes": total_memory * 1024 if total_memory is not None else None,
+            "used_bytes": memory_used * 1024 if memory_used is not None else None,
+            "available_bytes": available_memory * 1024 if available_memory is not None else None,
+            "legacy_source": "ucd-snmp",
+            "canonical": canonical_data,
+        },
+        "swap": {"total_bytes": total_swap * 1024 if total_swap is not None else None, "used_bytes": swap_used * 1024 if swap_used is not None else None, "available_bytes": available_swap * 1024 if available_swap is not None else None},
+        "disk_devices": disk_details,
+        "counters": {"timestamp": time.time(), "interfaces": current_interfaces, "disks": {index: {"read_bytes": disk_io_read.get(index), "write_bytes": disk_io_write.get(index)} for index in set(disk_io_devices) | set(disk_io_read) | set(disk_io_write)}},
+        "warnings": warnings,
+        "counter_bits": counter_bits,
+    }
+
+    # `memory_percent` is the public metric consumed by the dashboard and
+    # threshold evaluator. Prefer the canonical /proc/meminfo calculation
+    # (MemTotal - MemAvailable), and only fall back to the legacy SNMP value
+    # when the canonical extension is unavailable.
+    canonical_memory_percent = _number(canonical_data.get("usage_percent"))
+    effective_memory_percent = (
+        canonical_memory_percent
+        if canonical_memory_percent is not None
+        else (round(min(100.0, (memory_used / total_memory) * 100), 3) if total_memory and memory_used is not None else None)
+    )
+
     return {
         "collection_status": "success",
         "cpu_percent": round(sum(processor) / len(processor), 3) if processor else None,
-        "memory_percent": round(min(100.0, (memory_used / total_memory) * 100), 3) if total_memory and memory_used is not None else None,
+        "memory_percent": effective_memory_percent,
         "swap_percent": round(((total_swap - available_swap) / total_swap) * 100, 3) if total_swap and available_swap is not None else None,
         "disk_percent": round(sum(disk_values) / len(disk_values), 3) if disk_values else None,
         "disk_io_read_bytes_per_sec": round(read_rate, 3) if has_read else None,
@@ -295,6 +504,6 @@ def collect_linux_metrics(host: str, request: Any, previous: Any | None = None) 
         "interface_drops": round(drop_rate, 3) if has_drops else None,
         "network_rx_bytes": _sum_optional([item["rx_bytes"] for item in current_interfaces.values()]),
         "network_tx_bytes": _sum_optional([item["tx_bytes"] for item in current_interfaces.values()]),
-        "details": {"cpu_cores": [round(value, 3) for value in processor], "memory": {"total_bytes": total_memory * 1024 if total_memory is not None else None, "used_bytes": memory_used * 1024 if memory_used is not None else None, "available_bytes": available_memory * 1024 if available_memory is not None else None}, "swap": {"total_bytes": total_swap * 1024 if total_swap is not None else None, "used_bytes": swap_used * 1024 if swap_used is not None else None, "available_bytes": available_swap * 1024 if available_swap is not None else None}, "disk_devices": disk_details, "counters": {"timestamp": time.time(), "interfaces": current_interfaces, "disks": {index: {"read_bytes": disk_io_read.get(index), "write_bytes": disk_io_write.get(index)} for index in set(disk_io_devices) | set(disk_io_read) | set(disk_io_write)}}, "warnings": warnings, "counter_bits": counter_bits},
+        "details": details,
         "error_message": None,
     }

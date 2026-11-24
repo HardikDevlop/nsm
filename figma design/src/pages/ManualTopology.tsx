@@ -23,7 +23,7 @@ import {
   type SNMPDeviceListItem,
   type SNMPInterfaceStats,
 } from "../lib/api"
-import { toast } from "../lib/swal"
+import { promptText, toast } from "../lib/swal"
 import { readViewports, centeredViewport, zoomViewport, type Viewport } from "./manualTopologyViewport"
 import { portEndpoint, compactPortLabel } from "./manualTopologyPorts"
 import { comparePhysicalConnection } from "./manualTopologyEvidence"
@@ -67,14 +67,14 @@ type Link = {
   toIfIndex?: number | null
   fromPortSource?: string
   toPortSource?: string
-  routingPoints?: Array<{ x: number y: number }>
+  routingPoints?: Array<{ x: number; y: number }>
   status?: string
   origin?: "manual" | "discovered_physical"
   discoverySource?: string
   confidence?: "HIGH" | "MEDIUM" | "LOW"
   evidence?: string[]
 }
-type Workspace = { devices: Device[] links: Link[] }
+type Workspace = { devices: Device[]; links: Link[] }
 type ViewMode = "manual" | "actual" | "compare"
 type DeviceHealthStatus = "online" | "offline" | "degraded" | "stale" | "unknown"
 type EditForm = {
@@ -600,7 +600,7 @@ function normalizeWorkspace(raw: unknown): Workspace {
             typeof l.toPortSource === "string" ? l.toPortSource : undefined,
           routingPoints: Array.isArray(l.routingPoints)
             ? l.routingPoints.filter(
-                (p): p is { x: number y: number } =>
+                (p): p is { x: number; y: number } =>
                   !!p &&
                   typeof p === "object" &&
                   typeof (p as { x?: unknown }).x === "number" &&
@@ -912,7 +912,7 @@ function normalizePortName(value?: string) {
 }
 
 function isLogicalPort(
-  port?: NormalizedPort | { name?: string ifType?: string },
+  port?: NormalizedPort | { name?: string; ifType?: string },
 ) {
   const value = `${port?.name || ""} ${port?.ifType || ""}`.toLowerCase()
   return /port[- ]?channel|bond|bridge|vlan|svi|tunnel|loopback|virtual|software/.test(
@@ -930,7 +930,7 @@ type PortOccupancy = {
 function getPortOccupancy(
   workspace: Workspace,
   deviceId: string,
-  port: { name?: string ifIndex?: number | null } | string,
+  port: { name?: string; ifIndex?: number | null } | string,
 ): PortOccupancy {
   const portName = typeof port === "string" ? port : port.name
   const ifIndex = typeof port === "string" ? null : port.ifIndex
@@ -967,8 +967,8 @@ function MiniMap({
   onSelect,
 }: {
   workspace: Workspace
-  viewport: { x: number y: number width: number height: number }
-  onSelect?: (point: { x: number y: number }) => void
+  viewport: { x: number; y: number; width: number; height: number }
+  onSelect?: (point: { x: number; y: number }) => void
 }) {
   return (
     <svg
@@ -1041,7 +1041,7 @@ export default function ManualTopology() {
     expected: string
     actual: string
   } | null>(null)
-  const [pointer, setPointer] = useState<{ x: number y: number } | null>(null)
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null)
   const [interfaces, setInterfaces] =
     useState<Record<string, NormalizedPort[]>>({})
   const [allInterfaces, setAllInterfaces] =
@@ -1084,7 +1084,7 @@ export default function ManualTopology() {
       return { ...previous, [view]: { ...current, pan: typeof value === "function" ? value(current.pan) : value } }
     })
   }
-  const [drag, setDrag] = useState<{ id: string ox: number oy: number } | null>(
+  const [drag, setDrag] = useState<{ id: string; ox: number; oy: number } | null>(
     null,
   )
   const [canvasDrag, setCanvasDrag] = useState<{
@@ -1138,6 +1138,8 @@ export default function ManualTopology() {
   const dragLatestWorkspace = useRef<Workspace | null>(null)
   const routingLatestWorkspace = useRef<Workspace | null>(null)
   const saveTimer = useRef<number | null>(null)
+  const hostnamePromptOpen = useRef(false)
+  const deviceNamePromptOpen = useRef(false)
 
   const healthStatusFor = (device: Device): DeviceHealthStatus =>
     device.backendId != null
@@ -1146,7 +1148,7 @@ export default function ManualTopology() {
   const healthColorFor = (device: Device) => healthColor(healthStatusFor(device))
   const renderedToneFor = (device: Device) =>
     healthStatusFor(device) === "offline" ? "#d9646a" : device.tone
-  const panStart = useRef<{ x: number y: number } | null>(null)
+  const panStart = useRef<{ x: number; y: number } | null>(null)
 
   const clampZoom = (value: number) => Math.min(3, Math.max(0.25, value))
   const zoomPresets = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3]
@@ -1197,6 +1199,106 @@ export default function ManualTopology() {
   })
 
   const selected = workspace.devices.find((d) => d.id === selectedId) ?? null
+  const workspaceRef = useRef(workspace)
+  const selectedRef = useRef(selected)
+  workspaceRef.current = workspace
+  selectedRef.current = selected
+  const editSelectedHostname = async () => {
+    const target = selectedRef.current
+    if (!target || hostnamePromptOpen.current) return
+    const targetId = target.id
+    const targetBackendId = target.backendId
+    const originalHostname = target.name
+    hostnamePromptOpen.current = true
+    let backendUpdatePending = false
+    try {
+      const name = await promptText({
+        title: "Edit Hostname",
+        inputLabel: "Hostname",
+        inputValue: originalHostname,
+        confirmText: "Save Hostname",
+      })
+      if (!name) return
+      const currentSelected = selectedRef.current
+      const currentDevice = workspaceRef.current.devices.find((device) => device.id === targetId)
+      if (
+        !currentSelected ||
+        currentSelected.id !== targetId ||
+        currentSelected.backendId !== targetBackendId ||
+        currentSelected.name !== originalHostname ||
+        !currentDevice ||
+        currentDevice.id !== targetId ||
+        currentDevice.backendId !== targetBackendId ||
+        currentDevice.name !== originalHostname
+      ) return
+      updateWorkspace({
+        ...workspaceRef.current,
+        devices: workspaceRef.current.devices.map((device) =>
+          device.id === targetId ? { ...device, name } : device,
+        ),
+      })
+      if (targetBackendId) {
+        backendUpdatePending = true
+        void updateDevice(targetBackendId, { hostname: name }).then(
+          () => undefined,
+          () => undefined,
+        ).finally(() => {
+          hostnamePromptOpen.current = false
+        })
+      }
+    } finally {
+      if (!backendUpdatePending) hostnamePromptOpen.current = false
+    }
+  }
+  const editSelectedDeviceName = async () => {
+    const target = selectedRef.current
+    if (!target || deviceNamePromptOpen.current) return
+    const targetId = target.id
+    const targetBackendId = target.backendId
+    const originalName = target.name
+    deviceNamePromptOpen.current = true
+    let backendUpdatePending = false
+    try {
+      const enteredName = await promptText({
+        title: "Edit Device Name",
+        inputLabel: "Device name",
+        inputValue: originalName,
+        confirmText: "Save Name",
+        trim: false,
+        allowWhitespace: true,
+      })
+      if (enteredName === null) return
+      const currentSelected = selectedRef.current
+      const currentDevice = workspaceRef.current.devices.find((device) => device.id === targetId)
+      if (
+        !currentSelected ||
+        currentSelected.id !== targetId ||
+        currentSelected.backendId !== targetBackendId ||
+        currentSelected.name !== originalName ||
+        !currentDevice ||
+        currentDevice.id !== targetId ||
+        currentDevice.backendId !== targetBackendId ||
+        currentDevice.name !== originalName
+      ) return
+      updateWorkspace({
+        ...workspaceRef.current,
+        devices: workspaceRef.current.devices.map((device) =>
+          device.id === targetId ? { ...device, name: enteredName } : device,
+        ),
+      })
+      if (targetBackendId) {
+        backendUpdatePending = true
+        void updateDevice(targetBackendId, { hostname: enteredName }).then(
+          () => undefined,
+          () => undefined,
+        ).finally(() => {
+          deviceNamePromptOpen.current = false
+        })
+      }
+    } finally {
+      if (!backendUpdatePending) deviceNamePromptOpen.current = false
+    }
+  }
   const hoverDeviceStats = (device: Device) => {
     const knownPorts = allInterfaces[device.id] ?? interfaces[device.id]
     const totalPorts = knownPorts?.length ?? device.ports?.length ?? 0
@@ -2129,7 +2231,7 @@ export default function ManualTopology() {
     ]
     return points.map((p, i) => `${i ? "L" : "M"} ${p.x} ${p.y}`).join(" ")
   }
-  const previewAnchor = (device: Device, target: { x: number y: number }) => {
+  const previewAnchor = (device: Device, target: { x: number; y: number }) => {
     return {
       x: device.x + NODE_SOCKET.x,
       y: device.y + NODE_SOCKET.y,
@@ -4789,10 +4891,10 @@ export default function ManualTopology() {
         <div className="absolute bottom-3 right-3 h-24 w-40 rounded border border-white/[.12] bg-[#111517] p-1"><MiniMap workspace={{ devices: canvasDevices, links: canvasLinks }} viewport={viewport} /></div>
         {portPanelDevice && <div className="absolute right-3 top-16 z-20 w-64 max-w-[calc(100%-80px)] rounded-md border border-white/[.12] bg-[#111517]/95 p-3 shadow-xl"><div className="font-mono text-[9px] uppercase tracking-widest text-[#9aa3a0]">Ports / Interfaces</div><div className="mt-1 truncate text-xs font-semibold">{portPanelDevice.name}</div><input className="mt-2 h-7 w-full rounded border border-white/[.1] bg-[#0d1113] px-2 font-mono text-[9px]" placeholder="Search ports..." value={portSearch} onChange={(event) => setPortSearch(event.target.value)} /><div className="mt-2 flex gap-1"><button className={`tool h-7 flex-1 ${portView === "physical" ? "border-[#61c98d] text-[#61c98d]" : ""}`} onClick={() => setPortView("physical")}>Physical Ports</button><button className={`tool h-7 flex-1 ${portView === "all" ? "border-[#61c98d] text-[#61c98d]" : ""}`} onClick={() => setPortView("all")}>All Interfaces</button></div><div className="mt-2 flex items-center justify-between font-mono text-[8px] uppercase text-[#6f7975]"><span>{portPanelAllPorts.length} ports · {portPanelAllPorts.filter((port) => port.operStatus.toUpperCase() === "UP").length} up · {portPanelAllPorts.filter((port) => port.operStatus.toUpperCase() === "DOWN").length} down</span><span className="flex gap-1"><button onClick={() => setPortStatus("all")}>ALL</button><button onClick={() => setPortStatus("up")}>UP</button><button onClick={() => setPortStatus("down")}>DOWN</button></span></div><div className="mt-2 max-h-80 space-y-1 overflow-y-auto">{portPanelPorts.map((port) => <div key={`${port.id}-${port.name}`} className="rounded border border-white/[.08] bg-[#0d1113] p-2"><div className="flex items-center justify-between gap-2"><span className="truncate text-[10px]">{port.name}</span><span className={port.operStatus.toUpperCase() === "UP" ? "text-[#61c98d]" : "text-[#d9646a]"}>● {port.operStatus.toUpperCase()}</span></div><div className="mt-1 font-mono text-[8px] text-[#6f7975]">ifIndex: {port.ifIndex ?? "null"} · {port.speed_display} · {port.source === "manual_fallback" ? "MANUAL PORT" : port.source.toUpperCase()}</div><button className="tool mt-2 h-7 w-full" onClick={() => { if (!connectMode) setConnectMode(true); selectPort(portPanelDevice.id, port.name) }}>{source?.deviceId === portPanelDevice.id && source.port === port.name ? "SOURCE SELECTED" : "USE PORT"}</button></div>)}</div></div>}
       </div>
-      {sidebarOpen && <aside className="max-h-[calc(100vh-150px)] overflow-y-auto rounded-lg border border-white/[.12] bg-[#111517] p-3"><div className="mb-3 font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Topology Overview</div><div className="grid grid-cols-2 gap-2">{[[workspace.devices.length, "Devices"], [workspace.links.length, "Links"], [changes.length, "Issues"], [workspace.devices.filter((d) => d.status?.toLowerCase() !== "offline").length, "Online"]].map(([v, l]) => <div key={String(l)} className="rounded border border-white/[.08] bg-[#0d1113] p-2"><div className="text-lg text-[#61c98d]">{v}</div><div className="font-mono text-[8px] uppercase text-[#6f7975]">{l}</div></div>)}</div><div className="mt-5 border-t border-white/[.08] pt-3"><div className="font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Device Types</div>{deviceTypes.map((type, i) => <div key={type} className="mt-2 flex justify-between font-mono text-[9px] text-[#9aa3a0]"><span><i className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: toneFor(type, i) }} />{type}</span><span>{workspace.devices.filter((d) => d.type === type).length}</span></div>)}</div><div className="mt-5 border-t border-white/[.08] pt-3"><div className="font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Layers / Groups</div>{deviceTypes.map((type) => <div key={type} className="mt-2 font-mono text-[9px] uppercase text-[#6f7975]">{type}</div>)}</div><div className="mt-5 border-t border-white/[.08] pt-3"><div className="font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Legends</div>{[["#61c98d", "Verified"], ["#d4a95c", "Mismatch"], ["#d9646a", "Unexpected / disconnected"], ["#9aa3a0", "Unknown / offline"]].map(([color, label]) => <div key={label} className="mt-2 flex items-center gap-2 font-mono text-[9px] text-[#9aa3a0]"><i className="h-2 w-2 rounded-full" style={{ background: color }} />{label}</div>)}</div>{selected && <div className="mt-5 border-t border-white/[.08] pt-3"><div className="text-sm font-semibold">{selected.name}</div><div className="font-mono text-[9px] text-[#6f7975]">{selected.type} · {selected.ipAddress || selected.subtitle || "No IP"}</div><button className="tool mt-3 w-full" onClick={() => { const name = window.prompt("Device name", selected.name); if (name) { const next = { ...workspace, devices: workspace.devices.map((d) => d.id === selected.id ? { ...d, name } : d) }; updateWorkspace(next); if (selected.backendId) void updateDevice(selected.backendId, { hostname: name }) } }}>Edit Device</button></div>}</aside>}
+      {sidebarOpen && <aside className="max-h-[calc(100vh-150px)] overflow-y-auto rounded-lg border border-white/[.12] bg-[#111517] p-3"><div className="mb-3 font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Topology Overview</div><div className="grid grid-cols-2 gap-2">{[[workspace.devices.length, "Devices"], [workspace.links.length, "Links"], [changes.length, "Issues"], [workspace.devices.filter((d) => d.status?.toLowerCase() !== "offline").length, "Online"]].map(([v, l]) => <div key={String(l)} className="rounded border border-white/[.08] bg-[#0d1113] p-2"><div className="text-lg text-[#61c98d]">{v}</div><div className="font-mono text-[8px] uppercase text-[#6f7975]">{l}</div></div>)}</div><div className="mt-5 border-t border-white/[.08] pt-3"><div className="font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Device Types</div>{deviceTypes.map((type, i) => <div key={type} className="mt-2 flex justify-between font-mono text-[9px] text-[#9aa3a0]"><span><i className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: toneFor(type, i) }} />{type}</span><span>{workspace.devices.filter((d) => d.type === type).length}</span></div>)}</div><div className="mt-5 border-t border-white/[.08] pt-3"><div className="font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Layers / Groups</div>{deviceTypes.map((type) => <div key={type} className="mt-2 font-mono text-[9px] uppercase text-[#6f7975]">{type}</div>)}</div><div className="mt-5 border-t border-white/[.08] pt-3"><div className="font-mono text-[10px] uppercase tracking-widest text-[#9aa3a0]">Legends</div>{[["#61c98d", "Verified"], ["#d4a95c", "Mismatch"], ["#d9646a", "Unexpected / disconnected"], ["#9aa3a0", "Unknown / offline"]].map(([color, label]) => <div key={label} className="mt-2 flex items-center gap-2 font-mono text-[9px] text-[#9aa3a0]"><i className="h-2 w-2 rounded-full" style={{ background: color }} />{label}</div>)}</div>{selected && <div className="mt-5 border-t border-white/[.08] pt-3"><div className="text-sm font-semibold">{selected.name}</div><div className="font-mono text-[9px] text-[#6f7975]">{selected.type} · {selected.ipAddress || selected.subtitle || "No IP"}</div><button className="tool mt-3 w-full" onClick={() => void editSelectedDeviceName()}>Edit Device</button></div>}</aside>}
     </section>
     {changes.length > 0 && <div className="mt-3 rounded border border-[#d4a95c55] bg-[#d4a95c0d] p-3"><div className="font-mono text-[10px] uppercase text-[#d4a95c]">Connectivity mismatch</div>{changes.slice(0, 3).map((change) => <div key={change.id} className="mt-2 flex flex-wrap items-center gap-2 text-xs"><span>{change.change_type}</span><button className="tool" onClick={() => setSelectedChange(change)}>View Difference</button><button className="tool" onClick={() => void resolveChange(change, "keep_manual")}>Keep Manual</button><button className="tool" onClick={() => void resolveChange(change, "accept_real_change")}>Accept Real Change</button></div>)}</div>}
-    {detailsOpen && selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setDetailsOpen(false)}><section className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/[.14] bg-[#111517] p-5" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between"><div><h2 className="text-lg font-semibold">Device Details</h2><div className="font-mono text-[9px] uppercase text-[#6f7975]">{selected.type}</div></div><button className="tool" onClick={() => setDetailsOpen(false)}>Close</button></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{[["Hostname", selected.name], ["Display Name", selected.name], ["IP Address", selected.ipAddress || selected.subtitle], ["MAC Address", selected.macAddress], ["Vendor", selected.vendor], ["Model", selected.model], ["Serial Number", selected.serialNumber], ["Firmware", selected.firmware], ["SNMP Version", selected.snmpVersion], ["Backend Device ID", selected.backendId], ["Monitoring Enabled", selected.monitoringEnabled], ["Last Seen", selected.lastSeen], ["Status", selected.status], ["Location", selected.location]].map(([label, value]) => <div key={String(label)} className="rounded border border-white/[.08] bg-[#0d1113] p-2"><div className="font-mono text-[8px] uppercase text-[#6f7975]">{label}</div><div className="mt-1 text-xs">{value == null || value === "" ? "N/A" : String(value)}</div></div>)}</div><div className="mt-5 border-t border-white/[.08] pt-4"><div className="font-mono text-[10px] uppercase text-[#9aa3a0]">Interfaces</div><div className="mt-2 space-y-1">{(interfaces[selected.id] ?? []).map((item) => <div key={item.id} className="flex flex-wrap justify-between gap-2 rounded border border-white/[.06] p-2 font-mono text-[9px]"><span>{item.name} · ifIndex {item.if_index}</span><span className={item.status === "UP" ? "text-[#61c98d]" : "text-[#d9646a]"}>{item.admin_status} / {item.status} · {item.speed_display || "N/A"}</span></div>)}{!(interfaces[selected.id]?.length) && <div className="text-xs text-[#6f7975]">Interfaces unavailable</div>}</div></div><div className="mt-4 flex gap-2"><button className="tool" onClick={() => { const name = window.prompt("Hostname", selected.name); if (name?.trim()) { updateWorkspace({ ...workspace, devices: workspace.devices.map((d) => d.id === selected.id ? { ...d, name: name.trim() } : d) }); if (selected.backendId) void updateDevice(selected.backendId, { hostname: name.trim() }) } }}>Edit Device</button><button className="tool" onClick={removeSelected}>Remove From Topology</button></div></section></div>}
+        {detailsOpen && selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setDetailsOpen(false)}><section className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/[.14] bg-[#111517] p-5" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between"><div><h2 className="text-lg font-semibold">Device Details</h2><div className="font-mono text-[9px] uppercase text-[#6f7975]">{selected.type}</div></div><button className="tool" onClick={() => setDetailsOpen(false)}>Close</button></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{[["Hostname", selected.name], ["Display Name", selected.name], ["IP Address", selected.ipAddress || selected.subtitle], ["MAC Address", selected.macAddress], ["Vendor", selected.vendor], ["Model", selected.model], ["Serial Number", selected.serialNumber], ["Firmware", selected.firmware], ["SNMP Version", selected.snmpVersion], ["Backend Device ID", selected.backendId], ["Monitoring Enabled", selected.monitoringEnabled], ["Last Seen", selected.lastSeen], ["Status", selected.status], ["Location", selected.location]].map(([label, value]) => <div key={String(label)} className="rounded border border-white/[.08] bg-[#0d1113] p-2"><div className="font-mono text-[8px] uppercase text-[#6f7975]">{label}</div><div className="mt-1 text-xs">{value == null || value === "" ? "N/A" : String(value)}</div></div>)}</div><div className="mt-5 border-t border-white/[.08] pt-4"><div className="font-mono text-[10px] uppercase text-[#9aa3a0]">Interfaces</div><div className="mt-2 space-y-1">{(interfaces[selected.id] ?? []).map((item) => <div key={item.id} className="flex flex-wrap justify-between gap-2 rounded border border-white/[.06] p-2 font-mono text-[9px]"><span>{item.name} · ifIndex {item.if_index}</span><span className={item.status === "UP" ? "text-[#61c98d]" : "text-[#d9646a]"}>{item.admin_status} / {item.status} · {item.speed_display || "N/A"}</span></div>)}{!(interfaces[selected.id]?.length) && <div className="text-xs text-[#6f7975]">Interfaces unavailable</div>}</div></div><div className="mt-4 flex gap-2"><button className="tool" onClick={() => void editSelectedHostname()}>Edit Device</button><button className="tool" onClick={removeSelected}>Remove From Topology</button></div></section></div>}
     {selectedChange && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4" onClick={() => setSelectedChange(null)}><section className="w-full max-w-lg rounded-lg border border-[#d4a95c66] bg-[#111517] p-5" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between"><div><h2 className="text-lg font-semibold">Difference</h2><div className="font-mono text-[9px] uppercase text-[#d4a95c]">{issueStatus(selectedChange)}</div></div><button className="tool" onClick={() => setSelectedChange(null)}>Close</button></div><div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded border border-white/[.08] bg-[#0d1113] p-3"><div className="font-mono text-[9px] uppercase text-[#9aa3a0]">Manual Connection</div><div className="mt-2 text-xs">{evidenceValue(selectedChange.expected, ["source_device", "from_device", "device"])} : {evidenceValue(selectedChange.expected, ["source_port", "from_port", "port"])}<br />→<br />{evidenceValue(selectedChange.expected, ["target_device", "to_device", "remote_device"])} : {evidenceValue(selectedChange.expected, ["target_port", "to_port", "remote_port"])}</div></div><div className="rounded border border-white/[.08] bg-[#0d1113] p-3"><div className="font-mono text-[9px] uppercase text-[#9aa3a0]">Actual Physical Connection</div><div className="mt-2 text-xs">{evidenceValue(selectedChange.observed, ["source_device", "from_device", "device"])} : {evidenceValue(selectedChange.observed, ["source_port", "from_port", "port"])}<br />→<br />{evidenceValue(selectedChange.observed, ["target_device", "to_device", "remote_device"])} : {evidenceValue(selectedChange.observed, ["target_port", "to_port", "remote_port"])}</div></div></div><div className="mt-3 space-y-1 rounded border border-white/[.08] p-3 font-mono text-[10px]">Status: {issueStatus(selectedChange)}<br />Evidence: {evidenceValue(selectedChange.observed, ["evidenceSource", "evidence_source", "source"])}<br />Confidence: {evidenceValue(selectedChange.observed, ["confidence"])}<br />Last verified: {selectedChange.detected_at || "N/A"}{issueStatus(selectedChange) === "UNKNOWN" && <><br /><span className="text-[#9aa3a0]">Insufficient physical evidence</span></>}</div><div className="mt-4 flex justify-end gap-2"><button className="tool" onClick={() => void resolveChange(selectedChange, "keep_manual")}>Keep Manual</button><button className="tool" onClick={() => void resolveChange(selectedChange, "accept_real_change")}>Accept Real Change</button></div></section></div>}
     <footer className="mt-3 flex min-h-8 flex-wrap items-center gap-5 border-t border-white/[.1] pt-2 font-mono text-[9px] uppercase text-[#6f7975]"><span>Selected: <b className="text-[#e5e7e7]">{selected?.name || (selectedLinkId ? "Link" : "None")}</b></span><span>Devices: {workspace.devices.length}</span><span>Links: {workspace.links.length}</span><span>Last Saved: {saving ? "Saving..." : lastSaved || "Not saved"}</span><span className="ml-auto">Shortcuts: / F L</span></footer>
       <style>{`.tool{height:32px;border:1px solid rgba(170,190,180,.14);background:#111517;color:#e5e7e7;border-radius:6px;padding:0 10px;font:10px ui-monospace,monospace;text-transform:uppercase}.tool:hover{border-color:#3b82f6;color:#fff}.icon-tool{height:32px;width:32px;border:1px solid transparent;background:transparent;color:#9aa3a0;border-radius:5px;font:16px ui-monospace,monospace}.icon-tool[title="Connect"]{width:88px;font-size:9px}.icon-tool:hover,.icon-tool.active{background:#172522;border-color:#3b82f6;color:#61c98d}`}</style>

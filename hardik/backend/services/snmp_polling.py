@@ -116,6 +116,23 @@ DEFAULT_INTERVALS = {
     "health": 60,
 }
 
+_POLL_REASON_FALLBACK = "Module not supported"
+_POLL_REASON_MAX_LENGTH = 500
+_SENSITIVE_REASON_MARKERS = (
+    "traceback", "password", "passphrase", "community", "credential",
+    "secret", "authkey", "privkey", "private key",
+)
+
+
+def _sanitize_poll_reason(reason: Any) -> str:
+    """Keep controlled collector diagnostics without persisting secrets/details."""
+    if not isinstance(reason, str):
+        return _POLL_REASON_FALLBACK
+    value = " ".join(reason.strip().split())
+    if not value or any(marker in value.lower() for marker in _SENSITIVE_REASON_MARKERS):
+        return _POLL_REASON_FALLBACK
+    return value[:_POLL_REASON_MAX_LENGTH]
+
 # Allowed interval options for UI
 ALLOWED_INTERVALS = [15, 30, 60, 120, 300, 600]
 
@@ -269,13 +286,15 @@ class SNMPPoller:
             self.db = SessionLocal()
             self._notification_intents = [] if not commit else None
             await self._persist_results(
-                job, data, supported, duration_ms, commit=commit
+                job, data, supported, duration_ms, commit=commit,
+                reason=result.get("reason"),
             )
 
             return {
                 "success": True,
                 "supported": supported,
                 "data": data,
+                "reason": result.get("reason"),
                 "duration_ms": duration_ms,
                 "_persistence_pending": not commit,
                 "_notification_intents": self._notification_intents or [],
@@ -299,6 +318,7 @@ class SNMPPoller:
         supported: bool,
         duration_ms: float | None = None,
         commit: bool = True,
+        reason: str | None = None,
     ) -> None:
         """Persist poll results to latest-value tables and history.
 
@@ -366,7 +386,7 @@ class SNMPPoller:
                     "data": persisted_data,
                     "missing": existing.get("missing", []),
                     "warnings": existing.get("warnings", []),
-                    "reason": None if supported else existing.get("reason") or "Module not supported",
+                    "reason": None if supported else _sanitize_poll_reason(reason),
                     "collection_status": "SUCCESS" if supported else "FAILED",
                     "last_good_timestamp": now.isoformat() if supported else existing.get("last_good_timestamp") or existing.get("timestamp"),
                 }
@@ -387,7 +407,7 @@ class SNMPPoller:
             self._evaluate_alerts(device_id, module, data)
 
             # Always persist to history tables
-            await self._persist_history(device_id, module, data, supported, now, duration_ms)
+            await self._persist_history(device_id, module, data, supported, now, duration_ms, reason)
 
             if commit:
                 self.db.commit()
@@ -556,6 +576,10 @@ class SNMPPoller:
         swap_total = data.get("swap_total_bytes")
         swap_free = data.get("swap_free_bytes")
         util = data.get("utilization_percent")
+        memory_source = data.get("memory_source")
+        memory_semantic = data.get("memory_semantic")
+        memory_source_status = data.get("memory_source_status")
+        memory_source_error = data.get("memory_source_error")
 
         latest = self.db.query(LatestMemory).filter(LatestMemory.device_id == device_id).first()
         if not latest:
@@ -569,6 +593,10 @@ class SNMPPoller:
         latest.swap_total = swap_total
         latest.swap_free = swap_free
         latest.utilization_percent = util
+        latest.memory_source = memory_source
+        latest.memory_semantic = memory_semantic
+        latest.memory_source_status = memory_source_status
+        latest.memory_source_error = memory_source_error
         latest.polled_at = now
 
         if total is not None or used is not None:
@@ -577,6 +605,10 @@ class SNMPPoller:
                 total_bytes=total,
                 used_bytes=used,
                 utilization_percent=util,
+                memory_source=memory_source,
+                memory_semantic=memory_semantic,
+                memory_source_status=memory_source_status,
+                memory_source_error=memory_source_error,
                 created_at=now,
             )
             self.db.add(hist)
@@ -830,6 +862,7 @@ class SNMPPoller:
         supported: bool,
         now: datetime,
         duration_ms: float | None = None,
+        reason: str | None = None,
     ) -> None:
         """Persist to polling_history for audit trail."""
         status = PollStatus.SUCCESS.value if supported else PollStatus.NOT_SUPPORTED.value
@@ -838,7 +871,7 @@ class SNMPPoller:
             collector=module,
             status=status,
             duration_ms=duration_ms if duration_ms is not None else 0,
-            error=None if supported else "Module not supported",
+            error=None if supported else _sanitize_poll_reason(reason),
             created_at=now,
         ))
 

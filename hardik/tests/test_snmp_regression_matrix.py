@@ -6,6 +6,7 @@ import pytest
 from backend.snmp import client as client_module
 from backend.snmp.client import SNMPClient, _run_in_thread
 from backend.snmp.collector import SNMPService
+from backend.snmp import collector as collector_module
 from backend.snmp.credentials import SNMPCredentials
 
 
@@ -86,6 +87,42 @@ def test_unsupported_domain_returns_stable_unsupported_response():
     service = SNMPService(SNMPCredentials(version="v2c", community="public"))
     result = service.collect_domain("192.0.2.10", "not-a-domain")
     assert result == {"supported": False, "reason": "Unknown domain: 'not-a-domain'"}
+
+
+def test_collect_domain_resolves_canonical_memory_only_for_memory(monkeypatch):
+    from backend.snmp.memory_resolver import CanonicalMemoryResolution
+
+    calls = []
+
+    def resolver(*args, **kwargs):
+        calls.append(kwargs)
+        return CanonicalMemoryResolution(eligible=True, status="unavailable", error_code="timeout")
+
+    monkeypatch.setattr(collector_module, "resolve_canonical_linux_memory", resolver)
+    monkeypatch.setattr("backend.snmp.collector.SNMPClient", lambda credentials, *args, **kwargs: _EmptyAgent(credentials))
+    service = SNMPService(SNMPCredentials(version="v2c", community="public"))
+
+    service.collect_domain("192.0.2.10", "cpu")
+    assert calls == []
+    result = service.collect_domain("192.0.2.10", "memory")
+    assert len(calls) == 1
+    assert result["collector"] == "memory"
+
+
+def test_memory_domain_fallback_remains_supported_without_canonical_result(monkeypatch):
+    from backend.snmp.memory_resolver import CanonicalMemoryResolution
+
+    monkeypatch.setattr(
+        collector_module,
+        "resolve_canonical_linux_memory",
+        lambda *args, **kwargs: CanonicalMemoryResolution(eligible=True, status="unavailable", error_code="timeout"),
+    )
+    monkeypatch.setattr("backend.snmp.collector.SNMPClient", lambda credentials, *args, **kwargs: _EmptyAgent(credentials))
+    service = SNMPService(SNMPCredentials(version="v2c", community="public"))
+    result = service.collect_domain("192.0.2.10", "memory")
+    assert result["collector"] == "memory"
+    assert result["supported"] is False
+    assert result["reason"].startswith("No memory OID responded")
 
 
 def test_full_poll_runs_full_collection_orchestration_without_network(monkeypatch):

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams } from "react-router"
 import plugUltraAsset from "../assets/plug-ultra.png"
 import {
@@ -8,6 +8,7 @@ import {
   updateManualTopologySnapshot,
   type SNMPInterfaceStats,
 } from "../lib/api"
+import { confirmDanger } from "../lib/swal"
 
 type Port = {
   id: number
@@ -49,7 +50,7 @@ type Link = {
   fromIfIndex?: number | null
   toIfIndex?: number | null
 }
-type Workspace = { devices: Device[] links: Link[] }
+type Workspace = { devices: Device[]; links: Link[] }
 
 const STORAGE_KEY = "nms.manual-topology.workspace.v2"
 
@@ -255,6 +256,8 @@ export default function DevicePortMap() {
   const [retryToken, setRetryToken] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [panelZoom, setPanelZoom] = useState(100)
+  const removingLinkIdRef = useRef<string | null>(null)
+  const removalContextRef = useRef({ workspace, selectedPort })
 
   const device = workspace.devices.find((item) => item.id === deviceId)
   const linksForDevice = useMemo(
@@ -276,6 +279,10 @@ export default function DevicePortMap() {
       port: link.from === deviceId ? link.toPort : link.fromPort,
     }
   }
+
+  useEffect(() => {
+    removalContextRef.current = { workspace, selectedPort }
+  }, [selectedPort, workspace])
 
   useEffect(() => {
     let active = true
@@ -387,8 +394,8 @@ export default function DevicePortMap() {
   const selectedPeer = selectedLink ? peerForLink(selectedLink) : null
   const used = ports.filter((port) => linkForPort(port.name)).length
 
-  const persistLinks = async (links: Link[]) => {
-    const next = { ...workspace, links }
+  const persistLinks = async (links: Link[], baseWorkspace = workspace) => {
+    const next = { ...baseWorkspace, links }
     setWorkspace(next)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
     try {
@@ -864,16 +871,41 @@ export default function DevicePortMap() {
                   <button
                     className="tool flex-1 border-[#d9646a66] text-[#d9646a]"
                     onClick={() => {
-                      if (
-                        window.confirm(
-                          `Remove manual connection ${device.name} / ${selected.name} to ${selectedPeer?.device?.name || "peer"}?`,
-                        )
-                      )
-                        void persistLinks(
-                          workspace.links.filter(
-                            (link) => link.id !== selectedLink.id,
-                          ),
-                        )
+                      if (removingLinkIdRef.current !== null) return
+                      const link = selectedLink
+                      const linkId = link.id
+                      removingLinkIdRef.current = linkId
+                      void (async () => {
+                        try {
+                          const confirmed = await confirmDanger({
+                            title: "Remove Topology Connection?",
+                            text: "Are you sure you want to remove this manual topology connection?",
+                            confirmText: "Remove Connection",
+                          })
+                          const currentContext = removalContextRef.current
+                          const currentLink = currentContext.workspace.links.find(
+                            (candidate) => candidate.id === linkId,
+                          )
+                          if (
+                            !confirmed ||
+                            currentContext.selectedPort !== selected.name ||
+                            !currentLink ||
+                            currentLink.from !== link.from ||
+                            currentLink.to !== link.to ||
+                            currentLink.fromPort !== link.fromPort ||
+                            currentLink.toPort !== link.toPort
+                          ) return
+                          await persistLinks(
+                            currentContext.workspace.links.filter(
+                              (candidate) => candidate.id !== linkId,
+                            ),
+                          )
+                        } finally {
+                          if (removingLinkIdRef.current === linkId) {
+                            removingLinkIdRef.current = null
+                          }
+                        }
+                      })()
                     }}
                   >
                     DISCONNECT

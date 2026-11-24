@@ -468,7 +468,7 @@ export default function DeviceMonitoring() {
                   {liveHistory.slice().reverse().map((entry, i) => (
                     <div key={i} className="flex items-center justify-between rounded p-2" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.08)' }}>
                       <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.status === 'up' ? '#00ff88' : entry.status === 'down' ? '#ff3366' : '#ffaa00' }} />
+                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: entry.status === 'down' ? '#ff3366' : '#ffaa00' }} />
                         <span className="font-mono text-xs" style={{ color: 'var(--t-text, #c8d8ee)' }}>{liveStatusLabel(entry.status)}</span>
                       </div>
                       <span className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>{entry.rtt_ms !== null ? formatLatency(entry.rtt_ms) : 'timeout'}</span>
@@ -482,7 +482,7 @@ export default function DeviceMonitoring() {
             {/* Status Change History */}
             <GlassCard className="p-3 md:p-4">
               <div className="font-display font-bold text-sm tracking-wider neon-cyan mb-2">STATUS CHANGE HISTORY</div>
-              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · last 24 hours · newest 100 verified online/offline transitions · {realStatusHistory.length} recorded changes</div>
+              <div className="font-mono text-xs mb-3" style={{ color: 'var(--t-muted, #8899bb)' }}>{device.ip_address} · last 24 hours · newest 100 verified online/offline transitions from database · {realStatusHistory.length} recorded changes</div>
               {realStatusHistory.length === 0 ? (
                 <div className="font-mono text-xs" style={{ color: 'var(--t-muted, #8899bb)' }}>No up/down changes recorded yet.</div>
               ) : (

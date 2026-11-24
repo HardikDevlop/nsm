@@ -15,7 +15,7 @@ export default function MacPortTopology2D({ groups }: { groups: PortGroup[] }) {
   const [selectedPort, setSelectedPort] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
   const [position, setPosition] = useState({ x: 0, y: 0 })
-  const drag = useRef<{ x: number y: number } | null>(null)
+  const drag = useRef<{ x: number; y: number } | null>(null)
   const visibleGroups = useMemo(
     () =>
       groups.filter(

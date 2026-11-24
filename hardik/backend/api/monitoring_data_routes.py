@@ -157,6 +157,10 @@ def get_monitoring_data(
                 "swap_total": mem.swap_total,
                 "swap_free": mem.swap_free,
                 "utilization_percent": mem.utilization_percent,
+                "memory_source": mem.memory_source,
+                "memory_semantic": mem.memory_semantic,
+                "memory_source_status": mem.memory_source_status,
+                "memory_source_error": mem.memory_source_error,
                 "polled_at": mem.polled_at.isoformat() if mem.polled_at else None,
             }
         
@@ -180,6 +184,10 @@ def get_monitoring_data(
                     "utilization_percent": h.utilization_percent,
                     "used_bytes": h.used_bytes,
                     "total_bytes": h.total_bytes,
+                    "memory_source": h.memory_source,
+                    "memory_semantic": h.memory_semantic,
+                    "memory_source_status": h.memory_source_status,
+                    "memory_source_error": h.memory_source_error,
                 }
                 for h in history
             ]

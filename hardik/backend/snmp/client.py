@@ -49,6 +49,45 @@ _worker_engine: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
 # Prevents runaway walks on large ARP/MAC tables.
 _MAX_WALK_ROWS = 2000
 _CANCELLATION_MARGIN_SECONDS = 0.05
+_DISPATCHER_CLEANUP_TIMEOUT_SECONDS = 1.0
+
+
+def _drain_cancelled_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Cancel and drain tasks before closing a worker-owned event loop."""
+    current = asyncio.current_task(loop=loop)
+    pending = {
+        task for task in asyncio.all_tasks(loop)
+        if task is not current and not task.done()
+    }
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+
+    async def drain() -> None:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    try:
+        loop.run_until_complete(
+            asyncio.wait_for(drain(), timeout=_DISPATCHER_CLEANUP_TIMEOUT_SECONDS)
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "SNMP worker task cancellation exceeded %.1fs; closing worker loop with pending task(s)",
+            _DISPATCHER_CLEANUP_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        logger.exception("Failed to drain SNMP worker task cancellation")
+
+
+def _close_worker_runtime(index: int, loop: asyncio.AbstractEventLoop, engine: Any) -> None:
+    try:
+        engine.transportDispatcher.closeDispatcher()
+    except Exception:
+        logger.exception("Failed to close SNMP worker engine %d", index)
+    if not loop.is_closed():
+        _drain_cancelled_tasks(loop)
+        loop.close()
 
 
 class _SNMPWorker:
@@ -73,14 +112,7 @@ class _SNMPWorker:
             return new_loop, new_engine
 
         def close_runtime(current_loop: Any, current_engine: Any) -> None:
-            try:
-                current_engine.transportDispatcher.closeDispatcher()
-            except Exception:
-                logger.exception("Failed to close SNMP worker engine %d", self.index)
-            if not current_loop.is_closed():
-                for task in asyncio.all_tasks(current_loop):
-                    task.cancel()
-                current_loop.close()
+            _close_worker_runtime(self.index, current_loop, current_engine)
 
         loop, engine = create_runtime()
         logger.debug("SNMP_WORKER_STARTED worker=%d", self.index)

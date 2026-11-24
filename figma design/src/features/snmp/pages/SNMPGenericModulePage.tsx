@@ -4,6 +4,7 @@ import SNMPCollectorDataCard from '../components/SNMPCollectorDataCard'
 import { SNMPModuleShell } from '../modules/SNMPModuleShell'
 import { getModuleConfig } from '../modules/snmpModuleRegistry'
 import { useModuleData, useMonitoringData } from '../modules/useSNMPModules'
+import { useLatestMemory } from '../hooks/useSnmpQueries'
 
 const TITLE: Record<string, string> = {
   mac_table: 'MAC Table',
@@ -35,7 +36,9 @@ export default function SNMPGenericModulePage() {
   // snapshot intentionally contains only persisted metrics, not live FDB/ARP.
   const isMacTable = moduleName === 'mac_table'
   const isInventory = moduleName === 'inventory'
-  const { data: monitoringData, isLoading: isMonitoringLoading, error: monitoringError } = useMonitoringData(id, !isMacTable && !isInventory)
+  const isMemory = moduleName === 'memory'
+  const { data: monitoringData, isLoading: isMonitoringLoading, error: monitoringError } = useMonitoringData(id, !isMacTable && !isMemory)
+  const { data: latestMemory, isLoading: isLatestMemoryLoading, error: latestMemoryError } = useLatestMemory(isMemory ? id : null)
   const { data: macTableData, isLoading: isMacTableLoading, isFetching: isMacTableFetching, error: macTableError, refetch: refetchMacTable } = useModuleData(id, isMacTable ? 'mac_table' : null)
   const { data: inventoryData, isLoading: isInventoryLoading, error: inventoryError } = useModuleData(id, isInventory ? 'inventory' : null)
   const isArp = moduleName === 'arp'
@@ -49,6 +52,30 @@ export default function SNMPGenericModulePage() {
     ? macTableData
     : isInventory
     ? inventoryData
+    : isMemory
+    ? latestMemory?.supported
+      ? {
+          collector: 'memory',
+          supported: true,
+          timestamp: latestMemory.last_poll,
+          data: {
+            total_bytes: latestMemory.total_bytes,
+            used_bytes: latestMemory.used_bytes,
+            free_bytes: latestMemory.free_bytes,
+            cached_bytes: latestMemory.cached_bytes,
+            buffer_bytes: latestMemory.buffer_bytes,
+            swap_total_bytes: latestMemory.swap_total,
+            swap_free_bytes: latestMemory.swap_free,
+            utilization_percent: latestMemory.utilization_percent,
+            memory_source: latestMemory.memory_source,
+            memory_semantic: latestMemory.memory_semantic,
+            memory_source_status: latestMemory.memory_source_status,
+            memory_source_error: latestMemory.memory_source_error,
+          },
+        }
+      : latestMemory
+      ? { collector: 'memory', supported: false, reason: 'Memory data is unavailable.' }
+      : null
     : isArp
     ? arpTableData
     : dbModule
@@ -68,8 +95,8 @@ export default function SNMPGenericModulePage() {
     collectors[0]
   const supported = collector?.supported === true
   const title = titleize(config?.label || moduleName)
-  const isLoading = isMacTable ? isMacTableLoading : isInventory ? isInventoryLoading : isArp ? isArpTableFetching && !arpTableData : isMonitoringLoading
-  const error = isMacTable ? macTableError : isInventory ? inventoryError : isArp ? null : monitoringError
+  const isLoading = isMacTable ? isMacTableLoading : isInventory ? isInventoryLoading : isMemory ? isLatestMemoryLoading : isArp ? isArpTableFetching && !arpTableData : isMonitoringLoading
+  const error = isMacTable ? macTableError : isInventory ? inventoryError : isMemory ? latestMemoryError : isArp ? null : monitoringError
 
   return (
     <SNMPModuleShell

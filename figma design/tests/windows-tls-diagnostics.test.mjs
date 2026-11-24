@@ -7,7 +7,7 @@ const page = fs.readFileSync(new URL("../src/pages/WindowsDevices.tsx", import.m
 
 test("TLS diagnostics are permission gated and explicitly triggered", () => {
   assert.match(component, /hasPermission\("devices:update"\)/)
-  assert.match(component, /runWindowsTLSDiagnostic\(deviceId\)/)
+  assert.match(component, /runWindowsTLSDiagnostic\(\s*deviceId\s*,\s*siteId\s*\)/)
   assert.match(component, /onClick=\{\(\) => void run\(\)\}/)
   assert.match(component, /Not tested/)
   assert.match(component, /setRunning\(true\)/)

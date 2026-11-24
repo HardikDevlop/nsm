@@ -202,6 +202,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(migration_id="20261103_0073_windows_process_snapshots", description="Persist Windows process snapshots and items"),
     Migration(migration_id="20261103_0074_windows_process_session_metadata", description="Add nullable session and classification metadata to Windows process items"),
     Migration(migration_id="20261103_0075_windows_helper_authentication", description="Create device-bound Windows helper credentials and replay records"),
+    Migration(migration_id="20261123_0076_snmp_memory_source_metadata", description="Add nullable source metadata to SNMP memory samples"),
 )
 
 
@@ -1548,6 +1549,18 @@ def run_migrations(engine: Engine) -> list[str]:
                     connection.execute(text(f"ALTER TABLE windows_process_snapshot_items ADD COLUMN IF NOT EXISTS {column} {definition}"))
         elif migration.migration_id == "20261103_0075_windows_helper_authentication":
             _ensure_windows_credentials_table(engine)
+        elif migration.migration_id == "20261123_0076_snmp_memory_source_metadata":
+            with engine.begin() as connection:
+                for table in ("latest_memory", "memory_statistics"):
+                    for column, sql_type in (
+                        ("memory_source", "VARCHAR(40)"),
+                        ("memory_semantic", "VARCHAR(100)"),
+                        ("memory_source_status", "VARCHAR(20)"),
+                        ("memory_source_error", "TEXT"),
+                    ):
+                        connection.execute(text(
+                            f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "{column}" {sql_type}'
+                        ))
         elif migration.migration_id == "20261028_0071_linux_threshold_configs":
             with engine.begin() as connection:
                 connection.execute(text("""CREATE TABLE IF NOT EXISTS linux_server_threshold_configs (

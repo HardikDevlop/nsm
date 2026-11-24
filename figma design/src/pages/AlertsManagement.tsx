@@ -8,9 +8,10 @@ import { useTablePagination } from '../hooks/useTablePagination'
 import { toast, confirmDanger } from '../lib/swal'
 import {
   listAlerts, createAlert, updateAlert, deleteAlert, acknowledgeAlert, resolveAlert,
-  listDeviceOptions,
+  listDeviceOptions, listLinuxServers,
   type AlertRecord,
   type DeviceOptionRecord,
+  type LinuxServerRecord,
 } from '../lib/api'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -46,6 +47,7 @@ export default function AlertsManagement() {
   const location = useLocation()
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
   const [devices, setDevices] = useState<DeviceOptionRecord[]>([])
+  const [linuxServers, setLinuxServers] = useState<LinuxServerRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [detailsAlert, setDetailsAlert] = useState<AlertRecord | null>(null)
@@ -63,12 +65,14 @@ export default function AlertsManagement() {
   const load = useCallback(async () => {
     try {
       const filter = statusFilter === 'all' ? undefined : statusFilter
-      const [alertsData, devicesData] = await Promise.all([
+      const [alertsData, devicesData, linuxServersData] = await Promise.all([
         listAlerts(filter),
-        listDeviceOptions()
+        listDeviceOptions(),
+        listLinuxServers(),
       ])
       setAlerts(alertsData)
       setDevices(devicesData)
+      setLinuxServers(linuxServersData)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load alerts')
     }
@@ -176,6 +180,15 @@ export default function AlertsManagement() {
     a.severity.toLowerCase().includes(normalizedSearch)
   )
   const deviceMap = new Map(devices.map(device => [device.id, device]))
+  const linuxServerMap = new Map(linuxServers.map(server => [server.id, server]))
+  const alertTarget = (alert: AlertRecord) => {
+    const device = alert.device_id != null ? deviceMap.get(alert.device_id) : undefined
+    const server = alert.linux_server_id != null ? linuxServerMap.get(alert.linux_server_id) : undefined
+    return {
+      label: alert.hostname ?? device?.hostname ?? server?.hostname,
+      ip: alert.ip_address ?? alert.ip ?? device?.ip_address ?? server?.ip_address,
+    }
+  }
   const detailDevice = detailsAlert?.device_id != null ? deviceMap.get(detailsAlert.device_id) : undefined
   const pagination = useTablePagination(filtered)
 
@@ -242,6 +255,7 @@ export default function AlertsManagement() {
             <tbody>
               {pagination.paginatedItems.map(alert => {
                 const device = alert.device_id != null ? deviceMap.get(alert.device_id) : undefined
+                const target = alertTarget(alert)
                 return (
                   <tr key={alert.id} style={{ borderBottom: '1px solid var(--t-border-alpha)' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,212,255,0.03)' }}
@@ -259,7 +273,8 @@ export default function AlertsManagement() {
                       )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--t-muted)' }}>
-                      {device ? `${device.hostname} (${device.ip_address})` : '—'}
+                      {target.label || 'Unknown device'}<br />
+                      <span style={{ color: 'var(--t-text)' }}>{target.ip || 'IP unavailable'}</span>
                     </td>
                     <td className="px-4 py-3">
                       <span className="px-2 py-1 rounded text-xs font-mono"

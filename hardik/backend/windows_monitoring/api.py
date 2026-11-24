@@ -1675,6 +1675,19 @@ def fetch_metric(device_id: int, module: str, db: Session = Depends(get_db), use
                 "usage_percent": round((total - free) * 100 / total, 2) if total else None,
                 "counters": {field: memory_counter_status(field) for field in counter_names},
             }
+            available_counter = memory_counter_status("available_mbytes")
+            available_mbytes = available_counter.get("value")
+            effective_status = "ok" if total and available_counter.get("status") == "ok" and isinstance(available_mbytes, (int, float)) and 0 <= available_mbytes * 1024 * 1024 <= total else (available_counter.get("status") if available_counter.get("status") != "ok" else "invalid")
+            effective_available = available_mbytes * 1024 * 1024 if effective_status == "ok" else None
+            value["effective_memory"] = {
+                "total_bytes": total,
+                "available_bytes": effective_available,
+                "used_bytes": total - effective_available if effective_available is not None else None,
+                "usage_percent": ((total - effective_available) * 100 / total) if effective_available is not None else None,
+                "status": effective_status,
+                "source": "Win32_PerfFormattedData_PerfOS_Memory.AvailableMBytes",
+                "semantic": "effective_available_memory",
+            }
         elif module == "cpu":
             rows = client.processor_performance(); logger.info("windows_metric_fetch stage=cim_query device_id=%s module=%s class=Win32_PerfFormattedData_PerfOS_Processor rows=%s", device_id, module, len(rows))
             if not rows: raise CIMError("parsing", "Windows CIM returned no processor data")

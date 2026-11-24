@@ -138,6 +138,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Track the frontend SweetAlert helper without unignoring other lib/ contents.
+!figma design/src/
+!figma design/src/lib/
+figma design/src/lib/*
+!figma design/src/lib/swal.ts
+
 # PyInstaller
 *.manifest
 *.spec

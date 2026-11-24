@@ -21,7 +21,7 @@ import {
   type RemoteAccessTestResponse,
   type RemoteAccessCredentialRecord,
 } from "../lib/api"
-import { toast } from "../lib/swal"
+import { confirmDanger, toast } from "../lib/swal"
 
 const inputStyle: React.CSSProperties = {
   background: "var(--t-border-light, rgba(255,255,255,.04))",
@@ -74,6 +74,7 @@ export default function RemoteAccess() {
   const [testError, setTestError] = useState("")
   const [hostKeyActionBusy, setHostKeyActionBusy] = useState(false)
   const [hostKeyDialog, setHostKeyDialog] = useState<"unknown" | "mismatch" | null>(null)
+  const hostKeyActionInFlightRef = useRef(false)
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([])
   const [connectingRequest, setConnectingRequest] = useState(false)
   const [activeSessionUuid, setActiveSessionUuid] = useState<string | null>(
@@ -217,6 +218,24 @@ export default function RemoteAccess() {
   )
   const selectedCredential: RemoteAccessCredentialRecord | undefined = undefined
   const host = selected?.ip_address ?? ""
+  const hostKeyContextRef = useRef({
+    deviceId,
+    protocol,
+    port,
+    selectedHostname: selected?.hostname ?? "",
+    host,
+    testResult,
+    hostKeyDialog,
+  })
+  hostKeyContextRef.current = {
+    deviceId,
+    protocol,
+    port,
+    selectedHostname: selected?.hostname ?? "",
+    host,
+    testResult,
+    hostKeyDialog,
+  }
   const saveNewDevice = async () => {
     const hostname = newDevice.hostname.trim()
     const ipAddress = newDevice.ip_address.trim()
@@ -341,17 +360,49 @@ export default function RemoteAccess() {
   }
   const updateChangedHostKey = async () => {
     const item = testResult
-    if (!item?.host_key_id || !window.confirm("Replace the trusted SSH host key with the received fingerprint?")) return
+    if (!item?.host_key_id || hostKeyActionInFlightRef.current) return
+    const originalDeviceId = deviceId
+    const originalProtocol = protocol
+    const originalPort = port
+    const originalHostname = selected?.hostname ?? ""
+    const originalHost = host
+    const originalHostKeyId = item.host_key_id
+    const originalStoredFingerprint = item.stored_fingerprint ?? ""
+    const originalReceivedFingerprint = item.received_fingerprint ?? ""
+    hostKeyActionInFlightRef.current = true
     setHostKeyActionBusy(true)
     try {
-      await revokeSSHHostKey(item.host_key_id)
-      await scanSSHHostKey(Number(deviceId), port)
-      await trustSSHHostKey(item.host_key_id)
+      const confirmed = await confirmDanger({
+        title: "Replace Trusted SSH Host Key?",
+        text: "The SSH host key has changed. Verify the new fingerprint with a trusted administrator before replacing the stored key. An unexpected change could indicate a security risk.",
+        confirmText: "Replace Trusted Key",
+      })
+      const current = hostKeyContextRef.current
+      const currentItem = current.testResult
+      if (
+        !confirmed ||
+        current.deviceId !== originalDeviceId ||
+        current.protocol !== originalProtocol ||
+        current.port !== originalPort ||
+        current.selectedHostname !== originalHostname ||
+        current.host !== originalHost ||
+        current.hostKeyDialog !== "mismatch" ||
+        !currentItem ||
+        currentItem.host_key_id !== originalHostKeyId ||
+        (currentItem.stored_fingerprint ?? "") !== originalStoredFingerprint ||
+        (currentItem.received_fingerprint ?? "") !== originalReceivedFingerprint
+      ) return
+      await revokeSSHHostKey(originalHostKeyId)
+      await scanSSHHostKey(Number(originalDeviceId), originalPort)
+      await trustSSHHostKey(originalHostKeyId)
       toast.success("SSH host key updated. Retesting connection…")
       await retryAfterHostKeyAction()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unable to update SSH host key")
-    } finally { setHostKeyActionBusy(false) }
+    } finally {
+      hostKeyActionInFlightRef.current = false
+      setHostKeyActionBusy(false)
+    }
   }
   const connectTerminal = async () => {
     // A host-key trust/update action retries validation asynchronously. Do not

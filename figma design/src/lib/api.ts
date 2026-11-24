@@ -464,7 +464,7 @@ export interface FlowRecordsResponse {
   to: string
 }
 
-export type FlowProtocol = "sflow" | "ipfix"
+export type FlowProtocol = 'sflow' | 'ipfix'
 
 export interface FlowAnalyticsFilters {
   hours: number
@@ -475,10 +475,7 @@ export interface FlowAnalyticsFilters {
   page_size?: number
 }
 
-export async function getFlowAnalytics(
-  dimension: "talkers" | "sources" | "destinations" | "applications" | "protocols" | "conversations" | "interfaces",
-  filters: FlowAnalyticsFilters,
-): Promise<FlowAnalyticsResponse> {
+export async function getFlowAnalytics(dimension: "talkers" | "sources" | "destinations" | "applications" | "protocols" | "conversations" | "interfaces", filters: FlowAnalyticsFilters): Promise<FlowAnalyticsResponse> {
   const query = new URLSearchParams({
     hours: String(filters.hours),
     page: String(filters.page ?? 1),
@@ -493,9 +490,7 @@ export async function getFlowAnalytics(
   )
 }
 
-export async function getFlowTrends(
-  filters: FlowAnalyticsFilters,
-): Promise<FlowTrendItem[]> {
+export async function getFlowTrends(filters: FlowAnalyticsFilters): Promise<FlowTrendItem[]> {
   const query = new URLSearchParams({
     hours: String(filters.hours),
     bucket: filters.hours > 48 ? "day" : "hour",
@@ -510,9 +505,7 @@ export async function getFlowTrends(
   return response.items
 }
 
-export async function getFlowRecords(
-  filters: FlowAnalyticsFilters,
-): Promise<FlowRecordsResponse> {
+export async function getFlowRecords(filters: FlowAnalyticsFilters): Promise<FlowRecordsResponse> {
   const query = new URLSearchParams({
     hours: String(filters.hours),
     page: String(filters.page ?? 1),
@@ -614,20 +607,13 @@ export async function listAPMServices(
     }`,
   )
 }
-export async function getAPMOverview(
-  filters: APMFilters,
-): Promise<{ items: APMOverviewItem[]; from: string; to: string }> {
+export async function getAPMOverview(filters: APMFilters): Promise<{ items: APMOverviewItem[]; from: string; to: string }> {
   return requestJson(`/apm/overview${apmQuery(filters)}`)
 }
-export async function getAPMServiceMetrics(
-  serviceId: number,
-  filters: APMFilters,
-): Promise<{ items: APMServiceMetric[]; from: string; to: string }> {
+export async function getAPMServiceMetrics(serviceId: number, filters: APMFilters): Promise<{ items: APMServiceMetric[]; from: string; to: string }> {
   return requestJson(`/apm/services/${serviceId}/metrics${apmQuery(filters)}`)
 }
-export async function getAPMDependencies(
-  filters: APMFilters,
-): Promise<{ items: APMDependencyItem[]; from: string; to: string }> {
+export async function getAPMDependencies(filters: APMFilters): Promise<{ items: APMDependencyItem[]; from: string; to: string }> {
   return requestJson(`/apm/dependencies${apmQuery(filters)}`)
 }
 
@@ -697,17 +683,13 @@ export interface CMDBItemFilters {
 export async function listCMDBTypes(): Promise<CMDBType[]> {
   return requestJson("/cmdb/types")
 }
-export async function listCMDBItems(
-  filters: CMDBItemFilters = {},
-): Promise<CMDBItem[]> {
+export async function listCMDBItems(filters: CMDBItemFilters = {}): Promise<CMDBItem[]> {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(filters))
     if (value != null && value !== "") query.set(key, String(value))
   return requestJson(`/cmdb/items${query.toString() ? `?${query}` : ""}`)
 }
-export async function getCMDBRelationships(
-  ciId: number,
-): Promise<CMDBRelationship[]> {
+export async function getCMDBRelationships(ciId: number): Promise<CMDBRelationship[]> {
   return requestJson(`/cmdb/items/${ciId}/relationships`)
 }
 export async function getCMDBHistory(ciId: number): Promise<CMDBHistory[]> {
@@ -806,6 +788,7 @@ export interface DeviceMetricRecord {
 export interface AlertRecord {
   id: number
   device_id?: number | null
+  linux_server_id?: number | null
   hostname?: string | null
   ip_address?: string | null
   ip?: string | null
@@ -1356,15 +1339,11 @@ export interface RemoteAccessSession {
 }
 
 export async function listRemoteAccessSessions(): Promise<RemoteAccessSession[]> {
-  return requestJson<RemoteAccessSession[]>("/remote-access/sessions", {
-    cache: "no-store",
-  })
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions", { cache: "no-store" })
 }
 
 export async function listRemoteAccessSessionHistory(): Promise<RemoteAccessSession[]> {
-  return requestJson<RemoteAccessSession[]>("/remote-access/sessions/history", {
-    cache: "no-store",
-  })
+  return requestJson<RemoteAccessSession[]>("/remote-access/sessions/history", { cache: "no-store" })
 }
 
 export async function createRemoteAccessSession(payload: {
@@ -1614,9 +1593,7 @@ export async function listSyslogRecords(
     if (value !== undefined && value !== null && value !== "")
       query.set(key, String(value))
   })
-  return requestJson<SyslogRecordsResponse>(
-    `/syslog/records?${query.toString()}`,
-  )
+  return requestJson<SyslogRecordsResponse>(`/syslog/records?${query.toString()}`)
 }
 
 export async function listSyslogRules(): Promise<SyslogRule[]> {
@@ -2019,14 +1996,17 @@ export async function assignWindowsDeviceCA(deviceId: number, bundleId: number):
 export async function unassignWindowsDeviceCA(deviceId: number): Promise<WindowsEffectiveTrust> {
   return requestWindowsSafe<WindowsEffectiveTrust>(`/windows/devices/${deviceId}/ca-bundle`, { method: "DELETE" })
 }
-export async function runWindowsTCPDiagnostic(deviceId: number): Promise<WindowsTCPDiagnostic> {
-  return requestWindowsSafe<WindowsTCPDiagnostic>(`/windows/devices/${deviceId}/diagnostics/tcp`, { method: "POST" })
+export async function runWindowsTCPDiagnostic(deviceId: number, siteId?: number | null): Promise<WindowsTCPDiagnostic> {
+  const query = siteId == null ? "" : `?site_id=${encodeURIComponent(siteId)}`
+  return requestWindowsSafe<WindowsTCPDiagnostic>(`/windows/devices/${deviceId}/diagnostics/tcp${query}`, { method: "POST" })
 }
-export async function runWindowsTLSDiagnostic(deviceId: number): Promise<WindowsTLSDiagnostic> {
-  return requestWindowsSafe<WindowsTLSDiagnostic>(`/windows/devices/${deviceId}/diagnostics/tls`, { method: "POST" })
+export async function runWindowsTLSDiagnostic(deviceId: number, siteId?: number | null): Promise<WindowsTLSDiagnostic> {
+  const query = siteId == null ? "" : `?site_id=${encodeURIComponent(siteId)}`
+  return requestWindowsSafe<WindowsTLSDiagnostic>(`/windows/devices/${deviceId}/diagnostics/tls${query}`, { method: "POST" })
 }
-export async function runWindowsWinRMDiagnostic(deviceId: number): Promise<WindowsWinRMDiagnostic> {
-  return requestWindowsSafe<WindowsWinRMDiagnostic>(`/windows/devices/${deviceId}/diagnostics/winrm`, { method: "POST" })
+export async function runWindowsWinRMDiagnostic(deviceId: number, siteId?: number | null): Promise<WindowsWinRMDiagnostic> {
+  const query = siteId == null ? "" : `?site_id=${encodeURIComponent(siteId)}`
+  return requestWindowsSafe<WindowsWinRMDiagnostic>(`/windows/devices/${deviceId}/diagnostics/winrm${query}`, { method: "POST" })
 }
 
 export type WindowsTaskManagerStatus =
@@ -2215,6 +2195,33 @@ export interface WindowsMemoryData {
   used_bytes: number | null
   usage_percent: number | null
   counters?: Partial<Record<WindowsMemoryCounterName, WindowsMemoryCounter>>
+  effective_memory?: {
+    total_bytes: number | null
+    available_bytes: number | null
+    used_bytes: number | null
+    usage_percent: number | null
+    status: string
+    source: string
+    semantic: string
+  }
+}
+
+export interface EffectiveMemoryAggregate {
+  average_percent: number | null
+  stale_average_percent?: number | null
+  reporting_count: number
+  eligible_count: number
+  excluded_count: number
+  as_of: string
+  status: "ok" | "partial" | "no_data"
+  source: string
+  semantic: string
+  freshness_interval_seconds: { linux: number; windows: number }
+  exclusions: Record<string, number>
+}
+
+export async function getEffectiveMemoryAggregate(): Promise<EffectiveMemoryAggregate> {
+  return requestJson("/dashboard/memory-aggregate", { cache: "no-store" })
 }
 export type WindowsDiskCounterStatus = "ok" | "unsupported" | "unavailable" | "permission_denied" | "collection_failed"
 export interface WindowsDiskCounter {
@@ -4040,6 +4047,14 @@ export interface LatestMemory {
   used_bytes: number | null
   free_bytes: number | null
   utilization_percent: number | null
+  cached_bytes: number | null
+  buffer_bytes: number | null
+  swap_total: number | null
+  swap_free: number | null
+  memory_source: string | null
+  memory_semantic: string | null
+  memory_source_status: string | null
+  memory_source_error: string | null
   last_poll: string | null
 }
 

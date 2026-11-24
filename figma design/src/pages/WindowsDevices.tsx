@@ -7,6 +7,7 @@ import WindowsDiskInventoryPanel from "../components/WindowsDiskInventory"
 import WindowsCATrustPanel from "../components/windows/WindowsCATrustPanel"
 import WindowsTCPDiagnostics from "../components/windows/WindowsTCPDiagnostics"
 import WindowsTLSDiagnostics from "../components/windows/WindowsTLSDiagnostics"
+import WindowsWinRMDiagnostics from "../components/windows/WindowsWinRMDiagnostics"
 import WindowsProcessesPanel from "../components/windows/WindowsProcessesPanel"
 import { formatBitsPerSecond, formatBytesBinary, formatBytesPerSecond, formatFrequency, formatLatency, formatPercentage, formatUptime } from "../unitFormatting"
 import {
@@ -47,6 +48,7 @@ import {
 } from "../lib/api"
 import { useAuth } from "../components/AuthContext"
 import { isWindowsDevice } from "../lib/windowsClassification"
+import { confirmDanger } from "../lib/swal"
 
 /* ════════════════════════════════════════════════════════════════
    Types & constants
@@ -1033,11 +1035,17 @@ export default function WindowsDevices() {
   const diskHealthCache = useRef(new Map<number, WindowsDiskHealthResponse>())
   const diskInventoryInFlight = useRef(new Map<number, Promise<WindowsDiskInventory>>())
   const diskHealthInFlight = useRef(new Map<number, Promise<WindowsDiskHealthResponse>>())
+  const deletingDeviceIdRef = useRef<number | null>(null)
+  const deleteContextRef = useRef({ devices, routeDeviceId, expandedDeviceId, canDelete: hasPermission("devices:delete") })
   const [usbInventory, setUsbInventory] = useState<WindowsUSBInventory | null>(null)
   const [usbLoading, setUsbLoading] = useState(false)
   const [usbError, setUsbError] = useState("")
   const usbCache = useRef(new Map<number, WindowsUSBInventory>())
   const usbInFlight = useRef(new Map<number, Promise<WindowsUSBInventory>>())
+
+  useEffect(() => {
+    deleteContextRef.current = { devices, routeDeviceId, expandedDeviceId, canDelete: hasPermission("devices:delete") }
+  }, [devices, expandedDeviceId, hasPermission, routeDeviceId])
 
   useEffect(() => {
     if (expandedDeviceId == null) return
@@ -1437,15 +1445,34 @@ export default function WindowsDevices() {
 
   /* ───────────── actions ───────────── */
   const removeDevice = async (device: DeviceRecord) => {
-    if (!window.confirm(`Delete Windows device ${device.hostname} (ID ${device.id})? This removes the device and related inventory data.`)) return
-    setError("")
+    if (!hasPermission("devices:delete") || deletingDeviceIdRef.current !== null) return
+    const deviceId = device.id
+    const hostname = device.hostname
+    deletingDeviceIdRef.current = deviceId
     try {
-      await deleteDevice(device.id)
+      const confirmed = await confirmDanger({
+        title: "Delete Windows Device?",
+        text: "This removes the device and related inventory data.",
+        confirmText: "Delete Device",
+      })
+      const currentContext = deleteContextRef.current
+      const currentDevice = currentContext.devices.find((item) => item.id === deviceId)
+      if (
+        !confirmed ||
+        !currentContext.canDelete ||
+        currentContext.routeDeviceId !== routeDeviceId ||
+        currentContext.expandedDeviceId !== expandedDeviceId ||
+        currentDevice?.hostname !== hostname
+      ) return
+      setError("")
+      await deleteDevice(deviceId)
       setExpandedDeviceId(null)
       if (routeDeviceId) navigate("/windows-devices")
       await loadDevices()
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to delete device")
+    } finally {
+      if (deletingDeviceIdRef.current === deviceId) deletingDeviceIdRef.current = null
     }
   }
 
@@ -1615,6 +1642,7 @@ export default function WindowsDevices() {
             <WindowsCATrustPanel deviceId={d.id} deviceName={d.hostname} siteId={d.site_id} />
             <WindowsTCPDiagnostics deviceId={d.id} siteId={d.site_id} deviceName={d.hostname} />
             <WindowsTLSDiagnostics deviceId={d.id} siteId={d.site_id} deviceName={d.hostname} />
+            <WindowsWinRMDiagnostics deviceId={d.id} siteId={d.site_id} deviceName={d.hostname} />
             {metricCard("system", "Operating System Details", "Identity, boot, configuration and regional settings", "FETCH SYSTEM INFO",
               metrics.system?.data ? <OsDetailsBody data={metrics.system.data} /> : <EmptyState />)}
           </div>

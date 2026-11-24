@@ -2,6 +2,7 @@
 
 from email.message import EmailMessage
 from dataclasses import dataclass
+from html import escape
 import logging
 import smtplib
 import time
@@ -29,6 +30,159 @@ class NotificationIntent:
     severity: str
     status: str
     recipient: str
+    device_name: str | None = None
+    device_ip: str | None = None
+    operating_system: str | None = None
+    module: str | None = None
+    site_name: str | None = None
+    created_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+
+def _format_alert_time(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return f"{value.isoformat(sep=' ', timespec='seconds')} IST"
+    return value.astimezone(IST).isoformat(sep=" ", timespec="seconds") + " IST"
+
+
+def _duration_text(created_at: datetime | None, resolved_at: datetime | None) -> str | None:
+    if created_at is None or resolved_at is None:
+        return None
+    try:
+        seconds = max(0, int((resolved_at - created_at).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m {seconds % 60}s"
+
+
+def _recommendations(module: str | None) -> tuple[str, ...]:
+    actions = {
+        "cpu": ("Review top CPU-consuming processes.", "Check for sustained load or recent workload changes."),
+        "memory": ("Review available memory and top memory-consuming processes.", "Check for memory pressure, leaks, or workload growth."),
+        "disk": ("Review filesystem utilization and largest recent files.", "Verify log rotation and available capacity."),
+        "availability": ("Verify network reachability and device power/connectivity.", "Check the device interface and monitoring path."),
+    }
+    return actions.get((module or "").lower(), ())
+
+
+def render_alert_email(intent: NotificationIntent, *, created_at: datetime | None = None,
+                       resolved_at: datetime | None = None) -> tuple[str, str]:
+    """Render an alert email without querying, mutating, or delivering anything."""
+    severity = (intent.severity or "info").lower()
+    heading = "RECOVERY" if intent.status.lower() == "resolved" else severity.upper()
+    heading_color = {"critical": "#b42318", "warning": "#b54708", "info": "#175cd3"}.get(severity, "#344054")
+    status = escape((intent.status or "unknown").upper())
+    title = escape(intent.title or "Alert")
+    description = escape(intent.description or "", quote=False).replace("\n", "<br>")
+    details = []
+    for label, value in (("Device/server", intent.device_name), ("IP address", intent.device_ip),
+                         ("Operating system", intent.operating_system), ("Monitoring module", intent.module),
+                         ("Site/group", intent.site_name)):
+        if value:
+            details.append(f"<tr><td style='padding:6px 12px 6px 0;color:#667085'>{escape(label)}</td><td style='padding:6px 0;color:#101828;font-weight:600'>{escape(value)}</td></tr>")
+    alert_details = [
+        ("Alert ID", str(intent.alert_id)),
+        ("Severity", escape((intent.severity or "unknown").upper())),
+        ("Status", status),
+    ]
+    detected = _format_alert_time(created_at)
+    resolved = _format_alert_time(resolved_at) if intent.status.lower() == "resolved" else None
+    duration = _duration_text(created_at, resolved_at) if intent.status.lower() == "resolved" else None
+    if detected:
+        alert_details.append(("Detected", escape(detected)))
+    if resolved:
+        alert_details.append(("Resolved", escape(resolved)))
+    if duration:
+        alert_details.append(("Duration", escape(duration)))
+    detail_rows = "".join(f"<tr><td style='padding:6px 12px 6px 0;color:#667085'>{label}</td><td style='padding:6px 0;color:#101828;font-weight:600'>{value}</td></tr>" for label, value in alert_details)
+    recommendation_items = "".join(f"<li style='margin:0 0 6px'>{escape(item)}</li>" for item in _recommendations(intent.module))
+    recommendation_block = f"<h3 style='color:#172b4d;margin:24px 0 8px'>Recommended actions</h3><ul style='color:#475467;padding-left:20px'>{recommendation_items}</ul>" if recommendation_items else ""
+    plain_lines = [f"AgniGate — {heading}", intent.title or "Alert", intent.description or "", f"Alert ID: {intent.alert_id}", f"Severity: {(intent.severity or 'unknown').upper()}", f"Status: {(intent.status or 'unknown').upper()}"]
+    for label, value in (("Device/server", intent.device_name), ("IP address", intent.device_ip), ("Operating system", intent.operating_system), ("Monitoring module", intent.module), ("Site/group", intent.site_name), ("Detected", detected), ("Resolved", resolved), ("Duration", duration)):
+        if value:
+            plain_lines.append(f"{label}: {value}")
+    recommendations = _recommendations(intent.module)
+    if recommendations:
+        plain_lines += ["", "Recommended actions:", *[f"- {item}" for item in recommendations]]
+    plain_lines += ["", "Sent by Agnigate Network Monitoring"]
+    plain = "\n".join(plain_lines)
+    html_body = f"""<html><body style='margin:0;background:#f4f7fb;padding:24px;font-family:Arial,sans-serif;color:#101828'>
+    <div style='max-width:620px;margin:auto;background:#fff;border:1px solid #e5eaf2;border-radius:12px;overflow:hidden'>
+    <div style='padding:22px 28px;background:#172b4d;color:#fff;font-size:22px;font-weight:800'>AgniGate</div>
+    <div style='padding:28px'><div style='color:{heading_color};font-size:13px;font-weight:700;letter-spacing:1px'>AGNIGATE · {heading} ALERT</div>
+    <h2 style='color:#172b4d;margin:10px 0'>{title}</h2><p style='color:#475467;font-size:15px;line-height:1.5'>{description}</p>
+    <div style='background:#f8fafc;border-left:4px solid {heading_color};padding:12px 16px'><table>{detail_rows}</table></div>
+    {f"<h3 style='color:#172b4d;margin:24px 0 8px'>Device information</h3><table>{''.join(details)}</table>" if details else ""}
+    {recommendation_block}
+    <p style='color:#8492a6;font-size:12px;margin-top:28px'>Sent by <a href='https://agnigate.com/' style='color:#2563eb;text-decoration:none;font-weight:bold'>Agnigate</a> Network Monitoring</p>
+    </div></div></body></html>"""
+    return plain, html_body
+
+
+def _intent_metadata(db: Session, alert: Alert) -> dict[str, str | None]:
+    """Load presentation metadata only; failures leave optional fields absent."""
+    result: dict[str, str | None] = {"device_name": None, "device_ip": None, "operating_system": None, "module": None, "site_name": None}
+    try:
+        if alert.linux_server_id:
+            from backend.linux_monitoring.models import LinuxServer
+            server = db.get(LinuxServer, alert.linux_server_id)
+            if server:
+                result.update(device_name=server.display_name or server.hostname, device_ip=server.ip_address, operating_system=server.os_name)
+                result["site_name"] = getattr(getattr(server, "site", None), "name", None)
+        elif alert.device_id:
+            from backend.models import Device
+            device = db.get(Device, alert.device_id)
+            if device:
+                result.update(device_name=device.hostname, device_ip=device.ip_address)
+                result["site_name"] = getattr(getattr(device, "site", None), "name", None)
+    except Exception:
+        logger.warning("Could not load optional email alert metadata", exc_info=True)
+    title = (alert.title or "").lower()
+    for key in ("cpu", "memory", "disk"):
+        if key in title:
+            result["module"] = key
+            break
+    if "device down" in title or "availability" in title:
+        result["module"] = "availability"
+    return result
+
+
+def _legacy_email_fallback(intent: NotificationIntent) -> tuple[str, str]:
+    """Build a minimal escaped fallback without I/O or additional alert data."""
+    title = intent.title or "Alert"
+    description = intent.description or ""
+    severity = (intent.severity or "unknown").upper()
+    status = (intent.status or "unknown").upper()
+    plain = "\n".join((
+        f"AgniGate Alert: {title}",
+        description,
+        f"Alert ID: {intent.alert_id}",
+        f"Severity: {severity}",
+        f"Status: {status}",
+    ))
+    html_body = (
+        "<html><body style='font-family:Arial,sans-serif;padding:24px'>"
+        "<div style='max-width:560px;margin:auto;border:1px solid #e5eaf2;padding:24px'>"
+        "<div style='font-size:22px;font-weight:800;color:#172b4d'>AgniGate</div>"
+        f"<h2>{escape(title)}</h2>"
+        f"<p>{escape(description, quote=False).replace(chr(10), '<br>')}</p>"
+        f"<p>Alert ID: <b>{escape(str(intent.alert_id))}</b><br>"
+        f"Severity: <b>{escape(severity)}</b><br>Status: <b>{escape(status)}</b></p>"
+        "<p>Sent by <a href='https://agnigate.com/'>Agnigate</a> Network Monitoring</p>"
+        "</div></body></html>"
+    )
+    return plain, html_body
+
+
+def _render_email_safely(intent: NotificationIntent) -> tuple[str, str]:
+    """Use the enhanced renderer, falling back without touching persistence."""
+    try:
+        return render_alert_email(intent, created_at=intent.created_at, resolved_at=intent.resolved_at)
+    except Exception:
+        logger.exception("Alert email template rendering failed; using compatibility fallback for alert %s", intent.alert_id)
+        return _legacy_email_fallback(intent)
 
 
 def _process_incident_safely(db: Session, alert: Alert) -> None:
@@ -286,31 +440,20 @@ def resolve_alert(
 
 def _deliver_intent(intent: NotificationIntent) -> tuple[str, datetime | None]:
     """Perform external delivery without requiring an ORM object or session."""
-    body = f"{intent.title}\n\n{intent.description}"
-    settings = get_settings()
-    if not settings.smtp_host:
-        return "pending", None
-    now = now_ist()
-    if _smtp_is_suspended(now):
-        return "failed", None
     try:
+        body, html_body = _render_email_safely(intent)
+        settings = get_settings()
+        if not settings.smtp_host:
+            return "pending", None
+        now = now_ist()
+        if _smtp_is_suspended(now):
+            return "failed", None
         message = EmailMessage()
         message["Subject"] = f"NMS Alert: {intent.title}"
         message["From"] = settings.smtp_from or settings.smtp_username
         message["To"] = intent.recipient
         message.set_content(body)
-        message.add_alternative(
-            f"""<html><body style='font-family:Arial,sans-serif;background:#f4f7fb;padding:24px'>
-            <div style='max-width:560px;margin:auto;background:white;border-radius:12px;padding:28px;border:1px solid #e5eaf2;box-shadow:0 8px 24px rgba(23,43,77,.08)'>
-            <div style='font-size:22px;font-weight:800;color:#172b4d;margin-bottom:24px'>Agnigate</div>
-            <div style='color:#d92d20;font-size:12px;font-weight:bold;letter-spacing:1px'>AGNIGATE · CRITICAL ALERT</div>
-            <h2 style='color:#172b4d;margin-bottom:8px'>{intent.title}</h2>
-            <p style='color:#526581;font-size:15px'>{intent.description}</p>
-            <div style='background:#fff1f0;border-left:4px solid #d92d20;padding:12px;color:#7a271a'>Severity: <b>{intent.severity.upper()}</b><br>Status: <b>{intent.status.upper()}</b></div>
-            <p style='color:#8492a6;font-size:12px;margin-top:24px'>Sent by <a href='https://agnigate.com/' style='color:#2563eb;text-decoration:none;font-weight:bold'>Agnigate</a> Network Monitoring</p>
-            </div></body></html>""",
-            subtype="html",
-        )
+        message.add_alternative(html_body, subtype="html")
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
             if settings.smtp_use_tls:
                 smtp.starttls()
@@ -356,6 +499,7 @@ def _notify(
     deferred: list[NotificationIntent] | None = None,
 ) -> None:
     intents = []
+    metadata = _intent_metadata(db, alert)
     for recipient in _recipients(db):
         notification = Notification(alert_id=alert.id, channel="email", sent_to=recipient, status="pending")
         db.add(notification)
@@ -368,6 +512,9 @@ def _notify(
             severity=alert.severity,
             status=alert.status,
             recipient=recipient,
+            **metadata,
+            created_at=alert.created_at,
+            resolved_at=alert.resolved_at,
         ))
     if deferred is not None:
         deferred.extend(intents)
@@ -398,6 +545,7 @@ def deliver_notification_ids(db: Session, notification_ids: list[int]) -> None:
         alert = notification.alert
         if alert is None:
             continue
+        metadata = _intent_metadata(db, alert)
         intents.append(NotificationIntent(
             notification_id=notification.id,
             alert_id=alert.id,
@@ -406,5 +554,8 @@ def deliver_notification_ids(db: Session, notification_ids: list[int]) -> None:
             severity=alert.severity,
             status=alert.status,
             recipient=notification.sent_to,
+            **metadata,
+            created_at=alert.created_at,
+            resolved_at=alert.resolved_at,
         ))
     deliver_notification_intents(db, intents)

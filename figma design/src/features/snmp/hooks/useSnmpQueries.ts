@@ -182,7 +182,11 @@ export function useLatestMemory(deviceId: number | null) {
     queryKey: snmpKeys.latestMemory(deviceId!),
     queryFn: () => getLatestMemory(deviceId!),
     enabled: !!deviceId,
-    staleTime: 30000,
+    staleTime: 0,
+    refetchInterval: 15000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 }
 

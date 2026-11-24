@@ -21,7 +21,7 @@ const date = (v?: string | null) =>
     : missing
 const duration = (s?: number | null) =>
   formatUptime(s, { na: missing })
-function Field({ label, value }: { label: string value: unknown }) {
+function Field({ label, value }: { label: string; value: unknown }) {
   return (
     <div>
       <div
@@ -38,7 +38,7 @@ function Field({ label, value }: { label: string value: unknown }) {
 }
 
 function windowsStatus(
-  result: { ok: boolean category?: string } | null,
+  result: { ok: boolean; category?: string } | null,
   configured: boolean,
   testing: boolean,
 ) {

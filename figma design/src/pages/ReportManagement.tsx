@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import GlassCard from '../components/GlassCard'
 import { exportReportManagementPdf } from '../lib/reportPdf'
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts'
-import { toast } from '../lib/swal'
+import { confirmDanger, toast } from '../lib/swal'
 import { formatBitsPerSecond, formatBytesDecimal } from '../unitFormatting'
 import { useAuth } from '../components/AuthContext'
 import {
@@ -336,12 +336,18 @@ export default function ReportManagement() {
   const canCreateSchedules = hasPermission('reports:schedules:create')
   const canUpdateSchedules = hasPermission('reports:schedules:update')
   const canDeleteSchedules = hasPermission('reports:schedules:delete')
+  const deletingScheduleIdRef = useRef<ReportSchedule['id'] | null>(null)
+  const scheduleDeleteContextRef = useRef({ schedules, canDeleteSchedules })
 
   useEffect(() => {
     if (scheduleEditor !== false && ((scheduleEditor === null && !canCreateSchedules) || (scheduleEditor !== null && !canUpdateSchedules))) {
       setScheduleEditor(false)
     }
   }, [canCreateSchedules, canUpdateSchedules, scheduleEditor])
+
+  useEffect(() => {
+    scheduleDeleteContextRef.current = { schedules, canDeleteSchedules }
+  }, [canDeleteSchedules, schedules])
 
   const selectedDevices = useMemo(
     () =>
@@ -384,7 +390,28 @@ export default function ReportManagement() {
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Could not save schedule') }
   }
   const toggleSchedule = async (item: ReportSchedule) => { if (!canUpdateSchedules) return; try { await updateReportSchedule(item.id, { enabled: !item.enabled }); await loadSchedules() } catch (err) { toast.error(err instanceof Error ? err.message : 'Could not update schedule') } }
-  const removeSchedule = async (item: ReportSchedule) => { if (!canDeleteSchedules || !window.confirm('Delete this schedule? Generated report history will be preserved.')) return; try { await deleteReportSchedule(item.id); await loadSchedules(); toast.success('Schedule deleted') } catch (err) { toast.error(err instanceof Error ? err.message : 'Could not delete schedule') } }
+  const removeSchedule = async (item: ReportSchedule) => {
+    if (!canDeleteSchedules || deletingScheduleIdRef.current !== null) return
+    const scheduleId = item.id
+    deletingScheduleIdRef.current = scheduleId
+    try {
+      const confirmed = await confirmDanger({
+        title: 'Delete Report Schedule?',
+        text: 'This will delete the selected report schedule. Existing generated report history will be retained.',
+        confirmText: 'Delete Schedule',
+      })
+      const currentContext = scheduleDeleteContextRef.current
+      const currentSchedule = currentContext.schedules.find(schedule => schedule.id === scheduleId)
+      if (!confirmed || !currentContext.canDeleteSchedules || currentSchedule?.name !== item.name) return
+      await deleteReportSchedule(scheduleId)
+      await loadSchedules()
+      toast.success('Schedule deleted')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete schedule')
+    } finally {
+      if (deletingScheduleIdRef.current === scheduleId) deletingScheduleIdRef.current = null
+    }
+  }
   const downloadGenerated = async (item: GeneratedReport) => { try { const result = await downloadGeneratedReport(item.id); const url = URL.createObjectURL(result.blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = result.filename; anchor.click(); URL.revokeObjectURL(url) } catch (err) { toast.error(err instanceof Error ? err.message : 'Download failed') } }
 
   const load = async (nextFilters = filters) => {

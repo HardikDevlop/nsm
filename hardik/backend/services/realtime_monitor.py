@@ -46,6 +46,7 @@ def _icmp_db_now() -> datetime:
 def _should_advance_last_seen(current: datetime | None, candidate: datetime) -> bool:
     return current is None or candidate >= current
 from typing import Any
+from backend.services.realtime_ownership import RealtimeMonitorOwnership
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +244,7 @@ def _ping(ip: str, timeout_ms: int = PING_TIMEOUT_MS) -> tuple[bool, float | Non
 class MonitorEngine:
     """Singleton engine that pings monitored devices every PING_INTERVAL seconds."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, ownership: RealtimeMonitorOwnership | None = None) -> None:
         self._devices: dict[str, MonitoredDevice] = {}
         self._lock = threading.Lock()
         self._event = threading.Event()
@@ -259,6 +260,11 @@ class MonitorEngine:
             target=self._metric_batch_loop, daemon=True, name="icmp-metric-batch"
         )
         self._metric_batch_thread.start()
+        self._ownership = ownership
+        self._lease_thread: threading.Thread | None = None
+        self._owned_generation: int | None = None
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle_state = "stopped"
         self._device_cache: dict[int, tuple[float, dict[str, Any]]] = {}
         self._device_cache_lock = threading.Lock()
 
@@ -349,6 +355,124 @@ class MonitorEngine:
         self._metric_batch_thread.join(timeout=5.0)
         self._flush_metric_batch()
 
+    def start_owned(self, devices: list[dict[str, Any]]) -> dict[str, Any]:
+        """Opt-in ownership-aware start; default startup never calls this."""
+        if self._ownership is None:
+            return {"state": "owner_unavailable", "error": "ownership_not_configured"}
+        with self._lifecycle_lock:
+            if self._lifecycle_state == "running":
+                status = self._ownership.status()
+                if status.state == "owned" and (self._thread is None or self._thread.is_alive()):
+                    return {"state": "running", "added": 0, "generation": status.generation, "idempotent": True}
+                self._lifecycle_state = "lease_lost" if status.state != "owned" else "error"
+            if self._lifecycle_state in {"starting", "stopping", "incomplete_stop", "lease_lost"}:
+                return {"state": self._lifecycle_state, "error": "lifecycle_transition_in_progress_or_blocked"}
+            self._lifecycle_state = "starting"
+            status = self._ownership.acquire()
+            if status.state != "owned":
+                self._lifecycle_state = "owner_unavailable"
+                return {"state": status.state, "error": status.last_error, "generation": status.generation}
+            self._owned_generation = status.generation
+            if not self._metric_batch_thread.is_alive():
+                self._metric_batch_stop = threading.Event()
+                self._metric_batch_event = threading.Event()
+                self._metric_batch_thread = threading.Thread(target=self._metric_batch_loop, daemon=True, name="icmp-metric-batch")
+                self._metric_batch_thread.start()
+            added = self.start_all(devices)
+            self._start_lease_renewal()
+            if devices and not (self._thread and self._thread.is_alive()):
+                self._lifecycle_state = "error"
+                return {"state": "error", "error": "polling_thread_not_running", "generation": status.generation}
+            self._lifecycle_state = "running"
+            return {"state": "running", "added": added, "generation": status.generation}
+
+    def stop_owned(self, timeout: float = 5.0) -> dict[str, Any]:
+        """Cooperatively stop the opt-in worker and refuse unsafe release."""
+        if self._ownership is None:
+            return {"state": "owner_unavailable", "error": "ownership_not_configured"}
+        with self._lifecycle_lock:
+            if self._lifecycle_state == "stopped":
+                return {"state": "stopped", "idempotent": True}
+            if self._lifecycle_state == "incomplete_stop":
+                return {"state": "incomplete_stop", "error": "previous_cleanup_incomplete"}
+            self._lifecycle_state = "stopping"
+            deadline = time.monotonic() + max(0.0, timeout)
+            self._stop_event.set()
+            self._event.set()
+            thread = self._thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if thread is not None and thread.is_alive():
+                self._lifecycle_state = "incomplete_stop"
+                return {"state": "incomplete_stop", "error": "polling_thread_timeout"}
+            self._thread = None
+            with self._executor_lock:
+                executor, self._executor = self._executor, None
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=False)
+                workers = getattr(executor, "_threads", set())
+                for worker in workers:
+                    worker.join(timeout=max(0.0, deadline - time.monotonic()))
+                if any(worker.is_alive() for worker in workers):
+                    self._lifecycle_state = "incomplete_stop"
+                    return {"state": "incomplete_stop", "error": "executor_thread_timeout"}
+            lease_stopped = self._stop_lease_renewal(timeout=max(0.0, deadline - time.monotonic()))
+            if not lease_stopped:
+                self._lifecycle_state = "incomplete_stop"
+                return {"state": "incomplete_stop", "error": "lease_thread_timeout"}
+            self._metric_batch_stop.set()
+            self._metric_batch_event.set()
+            if self._metric_batch_thread.is_alive() and self._metric_batch_thread is not threading.current_thread():
+                self._metric_batch_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if self._metric_batch_thread.is_alive():
+                self._lifecycle_state = "incomplete_stop"
+                return {"state": "incomplete_stop", "error": "metric_batch_thread_timeout"}
+            flush_thread = threading.Thread(target=self._flush_metric_batch, daemon=True, name="realtime-final-flush")
+            flush_thread.start()
+            flush_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if flush_thread.is_alive():
+                self._lifecycle_state = "incomplete_stop"
+                return {"state": "incomplete_stop", "error": "metric_flush_timeout"}
+            status = self._ownership.release()
+            if status.state != "stopped":
+                self._lifecycle_state = "lease_lost" if status.state == "lease_lost" else "error"
+                return {"state": self._lifecycle_state, "error": status.last_error, "generation": status.generation}
+            self._owned_generation = None
+            self._lifecycle_state = "stopped"
+            return {"state": "stopped", "generation": status.generation}
+
+    def restart_owned(self, devices: list[dict[str, Any]], timeout: float = 5.0) -> dict[str, Any]:
+        """Restart only after a verified Stop; incomplete cleanup blocks restart."""
+        with self._lifecycle_lock:
+            if self._lifecycle_state == "incomplete_stop":
+                return {"state": "incomplete_stop", "error": "previous_cleanup_incomplete"}
+        stopped = self.stop_owned(timeout=timeout)
+        if stopped.get("state") != "stopped":
+            return stopped
+        return self.start_owned(devices)
+
+    def _start_lease_renewal(self) -> None:
+        if self._lease_thread is not None and self._lease_thread.is_alive():
+            return
+        self._lease_thread = threading.Thread(target=self._lease_loop, daemon=True, name="realtime-lease-renewal")
+        self._lease_thread.start()
+
+    def _stop_lease_renewal(self, timeout: float | None = None) -> bool:
+        thread = self._lease_thread
+        self._lease_thread = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, timeout if timeout is not None else (self._ownership.ttl if self._ownership else 1.0)))
+        return thread is None or not thread.is_alive()
+
+    def _lease_loop(self) -> None:
+        interval = max(0.1, (self._ownership.ttl / 3) if self._ownership else 1.0)
+        while not self._stop_event.wait(interval):
+            status = self._ownership.renew() if self._ownership else None
+            if status is None or status.state != "owned":
+                self._stop_event.set()
+                self._event.set()
+                return
+
     def get_device(self, ip: str) -> MonitoredDevice | None:
         with self._lock:
             return self._devices.get(ip)
@@ -416,7 +540,20 @@ class MonitorEngine:
                 executor = self._executor
             if executor is None:
                 break
-            futures = {executor.submit(self._ping_one, ip): ip for ip in ips}
+            futures = {}
+            for ip in ips:
+                if self._ownership is not None and not self._ownership.before_poll(self._owned_generation):
+                    self._stop_event.set()
+                    break
+                if self._ownership is None:
+                    futures[executor.submit(self._ping_one, ip)] = ip
+                else:
+                    try:
+                        futures[executor.submit(self._owned_ping_one, ip)] = ip
+                    except Exception:
+                        self._ownership.after_poll()
+                        self._stop_event.set()
+                        break
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -429,6 +566,13 @@ class MonitorEngine:
             elapsed = time.time() - cycle_start
             sleep_time = max(0.1, PING_INTERVAL - elapsed)
             self._stop_event.wait(sleep_time)
+
+    def _owned_ping_one(self, ip: str) -> None:
+        try:
+            self._ping_one(ip)
+        finally:
+            if self._ownership is not None:
+                self._ownership.after_poll()
 
     def _metric_batch_loop(self) -> None:
         while not self._metric_batch_stop.wait(METRIC_BATCH_INTERVAL):

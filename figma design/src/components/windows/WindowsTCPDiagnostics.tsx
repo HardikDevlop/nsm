@@ -24,7 +24,7 @@ export default function WindowsTCPDiagnostics({ deviceId, siteId, deviceName = `
     if (running || !Number.isInteger(deviceId) || deviceId <= 0) return
     const current = ++requestId.current
     setRunning(true); setResult(null); setError("")
-    try { const next = await runWindowsTCPDiagnostic(deviceId); if (current === requestId.current) setResult(next) }
+    try { const next = await runWindowsTCPDiagnostic(deviceId, siteId); if (current === requestId.current) setResult(next) }
     catch { if (current === requestId.current) setError("Unable to run the TCP connectivity diagnostic.") }
     finally { if (current === requestId.current) setRunning(false) }
   }
